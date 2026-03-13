@@ -1,10 +1,15 @@
 import type { ExplorerMeta, GeometryResponse, LeadRecord, LeadsResponse, PresetItem, SortField, Filters } from "./types";
 
+const DEFAULT_PRODUCTION_API_BASE_URL = "https://landintel-production.up.railway.app";
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "";
+  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ??
+  (process.env.NODE_ENV === "production" ? DEFAULT_PRODUCTION_API_BASE_URL : "");
 
 async function fetchJson<T>(path: string, searchParams?: URLSearchParams): Promise<T> {
   const url = `${API_BASE_URL}${path}${searchParams && searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
+  if (process.env.NODE_ENV !== "production") {
+    console.debug("[lead-explorer] request", url);
+  }
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status} ${response.statusText}`);

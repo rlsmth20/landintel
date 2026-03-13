@@ -39,5 +39,10 @@ def log_runtime_file_diagnostics():
 def health():
     return {"status": "ok"}
 
+
+@app.get("/")
+def root():
+    return {"status": "ok", "service": "landintel-backend", "health": "/health"}
+
 app.include_router(analyze_router)
 app.include_router(mississippi_leads_router)

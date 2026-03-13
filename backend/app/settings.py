@@ -70,7 +70,7 @@ APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
 APP_PORT = int(os.getenv("APP_PORT", "8000"))
 ALLOWED_CORS_ORIGINS = _csv_env(
     "ALLOWED_CORS_ORIGINS",
-    "http://localhost:3000,http://127.0.0.1:3000",
+    "http://localhost:3000,http://127.0.0.1:3000,https://landintel.vercel.app",
 )
 
 MISSISSIPPI_EXPLORER_DATA_ROOT = _resolve_runtime_path(
