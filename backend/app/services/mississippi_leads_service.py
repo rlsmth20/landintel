@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.dataset as ds
+import mercantile
+import mapbox_vector_tile
 from shapely import wkb
 from shapely.geometry import mapping
 
@@ -116,6 +118,9 @@ PRESET_DEFINITIONS = {
         },
     },
 }
+
+PARCEL_TILE_LAYER = "parcels"
+PARCEL_TILE_MIN_ZOOM = 7
 
 
 def _normalize_string(series: pd.Series | None, index: pd.Index | None = None) -> pd.Series:
@@ -927,6 +932,28 @@ def _simplification_tolerance(zoom: float | None) -> float:
     return 0.0003
 
 
+def _tile_simplification_tolerance(z: int) -> float:
+    if z >= 15:
+        return 0.0
+    if z >= 13:
+        return 0.00002
+    if z >= 11:
+        return 0.00008
+    if z >= 9:
+        return 0.0003
+    return 0.0012
+
+
+def _tile_feature_limit(z: int) -> int:
+    if z >= 13:
+        return 8000
+    if z >= 11:
+        return 5000
+    if z >= 9:
+        return 3000
+    return 1800
+
+
 def runtime_file_diagnostics() -> dict[str, dict[str, int | bool | str | None]]:
     diagnostics: dict[str, dict[str, int | bool | str | None]] = {}
     paths = {
@@ -1121,6 +1148,79 @@ def get_parcel_geometry(parcel_row_id: str, zoom: float | None = None) -> dict[s
         selected_parcel_id=parcel_row_id,
         zoom=effective_zoom,
         limit=1,
+    )
+
+
+def get_parcel_tile(z: int, x: int, y: int) -> bytes:
+    if z < PARCEL_TILE_MIN_ZOOM:
+        return mapbox_vector_tile.encode({"name": PARCEL_TILE_LAYER, "features": []})
+
+    tile = mercantile.bounds(x, y, z)
+    bounds = (tile.west, tile.south, tile.east, tile.north)
+    tile_columns = [
+        "parcel_row_id",
+        "parcel_id",
+        "county_name",
+        "wetland_flag",
+        "flood_risk_score",
+        "road_access_tier",
+        "county_hosted_flag",
+        "best_source_type",
+        "latitude",
+        "longitude",
+    ]
+
+    if _using_embedded_runtime():
+        expression = _embedded_filter_expression(bounds=bounds)
+        frame = _bounded_scan_batches(
+            columns=tile_columns,
+            expression=expression,
+            keep_rows=_tile_feature_limit(z),
+        )
+    else:
+        frame = load_base_frame()
+        bbox_mask = (
+            pd.to_numeric(frame["longitude"], errors="coerce").between(bounds[0], bounds[2]).fillna(False)
+            & pd.to_numeric(frame["latitude"], errors="coerce").between(bounds[1], bounds[3]).fillna(False)
+        )
+        frame = frame.loc[bbox_mask, tile_columns].head(_tile_feature_limit(z)).copy()
+
+    if frame.empty:
+        return mapbox_vector_tile.encode({"name": PARCEL_TILE_LAYER, "features": []})
+
+    geometry_frame = _geometry_table_for_ids(frame["parcel_row_id"].astype(str).tolist())
+    geometry_lookup = dict(zip(geometry_frame["parcel_row_id"].astype(str), geometry_frame["geometry"]))
+    tolerance = _tile_simplification_tolerance(z)
+    features: list[dict[str, Any]] = []
+    for _, row in frame.iterrows():
+        parcel_row_id = str(row["parcel_row_id"])
+        geometry_value = geometry_lookup.get(parcel_row_id)
+        if geometry_value is None:
+            continue
+        if isinstance(geometry_value, dict):
+            continue
+        shape = wkb.loads(geometry_value)
+        rendered_shape = shape.simplify(tolerance, preserve_topology=True) if tolerance > 0 else shape
+        features.append(
+            {
+                "id": parcel_row_id,
+                "geometry": mapping(rendered_shape),
+                "properties": {
+                    "parcel_row_id": parcel_row_id,
+                    "parcel_id": _serialize_scalar(row.get("parcel_id")),
+                    "county_name": _serialize_scalar(row.get("county_name")),
+                    "wetland_flag": bool(_serialize_scalar(row.get("wetland_flag"))),
+                    "flood_risk_score": _serialize_scalar(row.get("flood_risk_score")),
+                    "road_access_tier": _serialize_scalar(row.get("road_access_tier")),
+                    "county_hosted_flag": bool(_serialize_scalar(row.get("county_hosted_flag"))),
+                    "best_source_type": _serialize_scalar(row.get("best_source_type")),
+                },
+            }
+        )
+
+    return mapbox_vector_tile.encode(
+        {"name": PARCEL_TILE_LAYER, "features": features},
+        default_options={"quantize_bounds": bounds, "extents": 4096},
     )
 
 

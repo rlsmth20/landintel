@@ -7,3 +7,5 @@ psycopg2-binary
 pandas
 shapely
 pyarrow
+mapbox-vector-tile
+mercantile

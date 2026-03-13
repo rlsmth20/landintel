@@ -11,3 +11,5 @@ shapely
 pyogrio
 fiona
 pyproj
+mapbox-vector-tile
+mercantile

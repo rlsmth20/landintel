@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { fetchGeometryViewport, fetchLeadDetail, fetchLeads, fetchParcelGeometryById, fetchPresets, fetchStaticLeadDetail, fetchSummary } from "./lead-explorer/api";
+import { fetchLeadDetail, fetchLeads, fetchParcelGeometryById, fetchPresets, fetchStaticLeadDetail, fetchSummary } from "./lead-explorer/api";
 import { LeadDetail } from "./lead-explorer/LeadDetail";
 import { LeadMap } from "./lead-explorer/LeadMap";
 import type { ExplorerMeta, Filters, GeometryResponse, LeadRecord, MapOverlayId, MapViewportState, PresetItem, SortField } from "./lead-explorer/types";
@@ -20,7 +20,6 @@ import {
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 250;
-const GEOMETRY_LIMIT = 800;
 const FILTER_DEBOUNCE_MS = 250;
 const DEFAULT_VIEWPORT: MapViewportState = {
   center: [-89.6787, 32.7416],
@@ -91,7 +90,6 @@ export default function LeadExplorerClient() {
   const [totalCount, setTotalCount] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedLead, setSelectedLead] = useState<LeadRecord | null>(null);
-  const [geometryResponse, setGeometryResponse] = useState<GeometryResponse | null>(null);
   const [selectedGeometryResponse, setSelectedGeometryResponse] = useState<GeometryResponse | null>(null);
   const [fitNonce, setFitNonce] = useState(0);
   const [locateSelectedNonce, setLocateSelectedNonce] = useState(0);
@@ -155,7 +153,6 @@ export default function LeadExplorerClient() {
         setLeads(response.items);
         setTotalCount(response.total_count);
         if (response.items.length === 0) {
-          setGeometryResponse(null);
           return;
         }
         setSelectedId((current) => {
@@ -183,6 +180,8 @@ export default function LeadExplorerClient() {
     const selectedParcelId = selectedId;
     let cancelled = false;
     async function loadSelectedGeometry() {
+      setGeometryLoading(true);
+      setGeometryError(null);
       try {
         const response = await fetchParcelGeometryById(selectedParcelId, Math.max(viewport.zoom, 13));
         if (cancelled) return;
@@ -193,6 +192,9 @@ export default function LeadExplorerClient() {
           console.debug("[lead-explorer] selected geometry failed", { selectedParcelId, error });
         }
         setSelectedGeometryResponse(null);
+        setGeometryError(error instanceof Error ? error.message : "Failed to load parcel geometry");
+      } finally {
+        if (!cancelled) setGeometryLoading(false);
       }
     }
     void loadSelectedGeometry();
@@ -244,71 +246,12 @@ export default function LeadExplorerClient() {
     };
   }, [selectedId]);
 
-  useEffect(() => {
-    if (!viewport.bounds) {
-      setGeometryResponse(null);
-      return;
-    }
-
-    let cancelled = false;
-    async function loadGeometry() {
-      setGeometryLoading(true);
-      setGeometryError(null);
-      try {
-        const response = await fetchGeometryViewport(
-          debouncedFilters,
-          viewport.bounds,
-          viewport.zoom,
-          selectedId,
-          GEOMETRY_LIMIT,
-        );
-        if (cancelled) return;
-        setGeometryResponse(response);
-      } catch (error) {
-        if (cancelled) return;
-        setGeometryError(error instanceof Error ? error.message : "Failed to load parcel geometry");
-      } finally {
-        if (!cancelled) setGeometryLoading(false);
-      }
-    }
-    void loadGeometry();
-    return () => {
-      cancelled = true;
-    };
-  }, [debouncedFilters, selectedId, viewport.bounds, viewport.zoom]);
-
   const countySuggestions = useMemo(
     () => summary?.sections?.top_counties?.map((item) => item.key).filter(Boolean) ?? [],
     [summary],
   );
 
   const visibleLeads = leads;
-  const mergedGeometryResponse = useMemo(() => {
-    if (!selectedGeometryResponse?.feature_collection?.features?.length) return geometryResponse;
-    const viewportFeatures = geometryResponse?.feature_collection?.features ?? [];
-    const selectedFeatures = selectedGeometryResponse.feature_collection.features;
-    const selectedIds = new Set(selectedFeatures.map((feature) => feature.properties.parcel_row_id));
-    const mergedFeatures = [
-      ...selectedFeatures,
-      ...viewportFeatures.filter((feature) => !selectedIds.has(feature.properties.parcel_row_id)),
-    ];
-    return {
-      ...(geometryResponse ?? selectedGeometryResponse),
-      render_mode:
-        mergedFeatures.some((feature) => feature.geometry?.type === "Polygon" || feature.geometry?.type === "MultiPolygon")
-          ? "polygons"
-          : (geometryResponse?.render_mode ?? selectedGeometryResponse.render_mode),
-      feature_count: mergedFeatures.length,
-      feature_collection: {
-        type: "FeatureCollection" as const,
-        features: mergedFeatures,
-      },
-      items: [
-        ...(selectedGeometryResponse.items ?? []),
-        ...((geometryResponse?.items ?? []).filter((item) => !selectedIds.has(item.parcel_row_id))),
-      ],
-    } satisfies GeometryResponse;
-  }, [geometryResponse, selectedGeometryResponse]);
   const visibleVacantCount = useMemo(
     () => visibleLeads.reduce((count, lead) => count + (lead.parcel_vacant_flag ? 1 : 0), 0),
     [visibleLeads],
@@ -764,17 +707,17 @@ export default function LeadExplorerClient() {
               </div>
               <div className="card-header-actions">
                 <button type="button" className="chip" onClick={() => setFitNonce((current) => current + 1)}>
-                  Zoom to results
+                  Reset map view
                 </button>
                 <button type="button" className="chip" disabled={!selectedId} onClick={() => setLocateSelectedNonce((current) => current + 1)}>
                   Locate selected parcel
                 </button>
-                {mergedGeometryResponse?.feature_count ? <LeadBadge label={`${mergedGeometryResponse.feature_count} map features`} tone="neutral" /> : null}
+                {selectedGeometryResponse?.feature_count ? <LeadBadge label={`${selectedGeometryResponse.feature_count} selected feature`} tone="neutral" /> : null}
               </div>
             </div>
             {geometryError ? <p className="error-text">{geometryError}</p> : null}
             <LeadMap
-              geometryResponse={mergedGeometryResponse}
+              geometryResponse={selectedGeometryResponse}
               selectedId={selectedId}
               onSelect={handleSelectParcel}
               fitNonce={fitNonce}
@@ -782,6 +725,7 @@ export default function LeadExplorerClient() {
               activeOverlays={activeOverlays}
               viewport={viewport}
               onViewportChange={setViewport}
+              resultsLoading={leadsLoading}
               loading={geometryLoading}
               error={geometryError}
               totalCount={totalCount}

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import Response
 
 from app.services.mississippi_leads_service import (
     get_geometry,
     get_lead_detail,
     get_leads,
     get_parcel_geometry,
+    get_parcel_tile,
     get_presets,
     get_summary,
 )
@@ -188,6 +190,12 @@ def parcels_geometry(
 @router.get("/parcels/{parcel_row_id}/geometry")
 def parcel_geometry(parcel_row_id: str, zoom: float | None = None):
     return get_parcel_geometry(parcel_row_id, zoom=zoom)
+
+
+@router.get("/tiles/parcels/{z}/{x}/{y}.mvt")
+def parcel_tile(z: int, x: int, y: int):
+    tile = get_parcel_tile(z, x, y)
+    return Response(content=tile, media_type="application/vnd.mapbox-vector-tile")
 
 
 @router.get("/presets")
