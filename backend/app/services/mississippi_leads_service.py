@@ -38,6 +38,7 @@ def _discover_project_root() -> Path:
 PROJECT_ROOT = _discover_project_root()
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 EMBEDDED_RUNTIME_DIR = BACKEND_DIR / "runtime" / "mississippi"
+EMBEDDED_PARCEL_INDEX_ROOT = EMBEDDED_RUNTIME_DIR / "parcel_index"
 PARCEL_MASTER_PATH = PROJECT_ROOT / "data" / "parcels" / "mississippi_parcels_master.parquet"
 OWNER_LEADS_PATH = PROJECT_ROOT / "data" / "parcels" / "mississippi_parcels_owner_leads.parquet"
 BUILDING_METRICS_PATH = PROJECT_ROOT / "data" / "buildings_processed" / "parcel_building_metrics.parquet"
@@ -190,6 +191,10 @@ def _full_runtime_available() -> bool:
     return PARCEL_MASTER_PATH.exists() and OWNER_LEADS_PATH.exists() and BUILDING_METRICS_PATH.exists()
 
 
+def _embedded_parcel_runtime_available() -> bool:
+    return EMBEDDED_PARCEL_INDEX_ROOT.exists() and any(EMBEDDED_PARCEL_INDEX_ROOT.rglob("*.parquet"))
+
+
 def _load_static_feed_frame() -> pd.DataFrame:
     if not MISSISSIPPI_STATIC_FEED_PATH.exists():
         raise FileNotFoundError(f"Static explorer feed not found: {MISSISSIPPI_STATIC_FEED_PATH}")
@@ -230,6 +235,31 @@ def load_base_frame() -> pd.DataFrame:
         raise FileNotFoundError(
             f"Lead signals dataset not found: {parquet_path}; static feed not found: {MISSISSIPPI_STATIC_FEED_PATH}"
         )
+
+    if not _full_runtime_available() and _embedded_parcel_runtime_available():
+        frame = ds.dataset(EMBEDDED_PARCEL_INDEX_ROOT, format="parquet").to_table().to_pandas()
+        frame["county_hosted_flag"] = frame["county_hosted_flag"].fillna(_county_hosted_flag(frame.get("best_source_type")))
+        frame["parcel_vacant_flag"] = frame["parcel_vacant_flag"].fillna(False)
+        frame["corporate_owner_flag"] = frame["corporate_owner_flag"].fillna(False)
+        frame["absentee_owner_flag"] = frame["absentee_owner_flag"].fillna(False)
+        frame["out_of_state_owner_flag"] = frame["out_of_state_owner_flag"].fillna(False)
+        frame["high_confidence_link_flag"] = frame["high_confidence_link_flag"].fillna(False)
+        frame["delinquent_flag"] = frame["delinquent_flag"].fillna(False)
+        frame["forfeited_flag"] = frame["forfeited_flag"].fillna(False)
+        frame["amount_trust_tier"] = _normalize_string(frame.get("amount_trust_tier"), index=frame.index).fillna("not_reported")
+        frame["source_confidence_tier"] = _normalize_string(frame.get("source_confidence_tier"), index=frame.index).fillna("parcel_master_only")
+        frame["county_source_coverage_tier"] = _normalize_string(frame.get("county_source_coverage_tier"), index=frame.index).fillna("statewide_parcel_base")
+        frame["best_source_type"] = _normalize_string(frame.get("best_source_type"), index=frame.index).fillna("parcel_master")
+        frame["best_source_name"] = _normalize_string(frame.get("best_source_name"), index=frame.index).fillna("Mississippi Parcel Runtime")
+        frame["growth_pressure_bucket"] = _normalize_string(frame.get("growth_pressure_bucket"), index=frame.index).fillna("unknown")
+        frame["recommended_view_bucket"] = _normalize_string(frame.get("recommended_view_bucket"), index=frame.index).fillna("general_ranked")
+        frame["owner_type"] = _normalize_string(frame.get("owner_type"), index=frame.index).fillna("unknown")
+        frame["state_code"] = _normalize_string(frame.get("state_code"), index=frame.index).fillna("MS")
+        frame["county_name"] = _normalize_string(frame.get("county_name"), index=frame.index)
+        frame["owner_name"] = _normalize_string(frame.get("owner_name"), index=frame.index)
+        frame["parcel_id"] = _normalize_string(frame.get("parcel_id"), index=frame.index)
+        frame["electric_provider_name"] = _normalize_string(frame.get("electric_provider_name"), index=frame.index)
+        return frame
 
     if not _full_runtime_available():
         try:
@@ -672,6 +702,13 @@ def runtime_file_diagnostics() -> dict[str, dict[str, int | bool | str | None]]:
         "exists": EMBEDDED_LEAD_SIGNALS_PATH.exists(),
         "size_bytes": EMBEDDED_LEAD_SIGNALS_PATH.stat().st_size if EMBEDDED_LEAD_SIGNALS_PATH.exists() else None,
     }
+    diagnostics["embedded_parcel_index"] = {
+        "cwd": str(Path.cwd()),
+        "project_root": str(PROJECT_ROOT),
+        "path": str(EMBEDDED_PARCEL_INDEX_ROOT.resolve(strict=False)),
+        "exists": _embedded_parcel_runtime_available(),
+        "size_bytes": None,
+    }
     diagnostics["static_feed"] = {
         "cwd": str(Path.cwd()),
         "project_root": str(PROJECT_ROOT),
@@ -958,7 +995,11 @@ def get_summary() -> dict[str, Any]:
     source_label = (
         "mississippi_parcels_master + owner leads + building metrics + motivation signals"
         if _full_runtime_available()
-        else ("mississippi lead dataset" if LEAD_SIGNALS_PATH.exists() or EMBEDDED_LEAD_SIGNALS_PATH.exists() else "mississippi explorer static feed")
+        else (
+            "mississippi parcel runtime dataset"
+            if _embedded_parcel_runtime_available()
+            else ("mississippi lead dataset" if LEAD_SIGNALS_PATH.exists() or EMBEDDED_LEAD_SIGNALS_PATH.exists() else "mississippi explorer static feed")
+        )
     )
     return {
         "row_count": int(len(frame)),
