@@ -9,6 +9,8 @@ __pycache__/
 # Local virtual environments
 .venv/
 backend/.venv/
+venv/
+.wsl-pmtiles-venv/
 
 # Local env files
 .env
@@ -32,6 +34,7 @@ frontend/public/data/*
 !frontend/public/data/mississippi_lead_explorer_geometries.json
 !frontend/public/data/mississippi_lead_detail_fallback.json
 frontend/public/tiles/*.pmtiles
+!frontend/public/tiles/mississippi_parcels.pmtiles
 
 # Local scrape/debug artifacts
 tmp_*
