@@ -418,6 +418,13 @@ export function LeadMap({
       return;
     }
 
+    if (selectedId && !selectedBounds) {
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[landintel-map] waiting_for_selected_geometry", { selectedId, featureCount });
+      }
+      return;
+    }
+
     const targetBounds = selectedBounds ?? resultBounds;
     if (!targetBounds) {
       if (hasNewFitRequest && !selectedId) {
