@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PARCEL_MASTER_PATH = ROOT / "data" / "parcels" / "mississippi_parcels_master.parquet"
 OWNER_LEADS_PATH = ROOT / "data" / "parcels" / "mississippi_parcels_owner_leads.parquet"
 BUILDING_METRICS_PATH = ROOT / "data" / "buildings_processed" / "parcel_building_metrics.parquet"
+AI_BUILDING_PREDICTIONS_PATH = ROOT / "data" / "buildings_processed" / "ai_building_presence_predictions_ms.parquet"
 LEAD_SIGNALS_PATH = ROOT / "data" / "tax_published" / "ms" / "app_ready_mississippi_leads.parquet"
 OUTPUT_ROOT = ROOT / "backend" / "runtime" / "mississippi" / "parcel_index"
 RUNTIME_ROOT = ROOT / "backend" / "runtime" / "mississippi"
@@ -191,6 +192,16 @@ def build_runtime_frame() -> pd.DataFrame:
     frame = parcels.merge(owners, on="parcel_row_id", how="left")
     frame = frame.merge(buildings, on="parcel_row_id", how="left")
     frame = frame.merge(signals, on="parcel_row_id", how="left")
+    if AI_BUILDING_PREDICTIONS_PATH.exists():
+        ai_columns = [
+            "parcel_row_id",
+            "ai_building_present_probability",
+            "ai_building_present_flag",
+            "vacancy_confidence_score",
+            "vacancy_model_version",
+        ]
+        ai_predictions = pd.read_parquet(AI_BUILDING_PREDICTIONS_PATH, columns=ai_columns, engine="pyarrow")
+        frame = frame.merge(ai_predictions, on="parcel_row_id", how="left")
 
     for column in ["parcel_vacant_flag", "corporate_owner_flag", "absentee_owner_flag", "out_of_state_owner_flag", "high_confidence_link_flag", "county_hosted_flag", "delinquent_flag", "forfeited_flag"]:
         if column in frame.columns:
@@ -210,8 +221,12 @@ def build_runtime_frame() -> pd.DataFrame:
     frame["recommended_view_bucket"] = frame["recommended_view_bucket"].astype("string").fillna("general_ranked")
     frame["slope_class"] = frame["slope_class"].astype("string")
     frame["county_vacant_flag"] = pd.Series(pd.NA, index=frame.index, dtype="boolean")
-    frame["ai_building_present_flag"] = pd.Series(pd.NA, index=frame.index, dtype="boolean")
-    frame["vacancy_confidence_score"] = vacancy_confidence(frame)
+    frame["ai_building_present_flag"] = (
+        frame["ai_building_present_flag"].astype("boolean")
+        if "ai_building_present_flag" in frame.columns
+        else pd.Series(pd.NA, index=frame.index, dtype="boolean")
+    )
+    frame["vacancy_confidence_score"] = pd.to_numeric(frame.get("vacancy_confidence_score"), errors="coerce").fillna(vacancy_confidence(frame))
 
     return frame
 

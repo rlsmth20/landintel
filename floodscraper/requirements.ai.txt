@@ -1,0 +1,7 @@
+pillow
+scikit-learn
+joblib
+requests
+numpy
+pandas
+pyarrow

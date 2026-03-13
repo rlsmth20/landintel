@@ -53,6 +53,7 @@ EMBEDDED_DEFAULT_GEOMETRY_PATH = EMBEDDED_RUNTIME_DIR / "default_geometry.json"
 PARCEL_MASTER_PATH = PROJECT_ROOT / "data" / "parcels" / "mississippi_parcels_master.parquet"
 OWNER_LEADS_PATH = PROJECT_ROOT / "data" / "parcels" / "mississippi_parcels_owner_leads.parquet"
 BUILDING_METRICS_PATH = PROJECT_ROOT / "data" / "buildings_processed" / "parcel_building_metrics.parquet"
+AI_BUILDING_PREDICTIONS_PATH = PROJECT_ROOT / "data" / "buildings_processed" / "ai_building_presence_predictions_ms.parquet"
 LEAD_SIGNALS_PATH = PROJECT_ROOT / "data" / "tax_published" / "ms" / "app_ready_mississippi_leads.parquet"
 EMBEDDED_LEAD_SIGNALS_PATH = EMBEDDED_RUNTIME_DIR / "app_ready_mississippi_leads.parquet"
 
@@ -199,6 +200,28 @@ def _ensure_intelligence_fields(frame: pd.DataFrame) -> pd.DataFrame:
         _vacancy_confidence_series(frame)
     )
     return frame
+
+
+def _merge_ai_predictions(frame: pd.DataFrame) -> pd.DataFrame:
+    if not AI_BUILDING_PREDICTIONS_PATH.exists():
+        return frame
+    ai_columns = [
+        "parcel_row_id",
+        "ai_building_present_probability",
+        "ai_building_present_flag",
+        "vacancy_confidence_score",
+        "vacancy_model_version",
+    ]
+    available_columns = []
+    ai_schema = ds.dataset(AI_BUILDING_PREDICTIONS_PATH, format="parquet").schema.names
+    for column in ai_columns:
+        if column in ai_schema:
+            available_columns.append(column)
+    if "parcel_row_id" not in available_columns:
+        return frame
+    ai_predictions = pd.read_parquet(AI_BUILDING_PREDICTIONS_PATH, columns=available_columns, engine="pyarrow")
+    ai_predictions["parcel_row_id"] = _normalize_string(ai_predictions.get("parcel_row_id"), index=ai_predictions.index)
+    return frame.merge(ai_predictions, on="parcel_row_id", how="left")
 
 
 def _coalesce_numeric(frame: pd.DataFrame, columns: list[str]) -> pd.Series:
@@ -560,6 +583,7 @@ def load_base_frame() -> pd.DataFrame:
         frame["owner_name"] = _normalize_string(frame.get("owner_name"), index=frame.index)
         frame["parcel_id"] = _normalize_string(frame.get("parcel_id"), index=frame.index)
         frame["electric_provider_name"] = _normalize_string(frame.get("electric_provider_name"), index=frame.index)
+        frame = _merge_ai_predictions(frame)
         frame = _ensure_intelligence_fields(frame)
         return frame
 
@@ -595,6 +619,7 @@ def load_base_frame() -> pd.DataFrame:
         longitudes, latitudes = _centroids_from_wkb(frame.get("geometry"))
         frame["longitude"] = longitudes
         frame["latitude"] = latitudes
+        frame = _merge_ai_predictions(frame)
         frame = _ensure_intelligence_fields(frame)
         return frame
 
@@ -726,6 +751,7 @@ def load_base_frame() -> pd.DataFrame:
     frame["county_name"] = _normalize_string(frame.get("county_name"), index=frame.index)
     frame["owner_name"] = _normalize_string(frame.get("owner_name"), index=frame.index)
     frame["parcel_id"] = _normalize_string(frame.get("parcel_id"), index=frame.index)
+    frame = _merge_ai_predictions(frame)
     frame = _ensure_intelligence_fields(frame)
 
     acreage = _to_float_series(frame, "acreage").fillna(0)
