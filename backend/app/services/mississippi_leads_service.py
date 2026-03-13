@@ -870,11 +870,32 @@ def _detail_geometry(parcel_row_id: str) -> dict[str, Any] | None:
         if table.num_rows:
             frame = table.to_pandas()
             geometry_bytes = frame.iloc[0]["geometry"]
+    if geometry_bytes is None and _embedded_geometry_runtime_available():
+        frame = _geometry_table_for_ids([parcel_row_id])
+        if not frame.empty and "geometry" in frame.columns:
+            geometry_bytes = frame.iloc[0]["geometry"]
     if geometry_bytes is None:
         base_frame = load_base_frame()
-        match = base_frame.loc[base_frame["parcel_row_id"].astype("string").eq(parcel_row_id), ["geometry"]]
-        if not match.empty:
-            geometry_bytes = match.iloc[0]["geometry"]
+        if "geometry" in base_frame.columns:
+            match = base_frame.loc[base_frame["parcel_row_id"].astype("string").eq(parcel_row_id), ["geometry"]]
+            if not match.empty:
+                geometry_bytes = match.iloc[0]["geometry"]
+        if geometry_bytes is None:
+            centroid_match = base_frame.loc[
+                base_frame["parcel_row_id"].astype("string").eq(parcel_row_id),
+                ["longitude", "latitude"],
+            ]
+            if not centroid_match.empty:
+                longitude = pd.to_numeric(centroid_match.iloc[0].get("longitude"), errors="coerce")
+                latitude = pd.to_numeric(centroid_match.iloc[0].get("latitude"), errors="coerce")
+                if pd.notna(longitude) and pd.notna(latitude):
+                    lng = round(float(longitude), 6)
+                    lat = round(float(latitude), 6)
+                    return {
+                        "type": "Point",
+                        "centroid": {"type": "Point", "coordinates": [lng, lat]},
+                        "bounds": [lng, lat, lng, lat],
+                    }
     if not geometry_bytes:
         return None
     if isinstance(geometry_bytes, dict):
