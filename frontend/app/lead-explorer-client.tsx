@@ -61,7 +61,6 @@ export default function LeadExplorerClient() {
   const [leads, setLeads] = useState<LeadRecord[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [selectedLead, setSelectedLead] = useState<LeadRecord | null>(null);
   const [geometryResponse, setGeometryResponse] = useState<GeometryResponse | null>(null);
   const [fitNonce, setFitNonce] = useState(0);
@@ -657,9 +656,7 @@ export default function LeadExplorerClient() {
             <LeadMap
               geometryResponse={geometryResponse}
               selectedId={selectedId}
-              hoveredId={hoveredId}
               onSelect={setSelectedId}
-              onHoverChange={setHoveredId}
               fitNonce={fitNonce}
               activeOverlays={activeOverlays}
               viewport={viewport}

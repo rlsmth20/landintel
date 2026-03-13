@@ -228,9 +228,7 @@ function initializeParcelLayers(map: Map) {
 export function LeadMap({
   geometryResponse,
   selectedId,
-  hoveredId,
   onSelect,
-  onHoverChange,
   fitNonce,
   activeOverlays,
   viewport,
@@ -238,9 +236,7 @@ export function LeadMap({
 }: {
   geometryResponse: GeometryResponse | null;
   selectedId: string | null;
-  hoveredId: string | null;
   onSelect: (value: string) => void;
-  onHoverChange: (value: string | null) => void;
   fitNonce: number;
   activeOverlays: MapOverlayId[];
   viewport: MapViewportState;
@@ -296,7 +292,6 @@ export function LeadMap({
           hoveredFeatureIdRef.current = null;
         }
         map.getCanvas().style.cursor = "";
-        onHoverChange(null);
       });
 
       const currentBounds = map.getBounds();
@@ -329,11 +324,9 @@ export function LeadMap({
         hoveredFeatureIdRef.current = nextId;
         map.setFeatureState({ source: PARCEL_SOURCE_ID, id: nextId }, { hover: true });
         map.getCanvas().style.cursor = "pointer";
-        onHoverChange(nextId);
       } else {
         hoveredFeatureIdRef.current = null;
         map.getCanvas().style.cursor = "";
-        onHoverChange(null);
       }
     });
 
@@ -341,7 +334,7 @@ export function LeadMap({
       map.remove();
       mapRef.current = null;
     };
-  }, [onHoverChange, onSelect, onViewportChange, viewport.center, viewport.zoom]);
+  }, [onSelect, onViewportChange, viewport.center, viewport.zoom]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -358,7 +351,6 @@ export function LeadMap({
           properties: {
             ...feature.properties,
             selected: feature.properties.parcel_row_id === selectedId,
-            hovered: feature.properties.parcel_row_id === hoveredId,
           },
         })) ?? [],
     };
@@ -372,7 +364,7 @@ export function LeadMap({
         console.debug("[landintel-map] invalid_geometry_first_feature", nextCollection.features[0]);
       }
     }
-  }, [featureCollection, geometryResponse?.geometry_bounds, hoveredId, resultBounds, selectedId]);
+  }, [featureCollection, geometryResponse?.geometry_bounds, resultBounds, selectedId]);
 
   useEffect(() => {
     const map = mapRef.current;
