@@ -31,6 +31,7 @@ frontend/public/data/*
 !frontend/public/data/mississippi_lead_explorer_meta.json
 !frontend/public/data/mississippi_lead_explorer_geometries.json
 !frontend/public/data/mississippi_lead_detail_fallback.json
+frontend/public/tiles/*.pmtiles
 
 # Local scrape/debug artifacts
 tmp_*

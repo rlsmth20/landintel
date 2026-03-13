@@ -4,15 +4,12 @@ import "maplibre-gl/dist/maplibre-gl.css";
 
 import { useEffect, useMemo, useRef } from "react";
 import maplibregl, { GeoJSONSource, LngLatBoundsLike, Map } from "maplibre-gl";
+import { PMTiles, Protocol } from "pmtiles";
 
 import type { FeatureCollectionPayload, GeometryFeature, GeometryResponse, MapOverlayId, MapViewportState } from "./types";
 
 const DEFAULT_CENTER: [number, number] = [-98.5795, 39.8283];
 const DEFAULT_ZOOM = 3.4;
-const DEFAULT_PRODUCTION_API_BASE_URL = "https://landintel-production.up.railway.app";
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ??
-  (process.env.NODE_ENV === "production" ? DEFAULT_PRODUCTION_API_BASE_URL : "");
 const MISSISSIPPI_BOUNDS: [[number, number], [number, number]] = [
   [-91.65, 30.15],
   [-88.0, 35.1],
@@ -20,7 +17,32 @@ const MISSISSIPPI_BOUNDS: [[number, number], [number, number]] = [
 const PARCEL_TILE_SOURCE_ID = "landintel-parcel-tiles";
 const PARCEL_TILE_LAYER = "parcels";
 const SELECTED_PARCEL_SOURCE_ID = "landintel-selected-parcel";
-const PARCEL_TILE_MIN_ZOOM = 14;
+const PARCEL_TILE_MIN_ZOOM = 6;
+const DEFAULT_PARCEL_PMTILES_URL = "/tiles/mississippi_parcels.pmtiles";
+let pmtilesProtocol: Protocol | null = null;
+let pmtilesArchiveUrl: string | null = null;
+
+function getParcelPmtilesUrl() {
+  const configured = process.env.NEXT_PUBLIC_PARCEL_PMTILES_URL?.trim() || DEFAULT_PARCEL_PMTILES_URL;
+  if (/^https?:\/\//i.test(configured)) return configured;
+  if (typeof window !== "undefined") {
+    return new URL(configured, window.location.origin).toString();
+  }
+  return configured;
+}
+
+function ensurePmtilesProtocol() {
+  if (typeof window === "undefined") return;
+  if (!pmtilesProtocol) {
+    pmtilesProtocol = new Protocol();
+    maplibregl.addProtocol("pmtiles", pmtilesProtocol.tile);
+  }
+  const nextUrl = getParcelPmtilesUrl();
+  if (pmtilesArchiveUrl !== nextUrl) {
+    pmtilesProtocol.add(new PMTiles(nextUrl));
+    pmtilesArchiveUrl = nextUrl;
+  }
+}
 
 const BASE_STYLE: maplibregl.StyleSpecification = {
   version: 8,
@@ -104,10 +126,11 @@ function updateLayerVisibility(map: Map, layerId: string, visible: boolean) {
 
 function initializeParcelLayers(map: Map) {
   if (map.getSource(PARCEL_TILE_SOURCE_ID)) return;
+  ensurePmtilesProtocol();
 
   map.addSource(PARCEL_TILE_SOURCE_ID, {
     type: "vector",
-    tiles: [`${API_BASE_URL}/api/tiles/parcels/{z}/{x}/{y}.mvt`],
+    url: `pmtiles://${getParcelPmtilesUrl()}`,
     minzoom: PARCEL_TILE_MIN_ZOOM,
     maxzoom: 15,
     promoteId: { [PARCEL_TILE_LAYER]: "parcel_row_id" },
@@ -454,7 +477,7 @@ export function LeadMap({
     emptyBody = "Try broadening the current filter set or clearing preset constraints.";
   } else if (viewport.zoom < PARCEL_TILE_MIN_ZOOM) {
     emptyTitle = "Zoom in to inspect parcel boundaries";
-    emptyBody = "The base parcel layer uses tiles and becomes legible once you zoom further into Mississippi.";
+    emptyBody = "The base parcel layer uses PMTiles and becomes legible once you zoom further into Mississippi.";
   } else if (loading && selectedId) {
     emptyTitle = "Loading selected parcel";
     emptyBody = "Fetching detailed geometry for the current selection.";
