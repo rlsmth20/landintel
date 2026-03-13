@@ -41,6 +41,10 @@ PROJECT_ROOT = _discover_project_root()
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 EMBEDDED_RUNTIME_DIR = BACKEND_DIR / "runtime" / "mississippi"
 EMBEDDED_PARCEL_INDEX_ROOT = EMBEDDED_RUNTIME_DIR / "parcel_index"
+EMBEDDED_SUMMARY_PATH = EMBEDDED_RUNTIME_DIR / "summary.json"
+EMBEDDED_PRESETS_PATH = EMBEDDED_RUNTIME_DIR / "presets.json"
+EMBEDDED_DEFAULT_LEADS_PATH = EMBEDDED_RUNTIME_DIR / "default_leads.json"
+EMBEDDED_DEFAULT_GEOMETRY_PATH = EMBEDDED_RUNTIME_DIR / "default_geometry.json"
 PARCEL_MASTER_PATH = PROJECT_ROOT / "data" / "parcels" / "mississippi_parcels_master.parquet"
 OWNER_LEADS_PATH = PROJECT_ROOT / "data" / "parcels" / "mississippi_parcels_owner_leads.parquet"
 BUILDING_METRICS_PATH = PROJECT_ROOT / "data" / "buildings_processed" / "parcel_building_metrics.parquet"
@@ -317,6 +321,54 @@ def _bounded_sorted_batches(
         candidate = pd.concat([candidate, frame], ignore_index=True)
         candidate = candidate.sort_values(sort_by, ascending=ascending, na_position="last").head(keep_rows)
     return candidate.sort_values(sort_by, ascending=ascending, na_position="last").head(keep_rows)
+
+
+def _load_embedded_json(path: Path) -> Any:
+    if not path.exists():
+        return None
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _is_default_filter_state(
+    *,
+    county_name: str | None = None,
+    lead_score_tier: list[str] | None = None,
+    min_lead_score_total: float | None = None,
+    acreage_min: float | None = None,
+    acreage_max: float | None = None,
+    parcel_vacant_flag: bool | None = None,
+    county_hosted_flag: bool | None = None,
+    high_confidence_link_flag: bool | None = None,
+    wetland_flag: bool | None = None,
+    amount_trust_tier: list[str] | None = None,
+    corporate_owner_flag: bool | None = None,
+    absentee_owner_flag: bool | None = None,
+    out_of_state_owner_flag: bool | None = None,
+    growth_pressure_bucket: list[str] | None = None,
+    recommended_view_bucket: list[str] | None = None,
+    road_access_tier: list[str] | None = None,
+    road_distance_ft_max: float | None = None,
+) -> bool:
+    return (
+        county_name is None
+        and not lead_score_tier
+        and (min_lead_score_total is None or float(min_lead_score_total) == 0.0)
+        and acreage_min is None
+        and acreage_max is None
+        and parcel_vacant_flag is None
+        and county_hosted_flag is None
+        and high_confidence_link_flag is None
+        and wetland_flag is None
+        and not amount_trust_tier
+        and corporate_owner_flag is None
+        and absentee_owner_flag is None
+        and out_of_state_owner_flag is None
+        and not growth_pressure_bucket
+        and not recommended_view_bucket
+        and not road_access_tier
+        and road_distance_ft_max is None
+    )
 
 
 def _load_static_feed_frame() -> pd.DataFrame:
@@ -868,6 +920,38 @@ def get_leads(
     offset: int = 0,
 ) -> dict[str, Any]:
     if _using_embedded_runtime():
+        if (
+            _is_default_filter_state(
+                county_name=county_name,
+                lead_score_tier=lead_score_tier,
+                min_lead_score_total=min_lead_score_total,
+                acreage_min=acreage_min,
+                acreage_max=acreage_max,
+                parcel_vacant_flag=parcel_vacant_flag,
+                county_hosted_flag=county_hosted_flag,
+                high_confidence_link_flag=high_confidence_link_flag,
+                wetland_flag=wetland_flag,
+                amount_trust_tier=amount_trust_tier,
+                corporate_owner_flag=corporate_owner_flag,
+                absentee_owner_flag=absentee_owner_flag,
+                out_of_state_owner_flag=out_of_state_owner_flag,
+                growth_pressure_bucket=growth_pressure_bucket,
+                recommended_view_bucket=recommended_view_bucket,
+                road_access_tier=road_access_tier,
+                road_distance_ft_max=road_distance_ft_max,
+            )
+            and sort_by == "lead_score_total"
+            and sort_direction == "desc"
+            and int(offset) == 0
+        ):
+            cached = _load_embedded_json(EMBEDDED_DEFAULT_LEADS_PATH)
+            if cached is not None:
+                requested_limit = _clamp_limit(limit, default=LEADS_DEFAULT_LIMIT, max_limit=LEADS_MAX_LIMIT)
+                cached["limit"] = requested_limit
+                cached["offset"] = 0
+                cached["items"] = cached["items"][:requested_limit]
+                return cached
+
         safe_limit = _clamp_limit(limit, default=LEADS_DEFAULT_LIMIT, max_limit=LEADS_MAX_LIMIT)
         safe_offset = max(int(offset), 0)
         expression = _embedded_filter_expression(
@@ -984,6 +1068,36 @@ def get_geometry(
     limit: int = GEOMETRY_DEFAULT_LIMIT,
 ) -> dict[str, Any]:
     if _using_embedded_runtime():
+        if (
+            parcel_row_ids is None
+            and selected_parcel_id is None
+            and bounds == (-91.65, 30.15, -88.0, 35.1)
+            and zoom is not None
+            and zoom <= 6.5
+            and _is_default_filter_state(
+                county_name=county_name,
+                lead_score_tier=lead_score_tier,
+                min_lead_score_total=min_lead_score_total,
+                acreage_min=acreage_min,
+                acreage_max=acreage_max,
+                parcel_vacant_flag=parcel_vacant_flag,
+                county_hosted_flag=county_hosted_flag,
+                high_confidence_link_flag=high_confidence_link_flag,
+                wetland_flag=wetland_flag,
+                amount_trust_tier=amount_trust_tier,
+                corporate_owner_flag=corporate_owner_flag,
+                absentee_owner_flag=absentee_owner_flag,
+                out_of_state_owner_flag=out_of_state_owner_flag,
+                growth_pressure_bucket=growth_pressure_bucket,
+                recommended_view_bucket=recommended_view_bucket,
+                road_access_tier=road_access_tier,
+                road_distance_ft_max=road_distance_ft_max,
+            )
+        ):
+            cached = _load_embedded_json(EMBEDDED_DEFAULT_GEOMETRY_PATH)
+            if cached is not None:
+                return cached
+
         geometry_columns = [
             "parcel_row_id",
             "parcel_id",
@@ -1266,6 +1380,9 @@ def get_geometry(
 
 def get_presets() -> list[dict[str, Any]]:
     if _using_embedded_runtime():
+        cached = _load_embedded_json(EMBEDDED_PRESETS_PATH)
+        if cached is not None:
+            return cached
         presets: list[dict[str, Any]] = []
         for view_name, definition in PRESET_DEFINITIONS.items():
             expression = _embedded_filter_expression(**definition["filters"])
@@ -1311,6 +1428,9 @@ def get_presets() -> list[dict[str, Any]]:
 
 def get_summary() -> dict[str, Any]:
     if _using_embedded_runtime():
+        cached = _load_embedded_json(EMBEDDED_SUMMARY_PATH)
+        if cached is not None:
+            return cached
         summary_columns = ["county_name", "recommended_view_bucket", "lead_score_total", "parcel_vacant_flag", "county_hosted_flag"]
         total_rows = 0
         vacant_rows = 0

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import numpy as np
 import pandas as pd
@@ -15,6 +16,7 @@ OWNER_LEADS_PATH = ROOT / "data" / "parcels" / "mississippi_parcels_owner_leads.
 BUILDING_METRICS_PATH = ROOT / "data" / "buildings_processed" / "parcel_building_metrics.parquet"
 LEAD_SIGNALS_PATH = ROOT / "data" / "tax_published" / "ms" / "app_ready_mississippi_leads.parquet"
 OUTPUT_ROOT = ROOT / "backend" / "runtime" / "mississippi" / "parcel_index"
+RUNTIME_ROOT = ROOT / "backend" / "runtime" / "mississippi"
 
 
 PARCEL_COLUMNS = [
@@ -125,6 +127,17 @@ def point_geometry_from_wkb(value: bytes | None) -> dict[str, object] | None:
     }
 
 
+def json_scalar(value):
+    if pd.isna(value):
+        return None
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            return value
+    return value
+
+
 def build_runtime_frame() -> pd.DataFrame:
     parcels = pd.read_parquet(PARCEL_MASTER_PATH, columns=PARCEL_COLUMNS, engine="pyarrow")
     parcels["acreage"] = coalesce_numeric(parcels, ["total_acres", "parcel_area_acres", "gis_acres", "tax_acres"])
@@ -170,7 +183,167 @@ def build_runtime_frame() -> pd.DataFrame:
     return frame
 
 
+def build_summary_payload(frame: pd.DataFrame) -> dict[str, object]:
+    county_counts = frame.groupby("county_name", dropna=True).size().sort_values(ascending=False).head(20)
+    recommended_counts = frame.groupby("recommended_view_bucket", dropna=True).size().sort_values(ascending=False)
+    average_score = pd.to_numeric(frame["lead_score_total"], errors="coerce").mean()
+    return {
+        "row_count": int(len(frame)),
+        "source": "mississippi parcel runtime dataset",
+        "geometry_mode": "viewport_geojson",
+        "sections": {
+            "statewide": [
+                {"section": "statewide", "metric": "lead_count", "value": str(len(frame))},
+                {"section": "statewide", "metric": "average_lead_score", "value": f"{average_score:.1f}"},
+                {"section": "statewide", "metric": "vacant_share_pct", "value": f"{frame['parcel_vacant_flag'].fillna(False).mean() * 100:.1f}"},
+                {"section": "statewide", "metric": "county_hosted_share_pct", "value": f"{frame['county_hosted_flag'].fillna(False).mean() * 100:.1f}"},
+            ],
+            "top_counties": [
+                {"section": "top_counties", "key": county, "metric": "parcel_count", "value": str(int(count))}
+                for county, count in county_counts.items()
+            ],
+            "recommended_view_bucket": [
+                {"section": "recommended_view_bucket", "key": bucket, "metric": "parcel_count", "value": str(int(count))}
+                for bucket, count in recommended_counts.items()
+            ],
+        },
+    }
+
+
+def build_presets_payload(frame: pd.DataFrame) -> list[dict[str, str]]:
+    definitions = {
+        "safest_early_investor_use": {
+            "description": "High-confidence county-hosted parcels with stronger amount reliability, no wetlands, and vacancy preference.",
+            "filter_expression": "county_hosted_flag=true AND high_confidence_link_flag=true AND parcel_vacant_flag=true AND wetland_flag=false AND amount_trust_tier in trusted/use_with_caution",
+            "mask": (
+                frame["county_hosted_flag"].fillna(False)
+                & frame["high_confidence_link_flag"].fillna(False)
+                & frame["parcel_vacant_flag"].fillna(False)
+                & ~frame["wetland_flag"].fillna(False)
+                & frame["amount_trust_tier"].astype("string").isin(["trusted", "use_with_caution"])
+                & pd.to_numeric(frame["lead_score_total"], errors="coerce").ge(65).fillna(False)
+            ),
+        },
+        "vacant_land_targeting": {
+            "description": "Vacant parcels with stronger road access and fewer wetland constraints.",
+            "filter_expression": "parcel_vacant_flag=true AND wetland_flag=false AND road_access_tier in direct/near",
+            "mask": (
+                frame["parcel_vacant_flag"].fillna(False)
+                & ~frame["wetland_flag"].fillna(False)
+                & frame["road_access_tier"].astype("string").isin(["direct", "near"])
+                & pd.to_numeric(frame["lead_score_total"], errors="coerce").ge(65).fillna(False)
+            ),
+        },
+        "larger_acreage_land_targeting": {
+            "description": "Vacant larger-acreage parcels for land assembly and development exploration.",
+            "filter_expression": "parcel_vacant_flag=true AND county_hosted_flag=true AND acreage>=5",
+            "mask": (
+                frame["parcel_vacant_flag"].fillna(False)
+                & frame["county_hosted_flag"].fillna(False)
+                & pd.to_numeric(frame["acreage"], errors="coerce").ge(5).fillna(False)
+                & pd.to_numeric(frame["lead_score_total"], errors="coerce").ge(65).fillna(False)
+            ),
+        },
+        "growth_edge_targeting": {
+            "description": "Parcels in moderate-to-high growth areas with usable road access.",
+            "filter_expression": "growth_pressure_bucket in moderate/high AND road_access_tier in direct/near/moderate",
+            "mask": (
+                frame["growth_pressure_bucket"].astype("string").isin(["moderate", "high"])
+                & frame["road_access_tier"].astype("string").isin(["direct", "near", "moderate"])
+                & pd.to_numeric(frame["lead_score_total"], errors="coerce").ge(65).fillna(False)
+            ),
+        },
+    }
+    payload: list[dict[str, str]] = []
+    for view_name, definition in definitions.items():
+        filtered = frame.loc[definition["mask"]]
+        average_score = pd.to_numeric(filtered["lead_score_total"], errors="coerce").mean() if len(filtered) else 0
+        payload.append(
+            {
+                "view_name": view_name,
+                "description": definition["description"],
+                "filter_expression": definition["filter_expression"],
+                "row_count": str(len(filtered)),
+                "average_lead_score": f"{average_score:.1f}",
+            }
+        )
+    return payload
+
+
+def build_default_leads_payload(frame: pd.DataFrame) -> dict[str, object]:
+    summary_fields = [
+        "parcel_row_id",
+        "parcel_id",
+        "county_name",
+        "acreage",
+        "owner_name",
+        "lead_score_total",
+        "lead_score_tier",
+        "parcel_vacant_flag",
+        "road_access_tier",
+        "growth_pressure_bucket",
+        "best_source_type",
+        "source_confidence_tier",
+        "delinquent_amount",
+        "amount_trust_tier",
+        "recommended_sort_reason",
+        "county_hosted_flag",
+        "high_confidence_link_flag",
+        "recommended_view_bucket",
+    ]
+    top = frame.sort_values("lead_score_total", ascending=False, na_position="last").head(250)
+    return {
+        "total_count": int(len(frame)),
+        "limit": 200,
+        "offset": 0,
+        "items": [{key: json_scalar(value) for key, value in record.items()} for record in top.loc[:, summary_fields].to_dict(orient="records")],
+    }
+
+
+def build_default_geometry_payload(frame: pd.DataFrame) -> dict[str, object]:
+    top = frame.sort_values(["county_name", "lead_score_total"], ascending=[True, False], na_position="last").groupby("county_name", dropna=True).head(3)
+    features = []
+    for _, row in top.iterrows():
+        geometry = row.get("geometry")
+        if not isinstance(geometry, dict):
+            continue
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": geometry,
+                "properties": {
+                    "parcel_row_id": row["parcel_row_id"],
+                    "parcel_id": json_scalar(row.get("parcel_id")),
+                    "county_name": json_scalar(row.get("county_name")),
+                    "lead_score_total": json_scalar(row.get("lead_score_total")),
+                    "lead_score_tier": json_scalar(row.get("lead_score_tier")),
+                    "parcel_vacant_flag": json_scalar(row.get("parcel_vacant_flag")),
+                    "wetland_flag": json_scalar(row.get("wetland_flag")),
+                    "flood_risk_score": json_scalar(row.get("flood_risk_score")),
+                    "road_access_tier": json_scalar(row.get("road_access_tier")),
+                    "county_hosted_flag": json_scalar(row.get("county_hosted_flag")),
+                    "best_source_type": json_scalar(row.get("best_source_type")),
+                    "selected": False,
+                },
+            }
+        )
+    lngs = [feature["geometry"]["coordinates"][0] for feature in features]
+    lats = [feature["geometry"]["coordinates"][1] for feature in features]
+    return {
+        "geometry_mode": "viewport_geojson",
+        "render_mode": "points",
+        "geometry_bounds": [round(min(lngs), 6), round(min(lats), 6), round(max(lngs), 6), round(max(lats), 6)] if features else None,
+        "geometry_view_box": None,
+        "requested_bounds": [-91.65, 30.15, -88.0, 35.1],
+        "zoom": 6.1,
+        "feature_count": len(features),
+        "feature_collection": {"type": "FeatureCollection", "features": features},
+        "items": [{"parcel_row_id": row["parcel_row_id"], "path": None, "lead_score_total": json_scalar(row["lead_score_total"])} for _, row in top.iterrows()],
+    }
+
+
 def main() -> None:
+    RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
     frame = build_runtime_frame()
     table = pa.Table.from_pandas(frame, preserve_index=False)
@@ -184,6 +357,10 @@ def main() -> None:
         max_rows_per_group=10000,
         max_rows_per_file=50000,
     )
+    (RUNTIME_ROOT / "summary.json").write_text(json.dumps(build_summary_payload(frame)), encoding="utf-8")
+    (RUNTIME_ROOT / "presets.json").write_text(json.dumps(build_presets_payload(frame)), encoding="utf-8")
+    (RUNTIME_ROOT / "default_leads.json").write_text(json.dumps(build_default_leads_payload(frame)), encoding="utf-8")
+    (RUNTIME_ROOT / "default_geometry.json").write_text(json.dumps(build_default_geometry_payload(frame)), encoding="utf-8")
     print(f"Wrote {len(frame)} runtime rows to {OUTPUT_ROOT}")
 
 
