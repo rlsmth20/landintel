@@ -1,0 +1,54 @@
+{
+  "state_code": "MS",
+  "state_name": "Mississippi",
+  "county_boundary_service_url": "https://opcgis.deq.state.ms.us/opcgis/rest/services/Government/MS_County/MapServer/1",
+  "county_name_field_candidates": ["county_name", "CONAME", "NAME", "COUNTY", "CNTYNAME", "CountyName"],
+  "county_fips_field_candidates": ["county_fips", "FIPSC", "CNTYFIPS", "COUNTYFP", "FIPS", "CountyFIPS"],
+  "arcgis_root_urls": [
+    "https://gis.mississippi.edu/server/rest/services"
+  ],
+  "search_queries": [
+    "Mississippi parcel GIS",
+    "Mississippi tax parcel"
+  ],
+  "search_results_limit": 10,
+  "candidate_layers": [
+    {
+      "source_name": "Mississippi West Parcels",
+      "source_url": "https://gis.mississippi.edu/server/rest/services/Cadastral/MS_West_Parcels/MapServer/0",
+      "source_type": "map_service",
+      "organization": "University of Mississippi / Mississippi GIS",
+      "notes": "Known public statewide parcel layer for western Mississippi counties."
+    },
+    {
+      "source_name": "Mississippi East Parcels",
+      "source_url": "https://gis.mississippi.edu/server/rest/services/MS_East_Parcels/MapServer/0",
+      "source_type": "map_service",
+      "organization": "University of Mississippi / Mississippi GIS",
+      "notes": "Known public statewide parcel layer for eastern Mississippi counties."
+    }
+  ],
+  "normalization_aliases": {
+    "source_parcel_number": ["PARNO", "PARCEL", "PARCELID", "PARCEL_ID", "PARCELNO", "PIN", "APN"],
+    "source_alt_parcel_number": ["ALTPARNO", "ALT_PARCEL", "ALT_ID"],
+    "source_ppin": ["PPIN", "PROPERTYID", "PROP_ID"],
+    "owner_name": ["OWNNAME", "OWNER", "OWNERNAME", "OWNER_NAME"],
+    "mail_address_1": ["MAILADD1", "MAILADDR1", "MAIL_ADDRESS1", "MAILADDRESS1"],
+    "mail_address_2": ["MAILADD2", "MAILADDR2", "MAIL_ADDRESS2", "MAILADDRESS2"],
+    "mail_city_1": ["MCITY1", "MAILCITY", "MAIL_CITY", "CITYMAIL"],
+    "mail_state_1": ["MSTATE1", "MAILSTATE", "MAIL_STATE"],
+    "mail_zip_1": ["MZIP1", "MAILZIP", "MAIL_ZIP", "ZIPMAIL"],
+    "site_address": ["SITEADD", "SITUS", "SITUSADDR", "SITE_ADDRESS", "PROPADDR", "ADDRESS"],
+    "site_city": ["SCITY", "SITECITY", "SITE_CITY", "CITY"],
+    "site_state": ["SSTATE", "SITESTATE", "SITE_STATE", "STATE"],
+    "site_zip": ["SZIP", "SITEZIP", "SITE_ZIP", "ZIP"],
+    "tax_acres": ["TAXACRES", "TAX_ACRES"],
+    "gis_acres": ["GISACRES", "GIS_ACRES", "SHAPE_AREA_ACRES"],
+    "total_acres": ["TOTAL_AC", "TOTALACRES", "ACRES", "AREA_ACRES"],
+    "zoning": ["ZONING", "ZONECODE", "ZONE_CODE"],
+    "tax_status": ["TAXSTATUS", "STATUS"],
+    "tax_year": ["TAXYEAR", "YEAR"],
+    "land_value": ["LANDVAL", "LAND_VALUE"],
+    "total_value": ["TOTVAL", "TOTALVALUE", "TOTAL_VALUE"]
+  }
+}

@@ -1,0 +1,15 @@
+state: MS
+
+# Add county tax sources here as they become available.
+# Example:
+# counties:
+#   adams:
+#     source_type: csv
+#     source_path: data/tax_raw/adams_tax_delinquent.csv
+#     parcel_key_field: parcel_number
+#     tax_year_field: tax_year
+#     amount_field: delinquent_amount
+#     status_field: tax_status
+#     sale_date_field: sale_date
+
+counties: {}

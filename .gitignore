@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Local virtual environments
+.venv/
+backend/.venv/
+
+# Local env files
+.env
+.env.*
+!.env.example
+!backend/.env.example
+!frontend/.env.local.example
+
+# Generated and downloaded data
+data/
+storage/
+frontend/public/data/
+
+# Local scrape/debug artifacts
+tmp_*
+*.cookie
+
+# OS/editor noise
+.DS_Store
+Thumbs.db

@@ -1,0 +1,13 @@
+{
+  "default_heuristic_variants": [
+    "compact_alnum"
+  ],
+  "county_identifier_variants": {
+    "hinds": [],
+    "jackson": []
+  },
+  "notes": {
+    "hinds": "Disabled heuristic parcel-id variants until a safe county adapter is demonstrated. Current SOS IDs do not overlap parcel master compact forms.",
+    "jackson": "Disabled heuristic parcel-id variants until a safe county adapter is demonstrated. Current SOS parcel IDs and PPINs do not align directly with parcel master identifiers."
+  }
+}

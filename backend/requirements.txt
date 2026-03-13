@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+gunicorn
+psycopg2-binary
+sqlalchemy
+geoalchemy2
+pydantic
+pandas
+geopandas
+shapely
+pyogrio
+fiona
+pyproj

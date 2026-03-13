@@ -1,0 +1,23 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: landrisk
+      POSTGRES_PASSWORD: landrisk
+      POSTGRES_DB: landrisk
+    ports:
+      - "5432:5432"
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgresql://landrisk:landrisk@db:5432/landrisk
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
