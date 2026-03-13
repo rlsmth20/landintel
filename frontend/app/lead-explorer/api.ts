@@ -16,12 +16,19 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ??
   (process.env.NODE_ENV === "production" ? DEFAULT_PRODUCTION_API_BASE_URL : "");
 
-async function fetchJson<T>(path: string, searchParams?: URLSearchParams): Promise<T> {
+async function fetchJson<T>(path: string, searchParams?: URLSearchParams, options?: { timeoutMs?: number }): Promise<T> {
   const url = `${API_BASE_URL}${path}${searchParams && searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
   if (process.env.NODE_ENV !== "production") {
     console.debug("[lead-explorer] request", url);
   }
-  const response = await fetch(url, { cache: "no-store" });
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), options?.timeoutMs ?? 10000);
+  let response: Response;
+  try {
+    response = await fetch(url, { cache: "no-store", signal: controller.signal });
+  } finally {
+    window.clearTimeout(timeout);
+  }
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status} ${response.statusText}`);
   }
@@ -198,7 +205,7 @@ export async function fetchGeometryViewport(
   selectedParcelId: string | null,
   limit = 200,
 ): Promise<GeometryResponse> {
-  const requestedLimit = zoom >= 12 ? Math.min(limit, 800) : zoom >= 9 ? Math.min(limit, 600) : Math.min(limit, 200);
+  const requestedLimit = zoom >= 12 ? Math.min(limit, 250) : zoom >= 9 ? Math.min(limit, 150) : Math.min(limit, 80);
 
   async function requestGeometry(nextLimit: number) {
     const searchParams = buildLeadQuery(filters, "lead_score_total", "desc", nextLimit, 0);
@@ -215,7 +222,7 @@ export async function fetchGeometryViewport(
     if (process.env.NODE_ENV !== "production") {
       console.debug("[lead-explorer] geometry viewport request", { bounds, zoom, selectedParcelId, limit: nextLimit });
     }
-    return fetchJson<GeometryResponse>("/api/parcels", searchParams);
+    return fetchJson<GeometryResponse>("/api/parcels", searchParams, { timeoutMs: 6000 });
   }
 
   try {
@@ -291,5 +298,5 @@ export async function fetchParcelGeometryById(parcelRowId: string, zoom = 14): P
   if (process.env.NODE_ENV !== "production") {
     console.debug("[lead-explorer] parcel geometry request", { parcelRowId, zoom });
   }
-  return fetchJson<GeometryResponse>(`/api/parcels/${parcelRowId}/geometry`, searchParams);
+  return fetchJson<GeometryResponse>(`/api/parcels/${parcelRowId}/geometry`, searchParams, { timeoutMs: 6000 });
 }
