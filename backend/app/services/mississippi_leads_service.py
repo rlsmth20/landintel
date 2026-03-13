@@ -15,6 +15,7 @@ from app.settings import (
     MISSISSIPPI_APP_READY_PATH,
     MISSISSIPPI_GEOMETRY_PATH,
     MISSISSIPPI_META_PATH,
+    runtime_file_diagnostics,
 )
 
 
@@ -105,10 +106,18 @@ def _geometry_payload(value: bytes | None) -> dict[str, Any] | None:
     }
 
 
+def _missing_runtime_file_error(label: str, path_key: str) -> FileNotFoundError:
+    diagnostics = runtime_file_diagnostics().get(path_key, {})
+    return FileNotFoundError(
+        f"{label} not found: {diagnostics.get('path')} | cwd={diagnostics.get('cwd')} | "
+        f"candidates={diagnostics.get('candidates')}"
+    )
+
+
 @lru_cache(maxsize=1)
 def load_app_ready_frame() -> pd.DataFrame:
     if not APP_READY_PATH.exists():
-        raise FileNotFoundError(f"Mississippi leads dataset not found: {APP_READY_PATH}")
+        raise _missing_runtime_file_error("Mississippi leads dataset", "app_ready_parquet")
     frame = pd.read_parquet(APP_READY_PATH)
     return frame
 
@@ -116,7 +125,7 @@ def load_app_ready_frame() -> pd.DataFrame:
 @lru_cache(maxsize=1)
 def load_meta() -> dict[str, Any]:
     if not META_PATH.exists():
-        raise FileNotFoundError(f"Mississippi explorer meta file not found: {META_PATH}")
+        raise _missing_runtime_file_error("Mississippi explorer meta file", "meta_json")
     with META_PATH.open("r", encoding="utf-8") as handle:
         return json.load(handle)
 
@@ -124,7 +133,7 @@ def load_meta() -> dict[str, Any]:
 @lru_cache(maxsize=1)
 def load_geometry_lookup() -> dict[str, str]:
     if not GEOMETRY_PATH.exists():
-        raise FileNotFoundError(f"Mississippi geometry file not found: {GEOMETRY_PATH}")
+        raise _missing_runtime_file_error("Mississippi geometry file", "geometry_json")
     with GEOMETRY_PATH.open("r", encoding="utf-8") as handle:
         rows = json.load(handle)
     return {str(row["parcel_row_id"]): row.get("path") or "" for row in rows}

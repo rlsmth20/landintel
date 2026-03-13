@@ -25,11 +25,13 @@ app.add_middleware(GZipMiddleware, minimum_size=GZIP_MINIMUM_SIZE)
 def log_runtime_file_diagnostics():
     for name, info in runtime_file_diagnostics().items():
         logger.info(
-            "Mississippi runtime file %s resolved_path=%s exists=%s size_bytes=%s",
+            "Mississippi runtime file %s cwd=%s resolved_path=%s exists=%s size_bytes=%s candidates=%s",
             name,
+            info["cwd"],
             info["path"],
             info["exists"],
             info["size_bytes"],
+            info["candidates"],
         )
 
 @app.get("/health")

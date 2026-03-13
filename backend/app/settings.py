@@ -24,24 +24,28 @@ def _repo_relative_candidate(raw: str) -> Path | None:
     return _absolute_path(BASE_DIR / Path(stripped))
 
 
-def _resolve_runtime_path(env_name: str, relative_path: str | Path, *, root: Path | None = None) -> Path:
+def runtime_path_candidates(env_name: str, relative_path: str | Path, *, root: Path | None = None) -> list[Path]:
     relative = Path(relative_path)
     search_root = _absolute_path(root or BASE_DIR)
     raw = os.getenv(env_name)
 
-    candidates: list[Path] = []
+    preferred_candidates: list[Path] = [
+        _absolute_path(search_root / relative),
+        _absolute_path(BASE_DIR / relative),
+    ]
+    env_candidates: list[Path] = []
+
     if raw:
         explicit = Path(raw).expanduser()
         if explicit.is_absolute():
-            candidates.append(_absolute_path(explicit))
             repo_relative = _repo_relative_candidate(raw)
             if repo_relative is not None:
-                candidates.append(repo_relative)
+                env_candidates.append(repo_relative)
+            env_candidates.append(_absolute_path(explicit))
         else:
-            candidates.append(_absolute_path(search_root / explicit))
+            env_candidates.append(_absolute_path(search_root / explicit))
 
-    candidates.append(_absolute_path(search_root / relative))
-    candidates.append(_absolute_path(BASE_DIR / relative))
+    candidates = preferred_candidates + env_candidates
 
     unique_candidates: list[Path] = []
     seen: set[str] = set()
@@ -51,11 +55,15 @@ def _resolve_runtime_path(env_name: str, relative_path: str | Path, *, root: Pat
             continue
         seen.add(key)
         unique_candidates.append(candidate)
+    return unique_candidates
 
-    for candidate in unique_candidates:
+
+def _resolve_runtime_path(env_name: str, relative_path: str | Path, *, root: Path | None = None) -> Path:
+    candidates = runtime_path_candidates(env_name, relative_path, root=root)
+    for candidate in candidates:
         if candidate.exists():
             return candidate
-    return unique_candidates[0]
+    return candidates[0]
 
 
 APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
@@ -99,18 +107,37 @@ GEOMETRY_MAX_LIMIT = int(os.getenv("GEOMETRY_MAX_LIMIT", "500"))
 GZIP_MINIMUM_SIZE = int(os.getenv("GZIP_MINIMUM_SIZE", "1024"))
 
 
-def runtime_file_diagnostics() -> dict[str, dict[str, int | bool | str | None]]:
-    paths = {
-        "app_ready_parquet": MISSISSIPPI_APP_READY_PATH,
-        "static_feed_json": MISSISSIPPI_STATIC_FEED_PATH,
-        "meta_json": MISSISSIPPI_META_PATH,
-        "geometry_json": MISSISSIPPI_GEOMETRY_PATH,
+def runtime_file_diagnostics() -> dict[str, dict[str, int | bool | str | list[str] | None]]:
+    specs = {
+        "app_ready_parquet": (
+            MISSISSIPPI_APP_READY_PATH,
+            "MISSISSIPPI_APP_READY_PATH",
+            "data/tax_published/ms/app_ready_mississippi_leads.parquet",
+        ),
+        "static_feed_json": (
+            MISSISSIPPI_STATIC_FEED_PATH,
+            "MISSISSIPPI_STATIC_FEED_PATH",
+            "frontend/public/data/mississippi_lead_explorer.json",
+        ),
+        "meta_json": (
+            MISSISSIPPI_META_PATH,
+            "MISSISSIPPI_META_PATH",
+            "frontend/public/data/mississippi_lead_explorer_meta.json",
+        ),
+        "geometry_json": (
+            MISSISSIPPI_GEOMETRY_PATH,
+            "MISSISSIPPI_GEOMETRY_PATH",
+            "frontend/public/data/mississippi_lead_explorer_geometries.json",
+        ),
     }
-    diagnostics: dict[str, dict[str, int | bool | str | None]] = {}
-    for name, path in paths.items():
+    diagnostics: dict[str, dict[str, int | bool | str | list[str] | None]] = {}
+    cwd = str(Path.cwd())
+    for name, (path, env_name, relative_path) in specs.items():
         diagnostics[name] = {
+            "cwd": cwd,
             "path": str(path),
             "exists": path.exists(),
             "size_bytes": path.stat().st_size if path.exists() else None,
+            "candidates": [str(candidate) for candidate in runtime_path_candidates(env_name, relative_path, root=MISSISSIPPI_EXPLORER_DATA_ROOT)],
         }
     return diagnostics
