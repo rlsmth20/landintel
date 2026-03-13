@@ -18,14 +18,16 @@ backend/.venv/
 !frontend/.env.local.example
 
 # Generated and downloaded data
-data/
-storage/
-frontend/public/data/
-!data/
+data/*
 !data/tax_published/
+data/tax_published/*
 !data/tax_published/ms/
+data/tax_published/ms/*
 !data/tax_published/ms/app_ready_mississippi_leads.parquet
-!frontend/public/data/
+
+storage/
+
+frontend/public/data/*
 !frontend/public/data/mississippi_lead_explorer_meta.json
 !frontend/public/data/mississippi_lead_explorer_geometries.json
 
