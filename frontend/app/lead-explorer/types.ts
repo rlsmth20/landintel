@@ -134,3 +134,19 @@ export type Filters = {
 };
 
 export type SortField = "lead_score_total" | "acreage" | "delinquent_amount" | "road_distance_ft";
+
+export type MapOverlayId =
+  | "parcels"
+  | "fema_flood"
+  | "wetlands"
+  | "utilities"
+  | "slope"
+  | "road_access"
+  | "zoning";
+
+export type MapOverlayDefinition = {
+  id: MapOverlayId;
+  label: string;
+  description: string;
+  enabled: boolean;
+};

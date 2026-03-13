@@ -1,11 +1,56 @@
-import type { Filters } from "./types";
+import type { Filters, MapOverlayDefinition } from "./types";
 
 export const PRESET_LABELS: Record<string, string> = {
-  safest_early_investor_use: "Safest Early Use",
-  vacant_land_targeting: "Vacant Land",
-  larger_acreage_land_targeting: "Larger Acreage",
+  safest_early_investor_use: "Safest Outreach",
+  vacant_land_targeting: "Vacant Buildable",
+  larger_acreage_land_targeting: "Larger Land Target",
   growth_edge_targeting: "Growth Edge",
 };
+
+export const MAP_OVERLAYS: MapOverlayDefinition[] = [
+  {
+    id: "parcels",
+    label: "Parcels",
+    description: "Core parcel geometry layer for the current result set.",
+    enabled: true,
+  },
+  {
+    id: "fema_flood",
+    label: "FEMA Flood",
+    description: "Prepared for parcel flood overlay and future flood coverage metrics.",
+    enabled: false,
+  },
+  {
+    id: "wetlands",
+    label: "Wetlands",
+    description: "Parcel wetland signal today; swap to dedicated overlay geometry later.",
+    enabled: true,
+  },
+  {
+    id: "utilities",
+    label: "Utilities",
+    description: "Utility context architecture for future proximity and service overlays.",
+    enabled: false,
+  },
+  {
+    id: "slope",
+    label: "Slope",
+    description: "Prepared for future terrain and buildability overlays.",
+    enabled: false,
+  },
+  {
+    id: "road_access",
+    label: "Road Access",
+    description: "Highlights parcel access quality using current road-distance intelligence.",
+    enabled: true,
+  },
+  {
+    id: "zoning",
+    label: "Zoning",
+    description: "Reserved for future zoning and entitlement overlays.",
+    enabled: false,
+  },
+];
 
 export const INITIAL_FILTERS: Filters = {
   countyName: "all",

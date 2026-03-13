@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Mississippi Lead Explorer",
-  description: "Investor-facing Mississippi delinquent land explorer with vacancy, growth pressure, and source-confidence filters.",
+  title: "LandIntel",
+  description: "LandIntel Parcel Intelligence Platform for parcel characteristics, owner motivation, constraints, risk, and acquisition attractiveness.",
 };
 
 export default function RootLayout({

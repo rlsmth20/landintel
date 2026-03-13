@@ -5,9 +5,10 @@ import { useEffect, useMemo, useState } from "react";
 import { fetchGeometry, fetchLeadDetail, fetchLeads, fetchPresets, fetchSummary } from "./lead-explorer/api";
 import { LeadDetail } from "./lead-explorer/LeadDetail";
 import { LeadMap } from "./lead-explorer/LeadMap";
-import type { ExplorerMeta, Filters, LeadRecord, PresetItem, SortField } from "./lead-explorer/types";
+import type { ExplorerMeta, Filters, LeadRecord, MapOverlayId, PresetItem, SortField } from "./lead-explorer/types";
 import {
   INITIAL_FILTERS,
+  MAP_OVERLAYS,
   PRESET_LABELS,
   applyPreset,
   badgeTone,
@@ -56,7 +57,12 @@ export default function LeadExplorerClient() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedLead, setSelectedLead] = useState<LeadRecord | null>(null);
   const [geometryMap, setGeometryMap] = useState<Record<string, string>>({});
-  const [geometryViewBox, setGeometryViewBox] = useState<number[] | undefined>(undefined);
+  const [zoomNonce, setZoomNonce] = useState(0);
+  const [activeOverlays, setActiveOverlays] = useState<MapOverlayId[]>(["parcels", "road_access"]);
+  const [zoomState, setZoomState] = useState<{
+    featureCount: number;
+    bounds: [number, number, number, number] | null;
+  }>({ featureCount: 0, bounds: null });
 
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [summaryError, setSummaryError] = useState<string | null>(null);
@@ -84,7 +90,6 @@ export default function LeadExplorerClient() {
         const [summaryResponse, presetsResponse] = await Promise.all([fetchSummary(), fetchPresets()]);
         if (cancelled) return;
         setSummary(summaryResponse);
-        setGeometryViewBox(summaryResponse.geometry_view_box);
         setPresets(presetsResponse);
       } catch (error) {
         if (cancelled) return;
@@ -119,6 +124,7 @@ export default function LeadExplorerClient() {
           setSelectedId(null);
           setSelectedLead(null);
           setGeometryMap({});
+          setZoomState({ featureCount: 0, bounds: null });
           return;
         }
         setSelectedId((current) => {
@@ -136,7 +142,7 @@ export default function LeadExplorerClient() {
     return () => {
       cancelled = true;
     };
-  }, [debouncedFilters, sortDirection, sortField, offset, limit]);
+  }, [debouncedFilters, limit, offset, sortDirection, sortField]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -172,6 +178,7 @@ export default function LeadExplorerClient() {
       setGeometryMap({});
       return;
     }
+
     let cancelled = false;
     async function loadGeometry() {
       setGeometryLoading(true);
@@ -183,7 +190,6 @@ export default function LeadExplorerClient() {
           response.items.filter((item) => item.path).map((item) => [item.parcel_row_id, item.path as string]),
         );
         setGeometryMap(nextGeometryMap);
-        if (response.geometry_view_box?.length === 4) setGeometryViewBox(response.geometry_view_box);
       } catch (error) {
         if (cancelled) return;
         setGeometryError(error instanceof Error ? error.message : "Failed to load parcel geometry");
@@ -214,6 +220,14 @@ export default function LeadExplorerClient() {
     setActivePreset(name);
     setFilters(applyPreset(name));
     setOffset(0);
+    setZoomNonce((current) => current + 1);
+  }
+
+  function toggleOverlay(overlayId: MapOverlayId, enabled: boolean) {
+    if (!enabled) return;
+    setActiveOverlays((current) =>
+      current.includes(overlayId) ? current.filter((value) => value !== overlayId) : [...current, overlayId],
+    );
   }
 
   function handleSort(nextField: SortField) {
@@ -234,13 +248,15 @@ export default function LeadExplorerClient() {
     <div className="explorer-shell">
       <aside className="filters-panel">
         <div className="panel-header">
-          <p className="eyebrow">Mississippi MVP</p>
-          <h1>Lead Explorer</h1>
-          <p className="muted">API-driven parcel leads with source confidence, vacancy, access, and growth filters.</p>
+          <p className="eyebrow">LandIntel</p>
+          <h1>Parcel Intelligence Platform</h1>
+          <p className="muted">
+            Evaluate parcel characteristics, owner motivation, development potential, physical constraints, risk, and acquisition attractiveness.
+          </p>
         </div>
 
         <section className="panel-section">
-          <h2>Presets</h2>
+          <h2>Default Views</h2>
           <div className="preset-grid">
             {presets.map((preset) => (
               <button
@@ -261,7 +277,11 @@ export default function LeadExplorerClient() {
         </section>
 
         <section className="panel-section">
-          <h2>Core Filters</h2>
+          <h2>Dataset</h2>
+          <div className="inline-badges">
+            <LeadBadge label="Dataset: Mississippi" tone="neutral" />
+            <LeadBadge label="Platform-ready" tone="good" />
+          </div>
           <label>
             County name
             <input
@@ -280,6 +300,27 @@ export default function LeadExplorerClient() {
             </datalist>
           </label>
 
+          <label>
+            Recommended view bucket
+            <select
+              value={filters.recommendedViewBucket}
+              onChange={(event) => {
+                setActivePreset(null);
+                updateFilter("recommendedViewBucket", event.target.value);
+              }}
+            >
+              <option value="all">All</option>
+              {summary?.sections?.recommended_view_bucket?.map((item) => (
+                <option key={item.key} value={item.key}>
+                  {item.key}
+                </option>
+              ))}
+            </select>
+          </label>
+        </section>
+
+        <section className="panel-section">
+          <h2>Acquisition Score</h2>
           <label>
             Minimum lead score
             <input
@@ -314,7 +355,10 @@ export default function LeadExplorerClient() {
               ))}
             </div>
           </fieldset>
+        </section>
 
+        <section className="panel-section">
+          <h2>Parcel Basics</h2>
           <div className="field-row">
             <label>
               Acreage min
@@ -341,41 +385,11 @@ export default function LeadExplorerClient() {
               />
             </label>
           </div>
+        </section>
 
+        <section className="panel-section">
+          <h2>Ownership</h2>
           <div className="checkbox-grid">
-            <label className="checkbox-item">
-              <input
-                type="checkbox"
-                checked={filters.parcelVacantOnly}
-                onChange={(event) => {
-                  setActivePreset(null);
-                  updateFilter("parcelVacantOnly", event.target.checked);
-                }}
-              />
-              Vacant only
-            </label>
-            <label className="checkbox-item">
-              <input
-                type="checkbox"
-                checked={filters.countyHostedOnly}
-                onChange={(event) => {
-                  setActivePreset(null);
-                  updateFilter("countyHostedOnly", event.target.checked);
-                }}
-              />
-              County-hosted only
-            </label>
-            <label className="checkbox-item">
-              <input
-                type="checkbox"
-                checked={filters.highConfidenceOnly}
-                onChange={(event) => {
-                  setActivePreset(null);
-                  updateFilter("highConfidenceOnly", event.target.checked);
-                }}
-              />
-              High-confidence only
-            </label>
             <label className="checkbox-item">
               <input
                 type="checkbox"
@@ -410,7 +424,49 @@ export default function LeadExplorerClient() {
               Out-of-state only
             </label>
           </div>
+        </section>
 
+        <section className="panel-section">
+          <h2>Motivation Signals</h2>
+          <div className="checkbox-grid">
+            <label className="checkbox-item">
+              <input
+                type="checkbox"
+                checked={filters.parcelVacantOnly}
+                onChange={(event) => {
+                  setActivePreset(null);
+                  updateFilter("parcelVacantOnly", event.target.checked);
+                }}
+              />
+              Vacant parcels only
+            </label>
+            <label className="checkbox-item">
+              <input
+                type="checkbox"
+                checked={filters.countyHostedOnly}
+                onChange={(event) => {
+                  setActivePreset(null);
+                  updateFilter("countyHostedOnly", event.target.checked);
+                }}
+              />
+              County-hosted motivation source
+            </label>
+            <label className="checkbox-item">
+              <input
+                type="checkbox"
+                checked={filters.highConfidenceOnly}
+                onChange={(event) => {
+                  setActivePreset(null);
+                  updateFilter("highConfidenceOnly", event.target.checked);
+                }}
+              />
+              High-confidence parcel linkage
+            </label>
+          </div>
+        </section>
+
+        <section className="panel-section">
+          <h2>Flood / Wetlands</h2>
           <label>
             Wetland filter
             <select
@@ -425,28 +481,10 @@ export default function LeadExplorerClient() {
               <option value="only">Wetlands only</option>
             </select>
           </label>
-
-          <label>
-            Recommended view bucket
-            <select
-              value={filters.recommendedViewBucket}
-              onChange={(event) => {
-                setActivePreset(null);
-                updateFilter("recommendedViewBucket", event.target.value);
-              }}
-            >
-              <option value="all">All</option>
-              {summary?.sections?.recommended_view_bucket?.map((item) => (
-                <option key={item.key} value={item.key}>
-                  {item.key}
-                </option>
-              ))}
-            </select>
-          </label>
         </section>
 
         <section className="panel-section">
-          <h2>Access / Growth</h2>
+          <h2>Physical Constraints</h2>
           <label>
             Road distance max (ft)
             <input
@@ -478,7 +516,10 @@ export default function LeadExplorerClient() {
               ))}
             </div>
           </fieldset>
+        </section>
 
+        <section className="panel-section">
+          <h2>Market Context</h2>
           <fieldset>
             <legend>Growth pressure</legend>
             <div className="chip-grid">
@@ -497,7 +538,10 @@ export default function LeadExplorerClient() {
               ))}
             </div>
           </fieldset>
+        </section>
 
+        <section className="panel-section">
+          <h2>Utilities</h2>
           <div className="field-note">
             Electric provider is available in the parcel detail panel as partial context only. No numeric power-distance
             filter exists in the current API.
@@ -509,11 +553,7 @@ export default function LeadExplorerClient() {
           <fieldset>
             <legend>Amount trust tier</legend>
             <div className="chip-grid">
-              {[
-                "trusted",
-                "use_with_caution",
-                "not_trusted_for_prominent_display",
-              ].map((tier) => (
+              {["trusted", "use_with_caution", "not_trusted_for_prominent_display"].map((tier) => (
                 <button
                   key={tier}
                   type="button"
@@ -531,8 +571,26 @@ export default function LeadExplorerClient() {
         </section>
 
         <section className="panel-section">
+          <h2>Map Layers</h2>
+          <div className="overlay-list">
+            {MAP_OVERLAYS.map((overlay) => (
+              <button
+                key={overlay.id}
+                type="button"
+                className={`overlay-toggle ${activeOverlays.includes(overlay.id) ? "is-selected" : ""} ${!overlay.enabled ? "is-disabled" : ""}`}
+                onClick={() => toggleOverlay(overlay.id, overlay.enabled)}
+                disabled={!overlay.enabled}
+              >
+                <strong>{overlay.label}</strong>
+                <span>{overlay.description}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel-section">
           <h2>Summary</h2>
-          {summaryLoading ? <p className="muted">Loading summary…</p> : null}
+          {summaryLoading ? <p className="muted">Loading summary...</p> : null}
           {summaryError ? <p className="error-text">{summaryError}</p> : null}
           <div className="stats-grid">
             <div>
@@ -565,15 +623,16 @@ export default function LeadExplorerClient() {
 
       <main className="explorer-main">
         <section className="hero-strip">
-          <div>
-            <p className="eyebrow">API-backed results</p>
-            <h2>Mississippi delinquent land explorer</h2>
+          <div className="hero-copy">
+            <p className="eyebrow">LandIntel</p>
+            <h2>Parcel Intelligence Platform</h2>
             <p className="muted">
-              Filtered results load from the backend API, with polygon geometry requested only for the visible lead subset.
+              LandIntel helps evaluate parcel characteristics, ownership, motivation signals, physical constraints, utilities, flood and wetland context, market pressure, risk, and acquisition score.
             </p>
           </div>
           <div className="hero-badges">
-            <LeadBadge label={`${totalCount.toLocaleString()} matches`} tone="good" />
+            <LeadBadge label={`Dataset: Mississippi`} tone="neutral" />
+            <LeadBadge label={`${totalCount.toLocaleString()} parcels`} tone="good" />
             <LeadBadge label={`${visibleLeads.length} loaded`} tone="neutral" />
             <LeadBadge label={geometryLoading ? "Geometry loading" : "Geometry ready"} tone={geometryLoading ? "warn" : "good"} />
           </div>
@@ -582,28 +641,34 @@ export default function LeadExplorerClient() {
         <div className="content-grid">
           <section className="map-card">
             <div className="card-header">
-              <div>
+              <div className="card-header-copy">
                 <h3>Map</h3>
-                <p>Polygons shown for the current loaded subset plus the selected parcel.</p>
+                <p>Map bounds auto-fit to the current parcel set. Layer controls are structured for future FEMA flood, wetlands, utilities, slope, road access, and zoning overlays.</p>
               </div>
-              {geometryError ? <p className="error-text">{geometryError}</p> : null}
+              <div className="card-header-actions">
+                <button type="button" className="chip" onClick={() => setZoomNonce((current) => current + 1)}>
+                  Zoom to results
+                </button>
+                {zoomState.featureCount > 0 ? <LeadBadge label={`${zoomState.featureCount} shapes`} tone="neutral" /> : null}
+              </div>
             </div>
+            {geometryError ? <p className="error-text">{geometryError}</p> : null}
             <LeadMap
               leads={visibleLeads}
               geometryMap={geometryMap}
-              geometryViewBox={geometryViewBox}
               selectedId={selectedId}
               onSelect={setSelectedId}
+              zoomNonce={zoomNonce}
+              activeOverlays={activeOverlays}
+              onZoomStateChange={setZoomState}
             />
           </section>
 
           <section className="list-card">
             <div className="card-header">
-              <div>
+              <div className="card-header-copy">
                 <h3>Results</h3>
-                <p>
-                  Page {currentPage} of {pageCount}. Server-side sort, filter, and pagination.
-                </p>
+                <p>Page {currentPage} of {pageCount}. Server-side sort, filter, and pagination.</p>
               </div>
               <div className="inline-badges">
                 <button
@@ -624,7 +689,7 @@ export default function LeadExplorerClient() {
                 </button>
               </div>
             </div>
-            {leadsLoading ? <p className="muted">Loading leads…</p> : null}
+            {leadsLoading ? <p className="muted">Loading leads...</p> : null}
             {leadsError ? <p className="error-text">{leadsError}</p> : null}
             <div className="table-wrap">
               <table>
@@ -681,10 +746,7 @@ export default function LeadExplorerClient() {
                       <td>{lead.road_access_tier ?? "-"}</td>
                       <td>{lead.growth_pressure_bucket ?? "-"}</td>
                       <td>
-                        <LeadBadge
-                          label={lead.county_hosted_flag ? "County" : "SOS"}
-                          tone={lead.county_hosted_flag ? "good" : "warn"}
-                        />
+                        <LeadBadge label={lead.county_hosted_flag ? "County" : "SOS"} tone={lead.county_hosted_flag ? "good" : "warn"} />
                       </td>
                       <td>
                         <LeadBadge label={lead.source_confidence_tier ?? "-"} tone={badgeTone(lead.source_confidence_tier)} />
@@ -709,7 +771,7 @@ export default function LeadExplorerClient() {
           <h1>Selection</h1>
           <p className="muted">All detail fields are loaded on demand from the backend detail endpoint.</p>
         </div>
-        {detailLoading ? <p className="muted">Loading parcel detail…</p> : null}
+        {detailLoading ? <p className="muted">Loading parcel detail...</p> : null}
         {detailError ? <p className="error-text">{detailError}</p> : null}
         {!detailLoading && !selectedLead ? <p className="empty-detail">Select a parcel to inspect the full lead payload.</p> : null}
         {selectedLead ? <LeadDetail lead={selectedLead} /> : null}
