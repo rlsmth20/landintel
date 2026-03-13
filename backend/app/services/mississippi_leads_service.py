@@ -36,10 +36,13 @@ def _discover_project_root() -> Path:
 
 
 PROJECT_ROOT = _discover_project_root()
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+EMBEDDED_RUNTIME_DIR = BACKEND_DIR / "runtime" / "mississippi"
 PARCEL_MASTER_PATH = PROJECT_ROOT / "data" / "parcels" / "mississippi_parcels_master.parquet"
 OWNER_LEADS_PATH = PROJECT_ROOT / "data" / "parcels" / "mississippi_parcels_owner_leads.parquet"
 BUILDING_METRICS_PATH = PROJECT_ROOT / "data" / "buildings_processed" / "parcel_building_metrics.parquet"
 LEAD_SIGNALS_PATH = PROJECT_ROOT / "data" / "tax_published" / "ms" / "app_ready_mississippi_leads.parquet"
+EMBEDDED_LEAD_SIGNALS_PATH = EMBEDDED_RUNTIME_DIR / "app_ready_mississippi_leads.parquet"
 
 SUMMARY_FIELDS = [
     "parcel_row_id",
@@ -221,14 +224,16 @@ def _centroids_from_wkb(series: pd.Series) -> tuple[pd.Series, pd.Series]:
 
 @lru_cache(maxsize=1)
 def load_base_frame() -> pd.DataFrame:
-    if not LEAD_SIGNALS_PATH.exists() and not MISSISSIPPI_STATIC_FEED_PATH.exists():
+    parquet_path = LEAD_SIGNALS_PATH if LEAD_SIGNALS_PATH.exists() else EMBEDDED_LEAD_SIGNALS_PATH
+
+    if not parquet_path.exists() and not MISSISSIPPI_STATIC_FEED_PATH.exists():
         raise FileNotFoundError(
-            f"Lead signals dataset not found: {LEAD_SIGNALS_PATH}; static feed not found: {MISSISSIPPI_STATIC_FEED_PATH}"
+            f"Lead signals dataset not found: {parquet_path}; static feed not found: {MISSISSIPPI_STATIC_FEED_PATH}"
         )
 
     if not _full_runtime_available():
         try:
-            frame = pd.read_parquet(LEAD_SIGNALS_PATH, engine="pyarrow").copy()
+            frame = pd.read_parquet(parquet_path, engine="pyarrow").copy()
         except Exception:
             frame = _load_static_feed_frame()
         frame["acreage"] = _to_float_series(frame, "acreage")
@@ -660,6 +665,13 @@ def runtime_file_diagnostics() -> dict[str, dict[str, int | bool | str | None]]:
             "exists": path.exists(),
             "size_bytes": path.stat().st_size if path.exists() else None,
         }
+    diagnostics["embedded_lead_signals"] = {
+        "cwd": str(Path.cwd()),
+        "project_root": str(PROJECT_ROOT),
+        "path": str(EMBEDDED_LEAD_SIGNALS_PATH.resolve(strict=False)),
+        "exists": EMBEDDED_LEAD_SIGNALS_PATH.exists(),
+        "size_bytes": EMBEDDED_LEAD_SIGNALS_PATH.stat().st_size if EMBEDDED_LEAD_SIGNALS_PATH.exists() else None,
+    }
     diagnostics["static_feed"] = {
         "cwd": str(Path.cwd()),
         "project_root": str(PROJECT_ROOT),
@@ -946,7 +958,7 @@ def get_summary() -> dict[str, Any]:
     source_label = (
         "mississippi_parcels_master + owner leads + building metrics + motivation signals"
         if _full_runtime_available()
-        else ("mississippi lead dataset" if LEAD_SIGNALS_PATH.exists() else "mississippi explorer static feed")
+        else ("mississippi lead dataset" if LEAD_SIGNALS_PATH.exists() or EMBEDDED_LEAD_SIGNALS_PATH.exists() else "mississippi explorer static feed")
     )
     return {
         "row_count": int(len(frame)),
