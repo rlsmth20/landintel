@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { fetchLeadDetail, fetchLeads, fetchParcelGeometryById, fetchPresets, fetchStaticLeadDetail, fetchSummary } from "./lead-explorer/api";
 import { LeadDetail } from "./lead-explorer/LeadDetail";
@@ -270,13 +270,13 @@ export default function LeadExplorerClient() {
     setFitNonce((current) => current + 1);
   }
 
-  function handleSelectParcel(parcelRowId: string) {
+  const handleSelectParcel = useCallback((parcelRowId: string) => {
     if (process.env.NODE_ENV !== "production") {
       console.debug("[lead-explorer] row-or-map selection", { parcelRowId });
     }
     setSelectedId(parcelRowId);
     setFitNonce((current) => current + 1);
-  }
+  }, []);
 
   function toggleOverlay(overlayId: MapOverlayId, enabled: boolean) {
     if (!enabled) return;
