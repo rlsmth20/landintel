@@ -9,3 +9,5 @@ shapely
 pyarrow
 mapbox-vector-tile
 mercantile
+requests
+pillow

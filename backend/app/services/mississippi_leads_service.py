@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import time
+import io
 from collections import Counter
 from functools import lru_cache
 from pathlib import Path
@@ -13,8 +14,10 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.dataset as ds
+import requests
 import mercantile
 import mapbox_vector_tile
+from PIL import Image
 from shapely import wkb
 from shapely.geometry import mapping
 
@@ -50,6 +53,7 @@ EMBEDDED_SUMMARY_PATH = EMBEDDED_RUNTIME_DIR / "summary.json"
 EMBEDDED_PRESETS_PATH = EMBEDDED_RUNTIME_DIR / "presets.json"
 EMBEDDED_DEFAULT_LEADS_PATH = EMBEDDED_RUNTIME_DIR / "default_leads.json"
 EMBEDDED_DEFAULT_GEOMETRY_PATH = EMBEDDED_RUNTIME_DIR / "default_geometry.json"
+AI_MODEL_PARAMS_PATH = EMBEDDED_RUNTIME_DIR / "ai_building_presence_model_ms.json"
 PARCEL_MASTER_PATH = PROJECT_ROOT / "data" / "parcels" / "mississippi_parcels_master.parquet"
 OWNER_LEADS_PATH = PROJECT_ROOT / "data" / "parcels" / "mississippi_parcels_owner_leads.parquet"
 BUILDING_METRICS_PATH = PROJECT_ROOT / "data" / "buildings_processed" / "parcel_building_metrics.parquet"
@@ -126,6 +130,7 @@ PARCEL_TILE_LAYER = "parcels"
 PARCEL_TILE_MIN_ZOOM = 14
 MISSISSIPPI_TILE_BOUNDS = (-91.65, 30.15, -88.0, 35.1)
 tile_logger = logging.getLogger("parcel-tiles")
+DEFAULT_TILE_URL_TEMPLATE = "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
 
 
 def _normalize_string(series: pd.Series | None, index: pd.Index | None = None) -> pd.Series:
@@ -196,9 +201,7 @@ def _ensure_intelligence_fields(frame: pd.DataFrame) -> pd.DataFrame:
         ai_building_present = pd.Series(pd.NA, index=frame.index, dtype="boolean")
     frame["county_vacant_flag"] = county_vacant
     frame["ai_building_present_flag"] = ai_building_present
-    frame["vacancy_confidence_score"] = pd.to_numeric(frame.get("vacancy_confidence_score"), errors="coerce").fillna(
-        _vacancy_confidence_series(frame)
-    )
+    frame["vacancy_confidence_score"] = _to_float_series(frame, "vacancy_confidence_score").fillna(_vacancy_confidence_series(frame))
     return frame
 
 
@@ -222,6 +225,95 @@ def _merge_ai_predictions(frame: pd.DataFrame) -> pd.DataFrame:
     ai_predictions = pd.read_parquet(AI_BUILDING_PREDICTIONS_PATH, columns=available_columns, engine="pyarrow")
     ai_predictions["parcel_row_id"] = _normalize_string(ai_predictions.get("parcel_row_id"), index=ai_predictions.index)
     return frame.merge(ai_predictions, on="parcel_row_id", how="left")
+
+
+@lru_cache(maxsize=1)
+def _ai_model_params() -> dict[str, Any] | None:
+    if not AI_MODEL_PARAMS_PATH.exists():
+        return None
+    with AI_MODEL_PARAMS_PATH.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _centroid_tile(longitude: float, latitude: float, zoom: int) -> tuple[int, int]:
+    lat_rad = np.radians(latitude)
+    n = 2**zoom
+    x = int((longitude + 180.0) / 360.0 * n)
+    y = int((1.0 - np.arcsinh(np.tan(lat_rad)) / np.pi) / 2.0 * n)
+    return x, y
+
+
+def _ai_extract_image_features(image_bytes: bytes) -> dict[str, float]:
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB").resize((128, 128))
+    array = np.asarray(image, dtype=np.float32) / 255.0
+    gray = array.mean(axis=2)
+    flattened = array.reshape(-1, 3)
+    features: dict[str, float] = {}
+
+    channel_means = flattened.mean(axis=0)
+    channel_stds = flattened.std(axis=0)
+    for index, channel in enumerate(("r", "g", "b")):
+        features[f"{channel}_mean"] = float(channel_means[index])
+        features[f"{channel}_std"] = float(channel_stds[index])
+
+    brightness_hist, _ = np.histogram(gray, bins=12, range=(0.0, 1.0), density=True)
+    for index, value in enumerate(brightness_hist):
+        features[f"brightness_hist_{index}"] = float(value)
+
+    grad_x = np.abs(np.diff(gray, axis=1)).mean()
+    grad_y = np.abs(np.diff(gray, axis=0)).mean()
+    features["edge_density_x"] = float(grad_x)
+    features["edge_density_y"] = float(grad_y)
+    features["edge_density_total"] = float(grad_x + grad_y)
+    features["gray_variance"] = float(gray.var())
+    features["green_excess"] = float(channel_means[1] - ((channel_means[0] + channel_means[2]) / 2.0))
+    features["roof_tone_pct"] = float(
+        np.mean((array[..., 0] > 0.35) & (array[..., 0] < 0.85) & (array[..., 1] > 0.35) & (array[..., 1] < 0.85))
+    )
+    features["dark_shadow_pct"] = float(np.mean(gray < 0.18))
+    return features
+
+
+def _predict_ai_building_presence(
+    longitude: float,
+    latitude: float,
+    parcel_vacant_flag: bool,
+    building_count: float | None = None,
+    building_area_total: float | None = None,
+) -> dict[str, Any] | None:
+    params = _ai_model_params()
+    if params is None:
+        return None
+    zoom = 19
+    tile_x, tile_y = _centroid_tile(longitude, latitude, zoom)
+    url = DEFAULT_TILE_URL_TEMPLATE.format(z=zoom, x=tile_x, y=tile_y)
+    response = requests.get(url, timeout=20)
+    response.raise_for_status()
+    features = _ai_extract_image_features(response.content)
+    feature_columns = params["feature_columns"]
+    mean = np.asarray(params["scaler_mean"], dtype=np.float64)
+    scale = np.asarray(params["scaler_scale"], dtype=np.float64)
+    coef = np.asarray(params["coef"], dtype=np.float64)
+    intercept = float(params["intercept"])
+    values = np.asarray([features[column] for column in feature_columns], dtype=np.float64)
+    scaled = (values - mean) / scale
+    logit = float(np.dot(scaled, coef) + intercept)
+    probability = 1.0 / (1.0 + np.exp(-logit))
+    building_count_value = 0.0 if building_count is None or not np.isfinite(building_count) else float(building_count)
+    building_area_value = 0.0 if building_area_total is None or not np.isfinite(building_area_total) else float(building_area_total)
+    if building_count_value >= 1 or building_area_value >= 400:
+        probability = max(probability, 0.75)
+    threshold = float(params.get("classification_threshold", 0.5))
+    ai_building_present_flag = probability >= threshold
+    footprint_vacancy_score = 92.0 if parcel_vacant_flag else 15.0
+    imagery_vacancy_score = (1.0 - probability) * 100.0
+    vacancy_confidence_score = round((footprint_vacancy_score * 0.55) + (imagery_vacancy_score * 0.45), 2)
+    return {
+        "ai_building_present_probability": round(probability, 6),
+        "ai_building_present_flag": bool(ai_building_present_flag),
+        "vacancy_confidence_score": vacancy_confidence_score,
+        "vacancy_model_version": params.get("model_version"),
+    }
 
 
 def _coalesce_numeric(frame: pd.DataFrame, columns: list[str]) -> pd.Series:
@@ -1234,6 +1326,22 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
         row = frame.iloc[0]
         payload = {column: _serialize_scalar(row[column]) for column in frame.columns if column not in {"latitude", "longitude"}}
         payload["geometry"] = _detail_geometry(parcel_row_id)
+        if payload.get("ai_building_present_flag") is None:
+            longitude = pd.to_numeric(row.get("longitude"), errors="coerce")
+            latitude = pd.to_numeric(row.get("latitude"), errors="coerce")
+            if pd.notna(longitude) and pd.notna(latitude):
+                try:
+                    ai_payload = _predict_ai_building_presence(
+                        float(longitude),
+                        float(latitude),
+                        bool(payload.get("parcel_vacant_flag")),
+                        pd.to_numeric(row.get("building_count"), errors="coerce"),
+                        pd.to_numeric(row.get("building_area_total"), errors="coerce"),
+                    )
+                except Exception:
+                    ai_payload = None
+                if ai_payload:
+                    payload.update(ai_payload)
         return payload
 
     frame = load_base_frame()
@@ -1243,6 +1351,22 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
     row = match.iloc[0]
     payload = {column: _serialize_scalar(row[column]) for column in frame.columns if column not in {"latitude", "longitude"}}
     payload["geometry"] = _detail_geometry(parcel_row_id)
+    if payload.get("ai_building_present_flag") is None:
+        longitude = pd.to_numeric(row.get("longitude"), errors="coerce")
+        latitude = pd.to_numeric(row.get("latitude"), errors="coerce")
+        if pd.notna(longitude) and pd.notna(latitude):
+            try:
+                    ai_payload = _predict_ai_building_presence(
+                        float(longitude),
+                        float(latitude),
+                        bool(payload.get("parcel_vacant_flag")),
+                        pd.to_numeric(row.get("building_count"), errors="coerce"),
+                        pd.to_numeric(row.get("building_area_total"), errors="coerce"),
+                    )
+            except Exception:
+                ai_payload = None
+            if ai_payload:
+                payload.update(ai_payload)
     return payload
 
 
