@@ -9,6 +9,37 @@ export type GeometryPayload = {
   bounds?: [number, number, number, number] | null;
 };
 
+export type GeometryBounds = [number, number, number, number];
+
+export type GeoJsonGeometry = {
+  type: string;
+  coordinates?: unknown;
+};
+
+export type GeometryFeature = {
+  type: "Feature";
+  geometry: GeoJsonGeometry | null;
+  properties: {
+    parcel_row_id: string;
+    parcel_id?: string | null;
+    county_name?: string | null;
+    lead_score_total?: number | null;
+    lead_score_tier?: string | null;
+    parcel_vacant_flag?: boolean | null;
+    wetland_flag?: boolean | null;
+    flood_risk_score?: number | null;
+    road_access_tier?: string | null;
+    county_hosted_flag?: boolean | null;
+    best_source_type?: string | null;
+    selected?: boolean;
+  };
+};
+
+export type FeatureCollectionPayload = {
+  type: "FeatureCollection";
+  features: GeometryFeature[];
+};
+
 export type LeadRecord = {
   parcel_row_id: string;
   parcel_id: string | null;
@@ -101,8 +132,13 @@ export type GeometryItem = {
 
 export type GeometryResponse = {
   geometry_mode?: string;
+  render_mode?: "points" | "centroids" | "polygons";
   geometry_bounds?: number[];
   geometry_view_box?: number[];
+  requested_bounds?: number[];
+  zoom?: number | null;
+  feature_count?: number;
+  feature_collection?: FeatureCollectionPayload;
   items: GeometryItem[];
 };
 
@@ -149,4 +185,10 @@ export type MapOverlayDefinition = {
   label: string;
   description: string;
   enabled: boolean;
+};
+
+export type MapViewportState = {
+  center: [number, number];
+  zoom: number;
+  bounds: GeometryBounds | null;
 };

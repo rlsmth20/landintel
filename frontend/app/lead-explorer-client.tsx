@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { fetchGeometry, fetchLeadDetail, fetchLeads, fetchPresets, fetchSummary } from "./lead-explorer/api";
+import { fetchGeometryViewport, fetchLeadDetail, fetchLeads, fetchPresets, fetchSummary } from "./lead-explorer/api";
 import { LeadDetail } from "./lead-explorer/LeadDetail";
 import { LeadMap } from "./lead-explorer/LeadMap";
-import type { ExplorerMeta, Filters, LeadRecord, MapOverlayId, PresetItem, SortField } from "./lead-explorer/types";
+import type { ExplorerMeta, Filters, GeometryResponse, LeadRecord, MapOverlayId, MapViewportState, PresetItem, SortField } from "./lead-explorer/types";
 import {
   INITIAL_FILTERS,
   MAP_OVERLAYS,
@@ -19,7 +19,13 @@ import {
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 250;
+const GEOMETRY_LIMIT = 250;
 const FILTER_DEBOUNCE_MS = 250;
+const DEFAULT_VIEWPORT: MapViewportState = {
+  center: [-98.5795, 39.8283],
+  zoom: 3.4,
+  bounds: null,
+};
 
 function LeadBadge({ label, tone }: { label: string; tone?: string }) {
   return <span className={`badge badge-${tone ?? "neutral"}`}>{label}</span>;
@@ -55,14 +61,12 @@ export default function LeadExplorerClient() {
   const [leads, setLeads] = useState<LeadRecord[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [selectedLead, setSelectedLead] = useState<LeadRecord | null>(null);
-  const [geometryMap, setGeometryMap] = useState<Record<string, string>>({});
-  const [zoomNonce, setZoomNonce] = useState(0);
+  const [geometryResponse, setGeometryResponse] = useState<GeometryResponse | null>(null);
+  const [fitNonce, setFitNonce] = useState(0);
   const [activeOverlays, setActiveOverlays] = useState<MapOverlayId[]>(["parcels", "road_access"]);
-  const [zoomState, setZoomState] = useState<{
-    featureCount: number;
-    bounds: [number, number, number, number] | null;
-  }>({ featureCount: 0, bounds: null });
+  const [viewport, setViewport] = useState<MapViewportState>(DEFAULT_VIEWPORT);
 
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [summaryError, setSummaryError] = useState<string | null>(null);
@@ -123,14 +127,14 @@ export default function LeadExplorerClient() {
         if (response.items.length === 0) {
           setSelectedId(null);
           setSelectedLead(null);
-          setGeometryMap({});
-          setZoomState({ featureCount: 0, bounds: null });
+          setGeometryResponse(null);
           return;
         }
         setSelectedId((current) => {
           if (current && response.items.some((item) => item.parcel_row_id === current)) return current;
           return response.items[0].parcel_row_id;
         });
+        setFitNonce((current) => current + 1);
       } catch (error) {
         if (cancelled) return;
         setLeadsError(error instanceof Error ? error.message : "Failed to load leads");
@@ -172,10 +176,7 @@ export default function LeadExplorerClient() {
   }, [selectedId]);
 
   useEffect(() => {
-    const parcelIds = leads.slice(0, 120).map((lead) => lead.parcel_row_id);
-    if (selectedId && !parcelIds.includes(selectedId)) parcelIds.unshift(selectedId);
-    if (parcelIds.length === 0) {
-      setGeometryMap({});
+    if (!viewport.bounds) {
       return;
     }
 
@@ -184,12 +185,15 @@ export default function LeadExplorerClient() {
       setGeometryLoading(true);
       setGeometryError(null);
       try {
-        const response = await fetchGeometry(parcelIds);
-        if (cancelled) return;
-        const nextGeometryMap = Object.fromEntries(
-          response.items.filter((item) => item.path).map((item) => [item.parcel_row_id, item.path as string]),
+        const response = await fetchGeometryViewport(
+          debouncedFilters,
+          viewport.bounds,
+          viewport.zoom,
+          selectedId,
+          GEOMETRY_LIMIT,
         );
-        setGeometryMap(nextGeometryMap);
+        if (cancelled) return;
+        setGeometryResponse(response);
       } catch (error) {
         if (cancelled) return;
         setGeometryError(error instanceof Error ? error.message : "Failed to load parcel geometry");
@@ -201,7 +205,7 @@ export default function LeadExplorerClient() {
     return () => {
       cancelled = true;
     };
-  }, [leads, selectedId]);
+  }, [debouncedFilters, selectedId, viewport.bounds, viewport.zoom]);
 
   const countySuggestions = useMemo(
     () => summary?.sections?.top_counties?.map((item) => item.key).filter(Boolean) ?? [],
@@ -220,7 +224,7 @@ export default function LeadExplorerClient() {
     setActivePreset(name);
     setFilters(applyPreset(name));
     setOffset(0);
-    setZoomNonce((current) => current + 1);
+    setFitNonce((current) => current + 1);
   }
 
   function toggleOverlay(overlayId: MapOverlayId, enabled: boolean) {
@@ -646,21 +650,23 @@ export default function LeadExplorerClient() {
                 <p>Map bounds auto-fit to the current parcel set. Layer controls are structured for future FEMA flood, wetlands, utilities, slope, road access, and zoning overlays.</p>
               </div>
               <div className="card-header-actions">
-                <button type="button" className="chip" onClick={() => setZoomNonce((current) => current + 1)}>
+                <button type="button" className="chip" onClick={() => setFitNonce((current) => current + 1)}>
                   Zoom to results
                 </button>
-                {zoomState.featureCount > 0 ? <LeadBadge label={`${zoomState.featureCount} shapes`} tone="neutral" /> : null}
+                {geometryResponse?.feature_count ? <LeadBadge label={`${geometryResponse.feature_count} map features`} tone="neutral" /> : null}
               </div>
             </div>
             {geometryError ? <p className="error-text">{geometryError}</p> : null}
             <LeadMap
-              leads={visibleLeads}
-              geometryMap={geometryMap}
+              geometryResponse={geometryResponse}
               selectedId={selectedId}
+              hoveredId={hoveredId}
               onSelect={setSelectedId}
-              zoomNonce={zoomNonce}
+              onHoverChange={setHoveredId}
+              fitNonce={fitNonce}
               activeOverlays={activeOverlays}
-              onZoomStateChange={setZoomState}
+              viewport={viewport}
+              onViewportChange={setViewport}
             />
           </section>
 

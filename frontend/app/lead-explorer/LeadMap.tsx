@@ -1,189 +1,434 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import "maplibre-gl/dist/maplibre-gl.css";
 
-import type { LeadRecord, MapOverlayId } from "./types";
+import { useEffect, useMemo, useRef } from "react";
+import maplibregl, { GeoJSONSource, LngLatBoundsLike, Map } from "maplibre-gl";
 
-type Bounds = {
-  minX: number;
-  minY: number;
-  maxX: number;
-  maxY: number;
+import type { FeatureCollectionPayload, GeometryFeature, GeometryResponse, MapOverlayId, MapViewportState } from "./types";
+
+const DEFAULT_CENTER: [number, number] = [-98.5795, 39.8283];
+const DEFAULT_ZOOM = 3.4;
+const PARCEL_SOURCE_ID = "landintel-parcels";
+
+const BASE_STYLE: maplibregl.StyleSpecification = {
+  version: 8,
+  sources: {
+    osm: {
+      type: "raster",
+      tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+      tileSize: 256,
+      attribution: "&copy; OpenStreetMap contributors",
+    },
+  },
+  glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
+  layers: [
+    {
+      id: "osm",
+      type: "raster",
+      source: "osm",
+    },
+  ],
 };
 
-const DEFAULT_VIEW_BOX: [number, number, number, number] = [0, 0, 1000, 700];
+function featureBounds(feature: GeometryFeature): [number, number, number, number] | null {
+  const coordinates = feature.geometry?.coordinates;
+  if (!coordinates) return null;
 
-function parsePathBounds(path: string): Bounds | null {
-  const numbers = path.match(/-?\d*\.?\d+/g)?.map(Number) ?? [];
-  if (numbers.length < 2) return null;
+  let minLng = Number.POSITIVE_INFINITY;
+  let minLat = Number.POSITIVE_INFINITY;
+  let maxLng = Number.NEGATIVE_INFINITY;
+  let maxLat = Number.NEGATIVE_INFINITY;
 
-  let minX = Number.POSITIVE_INFINITY;
-  let minY = Number.POSITIVE_INFINITY;
-  let maxX = Number.NEGATIVE_INFINITY;
-  let maxY = Number.NEGATIVE_INFINITY;
-
-  for (let index = 0; index < numbers.length - 1; index += 2) {
-    const x = numbers[index];
-    const y = numbers[index + 1];
-    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-    minX = Math.min(minX, x);
-    minY = Math.min(minY, y);
-    maxX = Math.max(maxX, x);
-    maxY = Math.max(maxY, y);
+  function walk(value: unknown) {
+    if (!Array.isArray(value)) return;
+    if (value.length >= 2 && typeof value[0] === "number" && typeof value[1] === "number") {
+      const lng = value[0];
+      const lat = value[1];
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) return;
+      minLng = Math.min(minLng, lng);
+      minLat = Math.min(minLat, lat);
+      maxLng = Math.max(maxLng, lng);
+      maxLat = Math.max(maxLat, lat);
+      return;
+    }
+    value.forEach(walk);
   }
 
-  if (![minX, minY, maxX, maxY].every(Number.isFinite)) return null;
-  return { minX, minY, maxX, maxY };
+  walk(coordinates);
+  if (![minLng, minLat, maxLng, maxLat].every(Number.isFinite)) return null;
+  return [minLng, minLat, maxLng, maxLat];
 }
 
-function combineBounds(boundsList: Bounds[]): Bounds | null {
+function mergeBounds(boundsList: Array<[number, number, number, number]>): [number, number, number, number] | null {
   if (boundsList.length === 0) return null;
   return boundsList.reduce(
-    (combined, bounds) => ({
-      minX: Math.min(combined.minX, bounds.minX),
-      minY: Math.min(combined.minY, bounds.minY),
-      maxX: Math.max(combined.maxX, bounds.maxX),
-      maxY: Math.max(combined.maxY, bounds.maxY),
-    }),
+    (accumulator, bounds) => [
+      Math.min(accumulator[0], bounds[0]),
+      Math.min(accumulator[1], bounds[1]),
+      Math.max(accumulator[2], bounds[2]),
+      Math.max(accumulator[3], bounds[3]),
+    ],
     boundsList[0],
   );
 }
 
-function paddedViewBox(bounds: Bounds, paddingFactor: number): [number, number, number, number] | null {
-  const width = bounds.maxX - bounds.minX;
-  const height = bounds.maxY - bounds.minY;
-  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
-
-  const safeWidth = Math.max(width, 1.5);
-  const safeHeight = Math.max(height, 1.5);
-  const paddingX = Math.max(safeWidth * paddingFactor, 1.25);
-  const paddingY = Math.max(safeHeight * paddingFactor, 1.25);
-
+function toMapBounds(bounds: [number, number, number, number]): LngLatBoundsLike {
   return [
-    bounds.minX - paddingX,
-    bounds.minY - paddingY,
-    safeWidth + paddingX * 2,
-    safeHeight + paddingY * 2,
+    [bounds[0], bounds[1]],
+    [bounds[2], bounds[3]],
   ];
 }
 
+function selectedFeatureBounds(featureCollection: FeatureCollectionPayload | undefined, selectedId: string | null) {
+  if (!featureCollection || !selectedId) return null;
+  const match = featureCollection.features.find((feature) => feature.properties.parcel_row_id === selectedId);
+  return match ? featureBounds(match) : null;
+}
+
+function updateLayerVisibility(map: Map, layerId: string, visible: boolean) {
+  if (!map.getLayer(layerId)) return;
+  map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none");
+}
+
+function initializeParcelLayers(map: Map) {
+  if (map.getSource(PARCEL_SOURCE_ID)) return;
+
+  map.addSource(PARCEL_SOURCE_ID, {
+    type: "geojson",
+    data: {
+      type: "FeatureCollection",
+      features: [],
+    },
+  });
+
+  map.addLayer({
+    id: "parcel-fills",
+    type: "fill",
+    source: PARCEL_SOURCE_ID,
+    filter: ["==", ["geometry-type"], "Polygon"],
+    paint: {
+      "fill-color": [
+        "case",
+        ["boolean", ["get", "selected"], false],
+        "#d9472f",
+        "#2f6b6d",
+      ],
+      "fill-opacity": [
+        "case",
+        ["boolean", ["get", "selected"], false],
+        0.44,
+        0.26,
+      ],
+    },
+  });
+
+  map.addLayer({
+    id: "parcel-lines",
+    type: "line",
+    source: PARCEL_SOURCE_ID,
+    filter: ["==", ["geometry-type"], "Polygon"],
+    paint: {
+      "line-color": [
+        "case",
+        ["boolean", ["get", "selected"], false],
+        "#fff8ee",
+        "#17393a",
+      ],
+      "line-width": [
+        "case",
+        ["boolean", ["get", "selected"], false],
+        3.2,
+        1.6,
+      ],
+      "line-opacity": 0.96,
+    },
+  });
+
+  map.addLayer({
+    id: "parcel-wetlands-overlay",
+    type: "line",
+    source: PARCEL_SOURCE_ID,
+    filter: ["all", ["==", ["geometry-type"], "Polygon"], ["==", ["get", "wetland_flag"], true]],
+    paint: {
+      "line-color": "#617f56",
+      "line-width": 2.2,
+      "line-opacity": 0.95,
+    },
+  });
+
+  map.addLayer({
+    id: "parcel-road-overlay",
+    type: "line",
+    source: PARCEL_SOURCE_ID,
+    filter: ["all", ["==", ["geometry-type"], "Polygon"], ["==", ["get", "road_access_tier"], "direct"]],
+    paint: {
+      "line-color": "#1f7f80",
+      "line-width": 2.4,
+      "line-opacity": 0.95,
+    },
+  });
+
+  map.addLayer({
+    id: "parcel-flood-overlay",
+    type: "line",
+    source: PARCEL_SOURCE_ID,
+    filter: ["all", ["==", ["geometry-type"], "Polygon"], [">", ["coalesce", ["get", "flood_risk_score"], 0], 0]],
+    paint: {
+      "line-color": "#5f8db8",
+      "line-width": 2.4,
+      "line-opacity": 0.95,
+    },
+  });
+
+  map.addLayer({
+    id: "parcel-points",
+    type: "circle",
+    source: PARCEL_SOURCE_ID,
+    filter: ["==", ["geometry-type"], "Point"],
+    paint: {
+      "circle-radius": [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        3,
+        3.5,
+        8,
+        6,
+        12,
+        8,
+      ],
+      "circle-color": [
+        "case",
+        ["boolean", ["get", "selected"], false],
+        "#d9472f",
+        ["boolean", ["get", "county_hosted_flag"], false],
+        "#1f7f80",
+        "#f18f01",
+      ],
+      "circle-stroke-color": "#fff8ee",
+      "circle-stroke-width": 1.4,
+      "circle-opacity": 0.9,
+    },
+  });
+
+  map.addLayer({
+    id: "parcel-hover",
+    type: "line",
+    source: PARCEL_SOURCE_ID,
+    filter: ["all", ["==", ["geometry-type"], "Polygon"], ["boolean", ["feature-state", "hover"], false]],
+    paint: {
+      "line-color": "#ffe5cf",
+      "line-width": 3.6,
+      "line-opacity": 1,
+    },
+  });
+}
+
 export function LeadMap({
-  leads,
-  geometryMap,
+  geometryResponse,
   selectedId,
+  hoveredId,
   onSelect,
-  zoomNonce,
+  onHoverChange,
+  fitNonce,
   activeOverlays,
-  onZoomStateChange,
+  viewport,
+  onViewportChange,
 }: {
-  leads: LeadRecord[];
-  geometryMap: Record<string, string>;
+  geometryResponse: GeometryResponse | null;
   selectedId: string | null;
+  hoveredId: string | null;
   onSelect: (value: string) => void;
-  zoomNonce: number;
+  onHoverChange: (value: string | null) => void;
+  fitNonce: number;
   activeOverlays: MapOverlayId[];
-  onZoomStateChange?: (value: { featureCount: number; bounds: [number, number, number, number] | null }) => void;
+  viewport: MapViewportState;
+  onViewportChange: (value: MapViewportState) => void;
 }) {
-  const [currentViewBox, setCurrentViewBox] = useState<[number, number, number, number]>(DEFAULT_VIEW_BOX);
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<Map | null>(null);
+  const hoveredFeatureIdRef = useRef<string | null>(null);
+  const hasInitializedViewportRef = useRef(false);
 
-  const pathEntries = useMemo(() => {
-    return leads
-      .map((lead) => ({
-        lead,
-        path: geometryMap[lead.parcel_row_id],
-      }))
-      .filter((entry) => Boolean(entry.path));
-  }, [geometryMap, leads]);
-
-  const pathBounds = useMemo(() => {
-    return Object.fromEntries(
-      pathEntries
-        .map((entry) => {
-          const bounds = parsePathBounds(entry.path as string);
-          return bounds ? [entry.lead.parcel_row_id, bounds] : null;
-        })
-        .filter((entry): entry is [string, Bounds] => entry !== null),
-    );
-  }, [pathEntries]);
-
-  const resultsBounds = useMemo(() => combineBounds(Object.values(pathBounds)), [pathBounds]);
-  const selectedBounds = selectedId ? pathBounds[selectedId] ?? null : null;
-
-  const overlaySet = useMemo(() => new Set(activeOverlays), [activeOverlays]);
+  const featureCollection = geometryResponse?.feature_collection;
+  const featureCount = featureCollection?.features.length ?? 0;
+  const boundsList = useMemo(
+    () => (featureCollection?.features ?? []).map(featureBounds).filter((value): value is [number, number, number, number] => value !== null),
+    [featureCollection],
+  );
+  const resultBounds = useMemo(() => mergeBounds(boundsList), [boundsList]);
+  const selectedBounds = useMemo(() => selectedFeatureBounds(featureCollection, selectedId), [featureCollection, selectedId]);
 
   useEffect(() => {
-    const featureCount = Object.keys(pathBounds).length;
-    const targetBounds = selectedBounds ?? resultsBounds;
-    const nextViewBox = targetBounds
-      ? paddedViewBox(targetBounds, selectedBounds ? 0.24 : 0.12)
-      : null;
+    if (!mapContainerRef.current || mapRef.current) return;
+
+    const map = new maplibregl.Map({
+      container: mapContainerRef.current,
+      style: BASE_STYLE,
+      center: viewport.center ?? DEFAULT_CENTER,
+      zoom: viewport.zoom ?? DEFAULT_ZOOM,
+    });
+    map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "top-right");
+    map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
+    mapRef.current = map;
+
+    map.on("load", () => {
+      initializeParcelLayers(map);
+
+      map.on("click", "parcel-fills", (event) => {
+        const feature = event.features?.[0];
+        const parcelRowId = feature?.properties?.parcel_row_id;
+        if (typeof parcelRowId === "string") onSelect(parcelRowId);
+      });
+
+      map.on("click", "parcel-points", (event) => {
+        const feature = event.features?.[0];
+        const parcelRowId = feature?.properties?.parcel_row_id;
+        if (typeof parcelRowId === "string") onSelect(parcelRowId);
+      });
+
+      map.on("mouseleave", "parcel-fills", () => {
+        if (hoveredFeatureIdRef.current) {
+          map.setFeatureState({ source: PARCEL_SOURCE_ID, id: hoveredFeatureIdRef.current }, { hover: false });
+          hoveredFeatureIdRef.current = null;
+        }
+        map.getCanvas().style.cursor = "";
+        onHoverChange(null);
+      });
+
+      const currentBounds = map.getBounds();
+      onViewportChange({
+        center: [map.getCenter().lng, map.getCenter().lat],
+        zoom: map.getZoom(),
+        bounds: [currentBounds.getWest(), currentBounds.getSouth(), currentBounds.getEast(), currentBounds.getNorth()],
+      });
+    });
+
+    map.on("moveend", () => {
+      const currentBounds = map.getBounds();
+      onViewportChange({
+        center: [map.getCenter().lng, map.getCenter().lat],
+        zoom: map.getZoom(),
+        bounds: [currentBounds.getWest(), currentBounds.getSouth(), currentBounds.getEast(), currentBounds.getNorth()],
+      });
+    });
+
+    map.on("mousemove", (event) => {
+      if (!map.getLayer("parcel-fills")) return;
+      const parcelFeature = map.queryRenderedFeatures(event.point, {
+        layers: ["parcel-fills", "parcel-points"],
+      })[0];
+      const nextId = parcelFeature?.properties?.parcel_row_id;
+      if (hoveredFeatureIdRef.current && hoveredFeatureIdRef.current !== nextId) {
+        map.setFeatureState({ source: PARCEL_SOURCE_ID, id: hoveredFeatureIdRef.current }, { hover: false });
+      }
+      if (typeof nextId === "string") {
+        hoveredFeatureIdRef.current = nextId;
+        map.setFeatureState({ source: PARCEL_SOURCE_ID, id: nextId }, { hover: true });
+        map.getCanvas().style.cursor = "pointer";
+        onHoverChange(nextId);
+      } else {
+        hoveredFeatureIdRef.current = null;
+        map.getCanvas().style.cursor = "";
+        onHoverChange(null);
+      }
+    });
+
+    return () => {
+      map.remove();
+      mapRef.current = null;
+    };
+  }, [onHoverChange, onSelect, onViewportChange, viewport.center, viewport.zoom]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    const source = map.getSource(PARCEL_SOURCE_ID) as GeoJSONSource | undefined;
+    if (!source) return;
+
+    const nextCollection: FeatureCollectionPayload = {
+      type: "FeatureCollection",
+      features:
+        (featureCollection?.features ?? []).map((feature) => ({
+          ...feature,
+          id: feature.properties.parcel_row_id,
+          properties: {
+            ...feature.properties,
+            selected: feature.properties.parcel_row_id === selectedId,
+            hovered: feature.properties.parcel_row_id === hoveredId,
+          },
+        })) ?? [],
+    };
+    source.setData(nextCollection as never);
 
     if (process.env.NODE_ENV !== "production") {
-      console.debug("[lead-map] feature_count", featureCount);
-      console.debug("[lead-map] selected_parcel_id", selectedId);
-      console.debug("[lead-map] computed_bounds", nextViewBox);
-      if (!nextViewBox && featureCount > 0) {
-        const firstEntry = pathEntries[0];
-        console.debug("[lead-map] invalid_bounds_first_path", firstEntry?.lead.parcel_row_id, firstEntry?.path?.slice(0, 160));
+      console.debug("[landintel-map] feature_count_loaded", nextCollection.features.length);
+      console.debug("[landintel-map] computed_map_bounds", geometryResponse?.geometry_bounds ?? resultBounds);
+      console.debug("[landintel-map] selected_parcel_id", selectedId);
+      if (!resultBounds && nextCollection.features.length > 0) {
+        console.debug("[landintel-map] invalid_geometry_first_feature", nextCollection.features[0]);
       }
     }
+  }, [featureCollection, geometryResponse?.geometry_bounds, hoveredId, resultBounds, selectedId]);
 
-    if (nextViewBox) {
-      setCurrentViewBox(nextViewBox);
-      onZoomStateChange?.({ featureCount, bounds: nextViewBox });
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    updateLayerVisibility(map, "parcel-fills", activeOverlays.includes("parcels"));
+    updateLayerVisibility(map, "parcel-lines", activeOverlays.includes("parcels"));
+    updateLayerVisibility(map, "parcel-points", activeOverlays.includes("parcels"));
+    updateLayerVisibility(map, "parcel-hover", activeOverlays.includes("parcels"));
+    updateLayerVisibility(map, "parcel-wetlands-overlay", activeOverlays.includes("wetlands"));
+    updateLayerVisibility(map, "parcel-road-overlay", activeOverlays.includes("road_access"));
+    updateLayerVisibility(map, "parcel-flood-overlay", activeOverlays.includes("fema_flood"));
+  }, [activeOverlays]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || featureCount === 0) return;
+
+    const targetBounds = selectedBounds ?? resultBounds;
+    if (!targetBounds) {
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[landintel-map] fit_failed_no_bounds", {
+          featureCount,
+          geometryResponse,
+          firstFeature: featureCollection?.features?.[0],
+        });
+      }
       return;
     }
 
-    if (featureCount === 0) {
-      setCurrentViewBox(DEFAULT_VIEW_BOX);
-      onZoomStateChange?.({ featureCount: 0, bounds: null });
+    const padding = selectedBounds ? 72 : 48;
+    try {
+      map.fitBounds(toMapBounds(targetBounds), {
+        padding,
+        duration: hasInitializedViewportRef.current ? 600 : 0,
+        maxZoom: selectedBounds ? 16.5 : 14.5,
+      });
+      hasInitializedViewportRef.current = true;
+    } catch (error) {
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[landintel-map] fit_failed", {
+          error,
+          featureCount,
+          targetBounds,
+          firstFeature: featureCollection?.features?.[0],
+        });
+      }
     }
-  }, [onZoomStateChange, pathBounds, pathEntries, resultsBounds, selectedBounds, selectedId, zoomNonce]);
-
-  if (pathEntries.length === 0) {
-    return (
-      <div className="map-empty-state">
-        <strong>No parcel geometry loaded</strong>
-        <p>Adjust filters or paging to load a result subset with parcel polygons.</p>
-      </div>
-    );
-  }
+  }, [featureCollection, featureCount, fitNonce, geometryResponse, resultBounds, selectedBounds]);
 
   return (
-    <svg
-      className="lead-map"
-      viewBox={currentViewBox.join(" ")}
-      role="img"
-      aria-label="Mississippi parcel lead map"
-      preserveAspectRatio="xMidYMid meet"
-    >
-      <rect x={currentViewBox[0]} y={currentViewBox[1]} width={currentViewBox[2]} height={currentViewBox[3]} rx="26" className="map-bg" />
-      {Array.from({ length: 5 }).map((_, index) => {
-        const x = currentViewBox[0] + (currentViewBox[2] / 4) * index;
-        return <line key={`v-${index}`} x1={x} x2={x} y1={currentViewBox[1]} y2={currentViewBox[1] + currentViewBox[3]} className="map-grid" />;
-      })}
-      {Array.from({ length: 5 }).map((_, index) => {
-        const y = currentViewBox[1] + (currentViewBox[3] / 4) * index;
-        return <line key={`h-${index}`} x1={currentViewBox[0]} x2={currentViewBox[0] + currentViewBox[2]} y1={y} y2={y} className="map-grid" />;
-      })}
-      {pathEntries.map(({ lead, path }) => {
-        const selected = selectedId === lead.parcel_row_id;
-        const overlayClasses = [
-          overlaySet.has("wetlands") && lead.wetland_flag ? "has-wetland-overlay" : "",
-          overlaySet.has("road_access") && lead.road_access_tier === "direct" ? "has-road-overlay" : "",
-          overlaySet.has("fema_flood") && (lead.flood_risk_score ?? 0) > 0 ? "has-flood-overlay" : "",
-        ]
-          .filter(Boolean)
-          .join(" ");
-        return (
-          <path
-            key={lead.parcel_row_id}
-            d={path}
-            className={selected ? `parcel-shape is-selected ${overlayClasses}`.trim() : `parcel-shape ${overlayClasses}`.trim()}
-            onClick={() => onSelect(lead.parcel_row_id)}
-          />
-        );
-      })}
-    </svg>
+    <div className="lead-map-shell">
+      <div className="lead-map-canvas" ref={mapContainerRef} />
+      {featureCount === 0 ? (
+        <div className="map-empty-state map-overlay-empty">
+          <strong>No parcel geometry loaded for this view</strong>
+          <p>Pan, zoom, or adjust filters to load parcel geometry in the visible map area.</p>
+        </div>
+      ) : null}
+    </div>
   );
 }

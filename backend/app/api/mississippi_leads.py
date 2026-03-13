@@ -67,6 +67,12 @@ def leads(
 @router.get("/leads/geometry")
 def leads_geometry(
     parcel_row_id: list[str] | None = Query(default=None),
+    min_lng: float | None = None,
+    min_lat: float | None = None,
+    max_lng: float | None = None,
+    max_lat: float | None = None,
+    zoom: float | None = None,
+    selected_parcel_id: str | None = None,
     county_name: str | None = None,
     lead_score_tier: list[str] | None = Query(default=None),
     min_lead_score_total: float | None = None,
@@ -86,8 +92,14 @@ def leads_geometry(
     road_distance_ft_max: float | None = None,
     limit: int = GEOMETRY_DEFAULT_LIMIT,
 ):
+    bounds = None
+    if None not in {min_lng, min_lat, max_lng, max_lat}:
+        bounds = (min_lng, min_lat, max_lng, max_lat)
     return get_geometry(
         parcel_row_ids=parcel_row_id,
+        bounds=bounds,
+        zoom=zoom,
+        selected_parcel_id=selected_parcel_id,
         county_name=county_name,
         lead_score_tier=lead_score_tier,
         min_lead_score_total=min_lead_score_total,

@@ -1,4 +1,13 @@
-import type { ExplorerMeta, GeometryResponse, LeadRecord, LeadsResponse, PresetItem, SortField, Filters } from "./types";
+import type {
+  ExplorerMeta,
+  GeometryBounds,
+  GeometryResponse,
+  LeadRecord,
+  LeadsResponse,
+  PresetItem,
+  SortField,
+  Filters,
+} from "./types";
 
 const DEFAULT_PRODUCTION_API_BASE_URL = "https://landintel-production.up.railway.app";
 const API_BASE_URL =
@@ -80,5 +89,26 @@ export async function fetchLeadDetail(parcelRowId: string): Promise<LeadRecord> 
 export async function fetchGeometry(parcelRowIds: string[]): Promise<GeometryResponse> {
   const searchParams = new URLSearchParams();
   parcelRowIds.forEach((id) => searchParams.append("parcel_row_id", id));
+  return fetchJson<GeometryResponse>("/api/leads/geometry", searchParams);
+}
+
+export async function fetchGeometryViewport(
+  filters: Filters,
+  bounds: GeometryBounds | null,
+  zoom: number,
+  selectedParcelId: string | null,
+  limit = 200,
+): Promise<GeometryResponse> {
+  const searchParams = buildLeadQuery(filters, "lead_score_total", "desc", limit, 0);
+  if (bounds) {
+    searchParams.set("min_lng", String(bounds[0]));
+    searchParams.set("min_lat", String(bounds[1]));
+    searchParams.set("max_lng", String(bounds[2]));
+    searchParams.set("max_lat", String(bounds[3]));
+  }
+  searchParams.set("zoom", String(zoom));
+  if (selectedParcelId) {
+    searchParams.set("selected_parcel_id", selectedParcelId);
+  }
   return fetchJson<GeometryResponse>("/api/leads/geometry", searchParams);
 }

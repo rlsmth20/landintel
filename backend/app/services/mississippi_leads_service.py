@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from shapely.geometry import box, mapping
 from shapely import wkb
 
 from app.settings import GEOMETRY_DEFAULT_LIMIT, GEOMETRY_MAX_LIMIT, LEADS_DEFAULT_LIMIT, LEADS_MAX_LIMIT
@@ -116,6 +117,12 @@ def _geometry_payload(value: bytes | None) -> dict[str, Any] | None:
     }
 
 
+def _serialize_bounds(bounds: tuple[float, float, float, float] | None) -> list[float] | None:
+    if bounds is None:
+        return None
+    return [round(float(value), 6) for value in bounds]
+
+
 def runtime_file_diagnostics() -> dict[str, dict[str, int | bool | str | None]]:
     diagnostics: dict[str, dict[str, int | bool | str | None]] = {}
     paths = {
@@ -148,6 +155,19 @@ def load_app_ready_frame() -> pd.DataFrame:
     if not APP_READY_PATH.exists():
         raise _missing_runtime_file_error("Mississippi leads dataset", "app_ready_parquet")
     frame = pd.read_parquet(APP_READY_PATH)
+    return frame
+
+
+@lru_cache(maxsize=1)
+def load_spatial_frame() -> pd.DataFrame:
+    frame = load_app_ready_frame().copy()
+    frame["_shape"] = frame["geometry"].apply(lambda value: wkb.loads(value) if value else None)
+    frame["_minx"] = frame["_shape"].apply(lambda geom: geom.bounds[0] if geom else None)
+    frame["_miny"] = frame["_shape"].apply(lambda geom: geom.bounds[1] if geom else None)
+    frame["_maxx"] = frame["_shape"].apply(lambda geom: geom.bounds[2] if geom else None)
+    frame["_maxy"] = frame["_shape"].apply(lambda geom: geom.bounds[3] if geom else None)
+    frame["_centroid_x"] = frame["_shape"].apply(lambda geom: geom.centroid.x if geom else None)
+    frame["_centroid_y"] = frame["_shape"].apply(lambda geom: geom.centroid.y if geom else None)
     return frame
 
 
@@ -233,6 +253,101 @@ def _apply_filters(
     return filtered
 
 
+def _apply_bounds_filter(
+    frame: pd.DataFrame,
+    *,
+    bounds: tuple[float, float, float, float] | None = None,
+    selected_parcel_id: str | None = None,
+) -> pd.DataFrame:
+    if bounds is None:
+        return frame
+
+    min_lng, min_lat, max_lng, max_lat = bounds
+    bbox_mask = (
+        pd.to_numeric(frame["_maxx"], errors="coerce").ge(min_lng).fillna(False)
+        & pd.to_numeric(frame["_minx"], errors="coerce").le(max_lng).fillna(False)
+        & pd.to_numeric(frame["_maxy"], errors="coerce").ge(min_lat).fillna(False)
+        & pd.to_numeric(frame["_miny"], errors="coerce").le(max_lat).fillna(False)
+    )
+    if selected_parcel_id:
+        bbox_mask = bbox_mask | frame["parcel_row_id"].astype("string").eq(selected_parcel_id)
+    return frame.loc[bbox_mask].copy()
+
+
+def _feature_bounds(frame: pd.DataFrame) -> tuple[float, float, float, float] | None:
+    if frame.empty:
+        return None
+    minx = pd.to_numeric(frame["_minx"], errors="coerce").min()
+    miny = pd.to_numeric(frame["_miny"], errors="coerce").min()
+    maxx = pd.to_numeric(frame["_maxx"], errors="coerce").max()
+    maxy = pd.to_numeric(frame["_maxy"], errors="coerce").max()
+    if not all(pd.notna(value) for value in [minx, miny, maxx, maxy]):
+        return None
+    return (float(minx), float(miny), float(maxx), float(maxy))
+
+
+def _render_mode_for_zoom(zoom: float | None) -> str:
+    if zoom is None:
+        return "polygons"
+    if zoom < 8:
+        return "points"
+    if zoom < 11:
+        return "centroids"
+    return "polygons"
+
+
+def _simplification_tolerance(zoom: float | None) -> float:
+    if zoom is None:
+        return 0.0
+    if zoom >= 14:
+        return 0.0
+    if zoom >= 12:
+        return 0.00002
+    if zoom >= 10:
+        return 0.00008
+    return 0.0003
+
+
+def _geometry_feature(row: pd.Series, *, render_mode: str, zoom: float | None, selected_parcel_id: str | None) -> dict[str, Any] | None:
+    shape = row.get("_shape")
+    if shape is None:
+        return None
+
+    if render_mode == "points":
+        geometry = {
+            "type": "Point",
+            "coordinates": [round(float(row["_centroid_x"]), 6), round(float(row["_centroid_y"]), 6)],
+        }
+    elif render_mode == "centroids":
+        geometry = {
+            "type": "Point",
+            "coordinates": [round(float(row["_centroid_x"]), 6), round(float(row["_centroid_y"]), 6)],
+        }
+    else:
+        tolerance = _simplification_tolerance(zoom)
+        geometry_shape = shape.simplify(tolerance, preserve_topology=True) if tolerance > 0 else shape
+        geometry = mapping(geometry_shape)
+
+    return {
+        "type": "Feature",
+        "geometry": geometry,
+        "properties": {
+            "parcel_row_id": str(row["parcel_row_id"]),
+            "parcel_id": _serialize_scalar(row.get("parcel_id")),
+            "county_name": _serialize_scalar(row.get("county_name")),
+            "lead_score_total": _serialize_scalar(row.get("lead_score_total")),
+            "lead_score_tier": _serialize_scalar(row.get("lead_score_tier")),
+            "parcel_vacant_flag": _serialize_scalar(row.get("parcel_vacant_flag")),
+            "wetland_flag": _serialize_scalar(row.get("wetland_flag")),
+            "flood_risk_score": _serialize_scalar(row.get("flood_risk_score")),
+            "road_access_tier": _serialize_scalar(row.get("road_access_tier")),
+            "county_hosted_flag": _serialize_scalar(row.get("county_hosted_flag")),
+            "best_source_type": _serialize_scalar(row.get("best_source_type")),
+            "selected": str(row["parcel_row_id"]) == (selected_parcel_id or ""),
+        },
+    }
+
+
 def get_leads(
     *,
     county_name: str | None = None,
@@ -308,6 +423,9 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
 def get_geometry(
     *,
     parcel_row_ids: list[str] | None = None,
+    bounds: tuple[float, float, float, float] | None = None,
+    zoom: float | None = None,
+    selected_parcel_id: str | None = None,
     county_name: str | None = None,
     lead_score_tier: list[str] | None = None,
     min_lead_score_total: float | None = None,
@@ -327,7 +445,7 @@ def get_geometry(
     road_distance_ft_max: float | None = None,
     limit: int = GEOMETRY_DEFAULT_LIMIT,
 ) -> dict[str, Any]:
-    frame = load_app_ready_frame()
+    frame = load_spatial_frame()
     if parcel_row_ids:
         filtered = frame.loc[frame["parcel_row_id"].astype("string").isin(parcel_row_ids)].copy()
     else:
@@ -351,23 +469,35 @@ def get_geometry(
             road_access_tier=road_access_tier,
             road_distance_ft_max=road_distance_ft_max,
         )
+        filtered = _apply_bounds_filter(filtered, bounds=bounds, selected_parcel_id=selected_parcel_id)
         safe_limit = _clamp_limit(limit, default=GEOMETRY_DEFAULT_LIMIT, max_limit=GEOMETRY_MAX_LIMIT)
         filtered = filtered.sort_values("lead_score_total", ascending=False, na_position="last").head(safe_limit)
 
-    lookup = load_geometry_lookup()
+    render_mode = _render_mode_for_zoom(zoom)
+    feature_bounds = _feature_bounds(filtered)
+    features = [
+        feature
+        for _, row in filtered.iterrows()
+        if (feature := _geometry_feature(row, render_mode=render_mode, zoom=zoom, selected_parcel_id=selected_parcel_id))
+        is not None
+    ]
     items = [
         {
             "parcel_row_id": str(row["parcel_row_id"]),
-            "path": lookup.get(str(row["parcel_row_id"])) or None,
+            "path": None,
             "lead_score_total": _serialize_scalar(row["lead_score_total"]),
         }
         for _, row in filtered.iterrows()
     ]
-    meta = load_meta()
     return {
-        "geometry_mode": meta.get("geometryMode"),
-        "geometry_bounds": meta.get("geometryBounds"),
-        "geometry_view_box": meta.get("geometryViewBox"),
+        "geometry_mode": "viewport_geojson",
+        "render_mode": render_mode,
+        "geometry_bounds": _serialize_bounds(feature_bounds),
+        "geometry_view_box": None,
+        "requested_bounds": _serialize_bounds(bounds),
+        "zoom": zoom,
+        "feature_count": len(features),
+        "feature_collection": {"type": "FeatureCollection", "features": features},
         "items": items,
     }
 
