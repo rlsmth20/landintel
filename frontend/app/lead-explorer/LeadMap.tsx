@@ -334,7 +334,7 @@ export function LeadMap({
       map.remove();
       mapRef.current = null;
     };
-  }, [onSelect, onViewportChange, viewport.center, viewport.zoom]);
+  }, [onSelect, onViewportChange]);
 
   useEffect(() => {
     const map = mapRef.current;
