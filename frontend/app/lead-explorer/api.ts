@@ -194,7 +194,7 @@ export async function fetchGeometryViewport(
   selectedParcelId: string | null,
   limit = 200,
 ): Promise<GeometryResponse> {
-  const requestedLimit = zoom >= 12 ? Math.min(limit, 60) : zoom >= 10 ? Math.min(limit, 100) : limit;
+  const requestedLimit = zoom >= 12 ? Math.min(limit, 800) : zoom >= 9 ? Math.min(limit, 600) : Math.min(limit, 200);
 
   async function requestGeometry(nextLimit: number) {
     const searchParams = buildLeadQuery(filters, "lead_score_total", "desc", nextLimit, 0);
@@ -208,7 +208,10 @@ export async function fetchGeometryViewport(
     if (selectedParcelId) {
       searchParams.set("selected_parcel_id", selectedParcelId);
     }
-    return fetchJson<GeometryResponse>("/api/leads/geometry", searchParams);
+    if (process.env.NODE_ENV !== "production") {
+      console.debug("[lead-explorer] geometry viewport request", { bounds, zoom, selectedParcelId, limit: nextLimit });
+    }
+    return fetchJson<GeometryResponse>("/api/parcels", searchParams);
   }
 
   try {
@@ -262,4 +265,13 @@ export async function fetchGeometryViewport(
       })),
     };
   }
+}
+
+export async function fetchParcelGeometryById(parcelRowId: string, zoom = 14): Promise<GeometryResponse> {
+  const searchParams = new URLSearchParams();
+  searchParams.set("zoom", String(zoom));
+  if (process.env.NODE_ENV !== "production") {
+    console.debug("[lead-explorer] parcel geometry request", { parcelRowId, zoom });
+  }
+  return fetchJson<GeometryResponse>(`/api/parcels/${parcelRowId}/geometry`, searchParams);
 }

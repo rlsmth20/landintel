@@ -132,7 +132,7 @@ export type GeometryItem = {
 
 export type GeometryResponse = {
   geometry_mode?: string;
-  render_mode?: "points" | "centroids" | "polygons";
+  render_mode?: "none" | "points" | "centroids" | "polygons";
   geometry_bounds?: number[];
   geometry_view_box?: number[];
   requested_bounds?: number[];

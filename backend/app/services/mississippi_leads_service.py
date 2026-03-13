@@ -334,6 +334,34 @@ def _bounded_sorted_batches(
     return candidate.sort_values(sort_by, ascending=ascending, na_position="last").head(keep_rows)
 
 
+def _bounded_scan_batches(
+    *,
+    columns: list[str],
+    expression: ds.Expression | None,
+    keep_rows: int,
+    batch_size: int = 50000,
+) -> pd.DataFrame:
+    dataset = _embedded_parcel_dataset()
+    frames: list[pd.DataFrame] = []
+    kept = 0
+    scanner = dataset.scanner(columns=columns, filter=expression, batch_size=batch_size)
+    for batch in scanner.to_batches():
+        frame = batch.to_pandas()
+        if frame.empty:
+            continue
+        remaining = keep_rows - kept
+        if remaining <= 0:
+            break
+        sliced = frame.head(remaining)
+        frames.append(sliced)
+        kept += len(sliced)
+        if kept >= keep_rows:
+            break
+    if not frames:
+        return pd.DataFrame(columns=columns)
+    return pd.concat(frames, ignore_index=True)
+
+
 def _geojson_bounds(geometry: dict[str, Any]) -> list[float] | None:
     coordinates = geometry.get("coordinates")
     if coordinates is None:
@@ -880,10 +908,10 @@ def _geometry_table_for_ids(parcel_row_ids: list[str]) -> pd.DataFrame:
 def _render_mode_for_zoom(zoom: float | None) -> str:
     if zoom is None:
         return "polygons"
-    if zoom < 8:
+    if zoom < 7:
+        return "none"
+    if zoom < 9:
         return "points"
-    if zoom < 11:
-        return "centroids"
     return "polygons"
 
 
@@ -1086,6 +1114,16 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
     return payload
 
 
+def get_parcel_geometry(parcel_row_id: str, zoom: float | None = None) -> dict[str, Any]:
+    effective_zoom = 14.0 if zoom is None else zoom
+    return get_geometry(
+        parcel_row_ids=[parcel_row_id],
+        selected_parcel_id=parcel_row_id,
+        zoom=effective_zoom,
+        limit=1,
+    )
+
+
 def get_geometry(
     *,
     parcel_row_ids: list[str] | None = None,
@@ -1180,16 +1218,38 @@ def get_geometry(
             selected_parcel_id=selected_parcel_id,
             bounds=bounds,
         )
-        safe_limit = _clamp_limit(limit, default=GEOMETRY_DEFAULT_LIMIT, max_limit=GEOMETRY_MAX_LIMIT)
-        filtered = _bounded_sorted_batches(
-            columns=geometry_columns,
-            expression=expression,
-            sort_by="lead_score_total",
-            ascending=False,
-            keep_rows=safe_limit,
-        )
-
         render_mode = _render_mode_for_zoom(zoom)
+        safe_limit = _clamp_limit(limit, default=GEOMETRY_DEFAULT_LIMIT, max_limit=GEOMETRY_MAX_LIMIT)
+        if render_mode == "none" and not parcel_row_ids and not selected_parcel_id:
+            return {
+                "geometry_mode": "viewport_geojson",
+                "render_mode": "none",
+                "geometry_bounds": None,
+                "geometry_view_box": None,
+                "requested_bounds": [round(value, 6) for value in bounds] if bounds is not None else None,
+                "zoom": zoom,
+                "feature_count": 0,
+                "feature_collection": {"type": "FeatureCollection", "features": []},
+                "items": [],
+            }
+
+        if parcel_row_ids:
+            filtered = _embedded_to_pandas(geometry_columns, expression)
+        elif bounds is not None or selected_parcel_id:
+            filtered = _bounded_scan_batches(
+                columns=geometry_columns,
+                expression=expression,
+                keep_rows=safe_limit,
+            )
+        else:
+            filtered = _bounded_sorted_batches(
+                columns=geometry_columns,
+                expression=expression,
+                sort_by="lead_score_total",
+                ascending=False,
+                keep_rows=safe_limit,
+            )
+
         features: list[dict[str, Any]] = []
         if render_mode in {"points", "centroids"}:
             for _, row in filtered.iterrows():
@@ -1316,10 +1376,24 @@ def get_geometry(
             if selected_parcel_id:
                 bbox_mask = bbox_mask | filtered["parcel_row_id"].astype("string").eq(selected_parcel_id)
             filtered = filtered.loc[bbox_mask].copy()
-        safe_limit = _clamp_limit(limit, default=GEOMETRY_DEFAULT_LIMIT, max_limit=GEOMETRY_MAX_LIMIT)
-        filtered = filtered.sort_values("lead_score_total", ascending=False, na_position="last").head(safe_limit)
-
     render_mode = _render_mode_for_zoom(zoom)
+    safe_limit = _clamp_limit(limit, default=GEOMETRY_DEFAULT_LIMIT, max_limit=GEOMETRY_MAX_LIMIT)
+    if render_mode == "none" and not parcel_row_ids and not selected_parcel_id:
+        return {
+            "geometry_mode": "viewport_geojson",
+            "render_mode": "none",
+            "geometry_bounds": None,
+            "geometry_view_box": None,
+            "requested_bounds": [round(value, 6) for value in bounds] if bounds is not None else None,
+            "zoom": zoom,
+            "feature_count": 0,
+            "feature_collection": {"type": "FeatureCollection", "features": []},
+            "items": [],
+        }
+    if not parcel_row_ids and (bounds is not None or selected_parcel_id):
+        filtered = filtered.head(safe_limit)
+    else:
+        filtered = filtered.sort_values("lead_score_total", ascending=False, na_position="last").head(safe_limit)
     features: list[dict[str, Any]] = []
 
     if render_mode in {"points", "centroids"}:

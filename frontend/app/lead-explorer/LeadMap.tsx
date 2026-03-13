@@ -234,23 +234,32 @@ export function LeadMap({
   selectedId,
   onSelect,
   fitNonce,
+  locateSelectedNonce,
   activeOverlays,
   viewport,
   onViewportChange,
+  loading,
+  error,
+  totalCount,
 }: {
   geometryResponse: GeometryResponse | null;
   selectedId: string | null;
   onSelect: (value: string) => void;
   fitNonce: number;
+  locateSelectedNonce: number;
   activeOverlays: MapOverlayId[];
   viewport: MapViewportState;
   onViewportChange: (value: MapViewportState) => void;
+  loading: boolean;
+  error: string | null;
+  totalCount: number;
 }) {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<Map | null>(null);
   const hoveredFeatureIdRef = useRef<string | null>(null);
   const hasInitializedViewportRef = useRef(false);
   const lastAppliedFitNonceRef = useRef<number>(-1);
+  const lastLocateSelectedNonceRef = useRef<number>(-1);
   const lastSelectedIdRef = useRef<string | null>(null);
 
   const featureCollection = geometryResponse?.feature_collection;
@@ -281,13 +290,23 @@ export function LeadMap({
       map.on("click", "parcel-fills", (event) => {
         const feature = event.features?.[0];
         const parcelRowId = feature?.properties?.parcel_row_id;
-        if (typeof parcelRowId === "string") onSelect(parcelRowId);
+        if (typeof parcelRowId === "string") {
+          if (process.env.NODE_ENV !== "production") {
+            console.debug("[landintel-map] parcel click", { parcelRowId });
+          }
+          onSelect(parcelRowId);
+        }
       });
 
       map.on("click", "parcel-points", (event) => {
         const feature = event.features?.[0];
         const parcelRowId = feature?.properties?.parcel_row_id;
-        if (typeof parcelRowId === "string") onSelect(parcelRowId);
+        if (typeof parcelRowId === "string") {
+          if (process.env.NODE_ENV !== "production") {
+            console.debug("[landintel-map] parcel click", { parcelRowId });
+          }
+          onSelect(parcelRowId);
+        }
       });
 
       map.on("mouseleave", "parcel-fills", () => {
@@ -390,7 +409,8 @@ export function LeadMap({
 
     const hasNewFitRequest = fitNonce !== lastAppliedFitNonceRef.current;
     const hasSelectionChange = selectedId !== lastSelectedIdRef.current && Boolean(selectedId);
-    if (!hasNewFitRequest && !hasSelectionChange) {
+    const hasLocateSelectedRequest = locateSelectedNonce !== lastLocateSelectedNonceRef.current && Boolean(selectedId);
+    if (!hasNewFitRequest && !hasSelectionChange && !hasLocateSelectedRequest) {
       return;
     }
 
@@ -408,6 +428,9 @@ export function LeadMap({
 
     const padding = selectedBounds ? 72 : 48;
     try {
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[landintel-map] fit_to_bounds", { selectedId, targetBounds, featureCount, zoom: map.getZoom() });
+      }
       map.fitBounds(toMapBounds(targetBounds), {
         padding,
         duration: hasInitializedViewportRef.current ? 600 : 0,
@@ -415,6 +438,7 @@ export function LeadMap({
       });
       hasInitializedViewportRef.current = true;
       lastAppliedFitNonceRef.current = fitNonce;
+      lastLocateSelectedNonceRef.current = locateSelectedNonce;
       lastSelectedIdRef.current = selectedId;
     } catch (error) {
       if (process.env.NODE_ENV !== "production") {
@@ -426,15 +450,38 @@ export function LeadMap({
         });
       }
     }
-  }, [featureCount, fitNonce, geometryResponse, resultBounds, selectedBounds, selectedId]);
+  }, [featureCount, fitNonce, geometryResponse, locateSelectedNonce, resultBounds, selectedBounds, selectedId]);
+
+  let emptyTitle = "No parcel geometry loaded for this view";
+  let emptyBody = "Pan, zoom, or adjust filters to load parcel geometry in the visible map area.";
+  if (loading) {
+    emptyTitle = "Loading parcel geometry";
+    emptyBody = "Fetching parcel boundaries for the current viewport.";
+  } else if (error) {
+    emptyTitle = "Parcel geometry failed to load";
+    emptyBody = error;
+  } else if (featureCount === 0 && totalCount === 0) {
+    emptyTitle = "No parcels match current filters";
+    emptyBody = "Try broadening the current filter set or clearing preset constraints.";
+  } else if ((geometryResponse?.render_mode ?? "none") === "none" || viewport.zoom < 7) {
+    emptyTitle = "Zoom in to load parcel boundaries";
+    emptyBody = "Parcel polygons load once you zoom further into the statewide map.";
+  } else if (process.env.NODE_ENV !== "production" && featureCount === 0) {
+    console.debug("[landintel-map] no_geometry_for_view", {
+      zoom: viewport.zoom,
+      totalCount,
+      requestedBounds: geometryResponse?.requested_bounds,
+      countiesInView: (geometryResponse?.feature_collection?.features ?? []).map((feature) => feature.properties.county_name).filter(Boolean),
+    });
+  }
 
   return (
     <div className="lead-map-shell">
       <div className="lead-map-canvas" ref={mapContainerRef} />
       {featureCount === 0 ? (
         <div className="map-empty-state map-overlay-empty">
-          <strong>No parcel geometry loaded for this view</strong>
-          <p>Pan, zoom, or adjust filters to load parcel geometry in the visible map area.</p>
+          <strong>{emptyTitle}</strong>
+          <p>{emptyBody}</p>
         </div>
       ) : null}
     </div>
