@@ -19,19 +19,12 @@ const PARCEL_TILE_LAYER = "parcels";
 const SELECTED_PARCEL_SOURCE_ID = "landintel-selected-parcel";
 const PARCEL_TILE_MIN_ZOOM = 6;
 const DEFAULT_PARCEL_PMTILES_URL = "/tiles/mississippi_parcels.pmtiles";
-const DEFAULT_PRODUCTION_PARCEL_PMTILES_URL =
-  "https://github.com/rlsmth20/landintel/raw/main/frontend/public/tiles/mississippi_parcels.pmtiles";
 let pmtilesProtocol: Protocol | null = null;
 let pmtilesArchiveUrl: string | null = null;
 
 function getParcelPmtilesUrl() {
   const configured = process.env.NEXT_PUBLIC_PARCEL_PMTILES_URL?.trim();
-  const candidate =
-    configured && configured.length > 0
-      ? configured
-      : process.env.NODE_ENV === "production"
-        ? DEFAULT_PRODUCTION_PARCEL_PMTILES_URL
-        : DEFAULT_PARCEL_PMTILES_URL;
+  const candidate = configured && configured.length > 0 ? configured : DEFAULT_PARCEL_PMTILES_URL;
   if (/^https?:\/\//i.test(candidate)) return candidate;
   if (typeof window !== "undefined") {
     return new URL(candidate, window.location.origin).toString();
