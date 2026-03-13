@@ -17,6 +17,7 @@ BUILDING_METRICS_PATH = ROOT / "data" / "buildings_processed" / "parcel_building
 LEAD_SIGNALS_PATH = ROOT / "data" / "tax_published" / "ms" / "app_ready_mississippi_leads.parquet"
 OUTPUT_ROOT = ROOT / "backend" / "runtime" / "mississippi" / "parcel_index"
 RUNTIME_ROOT = ROOT / "backend" / "runtime" / "mississippi"
+GEOMETRY_OUTPUT_ROOT = RUNTIME_ROOT / "parcel_geometry_index"
 
 
 PARCEL_COLUMNS = [
@@ -127,6 +128,16 @@ def point_geometry_from_wkb(value: bytes | None) -> dict[str, object] | None:
     }
 
 
+def simplified_polygon_wkb(value: bytes | None, tolerance: float = 0.00002) -> bytes | None:
+    if not value:
+        return None
+    try:
+        shape = wkb.loads(value)
+    except Exception:
+        return None
+    return shape.simplify(tolerance, preserve_topology=True).wkb
+
+
 def json_scalar(value):
     if pd.isna(value):
         return None
@@ -181,6 +192,12 @@ def build_runtime_frame() -> pd.DataFrame:
     frame["recommended_view_bucket"] = frame["recommended_view_bucket"].astype("string").fillna("general_ranked")
 
     return frame
+
+
+def build_geometry_runtime(parcels: pd.DataFrame) -> pa.Table:
+    geometry_frame = parcels.loc[:, ["parcel_row_id", "county_name", "geometry"]].copy()
+    geometry_frame["geometry"] = geometry_frame["geometry"].map(simplified_polygon_wkb)
+    return pa.Table.from_pandas(geometry_frame, preserve_index=False)
 
 
 def build_summary_payload(frame: pd.DataFrame) -> dict[str, object]:
@@ -345,11 +362,24 @@ def build_default_geometry_payload(frame: pd.DataFrame) -> dict[str, object]:
 def main() -> None:
     RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+    GEOMETRY_OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
     frame = build_runtime_frame()
+    source_parcels = pd.read_parquet(PARCEL_MASTER_PATH, columns=["parcel_row_id", "county_name", "geometry"], engine="pyarrow")
     table = pa.Table.from_pandas(frame, preserve_index=False)
     ds.write_dataset(
         table,
         base_dir=str(OUTPUT_ROOT),
+        format="parquet",
+        existing_data_behavior="delete_matching",
+        partitioning=["county_name"],
+        file_options=ds.ParquetFileFormat().make_write_options(compression="zstd"),
+        max_rows_per_group=10000,
+        max_rows_per_file=50000,
+    )
+    geometry_table = build_geometry_runtime(source_parcels)
+    ds.write_dataset(
+        geometry_table,
+        base_dir=str(GEOMETRY_OUTPUT_ROOT),
         format="parquet",
         existing_data_behavior="delete_matching",
         partitioning=["county_name"],

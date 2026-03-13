@@ -41,6 +41,7 @@ PROJECT_ROOT = _discover_project_root()
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 EMBEDDED_RUNTIME_DIR = BACKEND_DIR / "runtime" / "mississippi"
 EMBEDDED_PARCEL_INDEX_ROOT = EMBEDDED_RUNTIME_DIR / "parcel_index"
+EMBEDDED_GEOMETRY_INDEX_ROOT = EMBEDDED_RUNTIME_DIR / "parcel_geometry_index"
 EMBEDDED_SUMMARY_PATH = EMBEDDED_RUNTIME_DIR / "summary.json"
 EMBEDDED_PRESETS_PATH = EMBEDDED_RUNTIME_DIR / "presets.json"
 EMBEDDED_DEFAULT_LEADS_PATH = EMBEDDED_RUNTIME_DIR / "default_leads.json"
@@ -207,6 +208,16 @@ def _embedded_parcel_dataset() -> ds.Dataset:
     return ds.dataset(EMBEDDED_PARCEL_INDEX_ROOT, format="parquet", partitioning=partitioning)
 
 
+def _embedded_geometry_runtime_available() -> bool:
+    return EMBEDDED_GEOMETRY_INDEX_ROOT.exists() and any(EMBEDDED_GEOMETRY_INDEX_ROOT.rglob("*.parquet"))
+
+
+@lru_cache(maxsize=1)
+def _embedded_geometry_dataset() -> ds.Dataset:
+    partitioning = ds.partitioning(pa.schema([("county_name", pa.string())]))
+    return ds.dataset(EMBEDDED_GEOMETRY_INDEX_ROOT, format="parquet", partitioning=partitioning)
+
+
 def _using_embedded_runtime() -> bool:
     return (not _full_runtime_available()) and _embedded_parcel_runtime_available()
 
@@ -321,6 +332,36 @@ def _bounded_sorted_batches(
         candidate = pd.concat([candidate, frame], ignore_index=True)
         candidate = candidate.sort_values(sort_by, ascending=ascending, na_position="last").head(keep_rows)
     return candidate.sort_values(sort_by, ascending=ascending, na_position="last").head(keep_rows)
+
+
+def _geojson_bounds(geometry: dict[str, Any]) -> list[float] | None:
+    coordinates = geometry.get("coordinates")
+    if coordinates is None:
+        return None
+    min_lng = float("inf")
+    min_lat = float("inf")
+    max_lng = float("-inf")
+    max_lat = float("-inf")
+
+    def walk(value: Any) -> None:
+        nonlocal min_lng, min_lat, max_lng, max_lat
+        if not isinstance(value, (list, tuple)):
+            return
+        if len(value) >= 2 and isinstance(value[0], (int, float)) and isinstance(value[1], (int, float)):
+            lng = float(value[0])
+            lat = float(value[1])
+            min_lng = min(min_lng, lng)
+            min_lat = min(min_lat, lat)
+            max_lng = max(max_lng, lng)
+            max_lat = max(max_lat, lat)
+            return
+        for item in value:
+            walk(item)
+
+    walk(coordinates)
+    if not all(np.isfinite(value) for value in [min_lng, min_lat, max_lng, max_lat]):
+        return None
+    return [min_lng, min_lat, max_lng, max_lat]
 
 
 def _load_embedded_json(path: Path) -> Any:
@@ -829,6 +870,9 @@ def _geometry_table_for_ids(parcel_row_ids: list[str]) -> pd.DataFrame:
         dataset = ds.dataset(PARCEL_MASTER_PATH, format="parquet")
         table = dataset.to_table(columns=["parcel_row_id", "geometry"], filter=ds.field("parcel_row_id").isin(parcel_row_ids))
         return table.to_pandas()
+    if _embedded_geometry_runtime_available():
+        table = _embedded_geometry_dataset().to_table(columns=["parcel_row_id", "geometry"], filter=ds.field("parcel_row_id").isin(parcel_row_ids))
+        return table.to_pandas()
     base_frame = load_base_frame()
     return base_frame.loc[base_frame["parcel_row_id"].astype("string").isin(parcel_row_ids), ["parcel_row_id", "geometry"]].copy()
 
@@ -1174,14 +1218,24 @@ def get_geometry(
                     }
                 )
         else:
+            geometry_frame = _geometry_table_for_ids(filtered["parcel_row_id"].astype(str).tolist())
+            geometry_lookup = dict(zip(geometry_frame["parcel_row_id"].astype(str), geometry_frame["geometry"]))
+            feature_bounds: list[list[float]] = []
             for _, row in filtered.iterrows():
-                geometry_value = row.get("geometry")
-                if not isinstance(geometry_value, dict):
+                geometry_value = geometry_lookup.get(str(row["parcel_row_id"]))
+                if geometry_value is None:
                     continue
+                if isinstance(geometry_value, dict):
+                    rendered_geometry = geometry_value
+                else:
+                    rendered_geometry = mapping(wkb.loads(geometry_value))
+                bounds_value = _geojson_bounds(rendered_geometry)
+                if bounds_value is not None:
+                    feature_bounds.append(bounds_value)
                 features.append(
                     {
                         "type": "Feature",
-                        "geometry": geometry_value,
+                        "geometry": rendered_geometry,
                         "properties": {
                             "parcel_row_id": str(row["parcel_row_id"]),
                             "parcel_id": _serialize_scalar(row.get("parcel_id")),
@@ -1201,9 +1255,17 @@ def get_geometry(
 
         bounds_payload = None
         if features:
-            lngs = [feature["geometry"]["coordinates"][0] for feature in features]
-            lats = [feature["geometry"]["coordinates"][1] for feature in features]
-            bounds_payload = [round(min(lngs), 6), round(min(lats), 6), round(max(lngs), 6), round(max(lats), 6)]
+            if render_mode in {"points", "centroids"}:
+                lngs = [feature["geometry"]["coordinates"][0] for feature in features]
+                lats = [feature["geometry"]["coordinates"][1] for feature in features]
+                bounds_payload = [round(min(lngs), 6), round(min(lats), 6), round(max(lngs), 6), round(max(lats), 6)]
+            elif feature_bounds:
+                bounds_payload = [
+                    round(min(bound[0] for bound in feature_bounds), 6),
+                    round(min(bound[1] for bound in feature_bounds), 6),
+                    round(max(bound[2] for bound in feature_bounds), 6),
+                    round(max(bound[3] for bound in feature_bounds), 6),
+                ]
 
         items = [
             {"parcel_row_id": str(row["parcel_row_id"]), "path": None, "lead_score_total": _serialize_scalar(row["lead_score_total"])}
