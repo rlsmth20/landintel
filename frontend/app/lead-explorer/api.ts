@@ -49,7 +49,11 @@ async function fetchStaticMetaSource() {
 
 async function fetchStaticLeadSource() {
   if (!staticLeadCache) {
-    staticLeadCache = await fetchStaticJson<LeadRecord[]>("/data/mississippi_lead_explorer.json");
+    try {
+      staticLeadCache = await fetchStaticJson<LeadRecord[]>("/data/mississippi_lead_explorer.json");
+    } catch {
+      staticLeadCache = await fetchStaticLeadDetailSource();
+    }
   }
   return staticLeadCache;
 }
@@ -224,46 +228,60 @@ export async function fetchGeometryViewport(
         // fall through
       }
     }
-    const rows = await fetchStaticLeadSource();
-    const features = rows.slice(0, 250).flatMap((row) => {
-      const geometry = (row.geometry?.centroid ?? row.geometry) as GeometryPoint | null | undefined;
-      if (!geometry || geometry.type !== "Point" || !geometry.coordinates) return [];
-      return [
-        {
-          type: "Feature",
-          geometry,
-          properties: {
-            parcel_row_id: row.parcel_row_id,
-            parcel_id: row.parcel_id,
-            county_name: row.county_name,
-            lead_score_total: row.lead_score_total,
-            lead_score_tier: row.lead_score_tier,
-            parcel_vacant_flag: row.parcel_vacant_flag,
-            wetland_flag: row.wetland_flag,
-            flood_risk_score: row.flood_risk_score,
-            road_access_tier: row.road_access_tier,
-            county_hosted_flag: row.county_hosted_flag,
-            best_source_type: row.best_source_type,
-            selected: row.parcel_row_id === selectedParcelId,
+    try {
+      const rows = await fetchStaticLeadSource();
+      const features = rows.slice(0, 250).flatMap((row) => {
+        const geometry = (row.geometry?.centroid ?? row.geometry) as GeometryPoint | null | undefined;
+        if (!geometry || geometry.type !== "Point" || !geometry.coordinates) return [];
+        return [
+          {
+            type: "Feature",
+            geometry,
+            properties: {
+              parcel_row_id: row.parcel_row_id,
+              parcel_id: row.parcel_id,
+              county_name: row.county_name,
+              lead_score_total: row.lead_score_total,
+              lead_score_tier: row.lead_score_tier,
+              parcel_vacant_flag: row.parcel_vacant_flag,
+              wetland_flag: row.wetland_flag,
+              flood_risk_score: row.flood_risk_score,
+              road_access_tier: row.road_access_tier,
+              county_hosted_flag: row.county_hosted_flag,
+              best_source_type: row.best_source_type,
+              selected: row.parcel_row_id === selectedParcelId,
+            },
           },
-        },
-      ];
-    }) as FeatureCollectionPayload["features"];
-    return {
-      geometry_mode: "static_fallback_points",
-      render_mode: "points",
-      geometry_bounds: bounds ?? undefined,
-      geometry_view_box: undefined,
-      requested_bounds: bounds ?? undefined,
-      zoom,
-      feature_count: features.length,
-      feature_collection: { type: "FeatureCollection", features },
-      items: features.map((feature) => ({
-        parcel_row_id: feature.properties.parcel_row_id,
-        path: null,
-        lead_score_total: feature.properties.lead_score_total ?? null,
-      })),
-    };
+        ];
+      }) as FeatureCollectionPayload["features"];
+      return {
+        geometry_mode: "static_fallback_points",
+        render_mode: features.length > 0 ? "points" : "none",
+        geometry_bounds: bounds ?? undefined,
+        geometry_view_box: undefined,
+        requested_bounds: bounds ?? undefined,
+        zoom,
+        feature_count: features.length,
+        feature_collection: { type: "FeatureCollection", features },
+        items: features.map((feature) => ({
+          parcel_row_id: feature.properties.parcel_row_id,
+          path: null,
+          lead_score_total: feature.properties.lead_score_total ?? null,
+        })),
+      };
+    } catch {
+      return {
+        geometry_mode: "unavailable",
+        render_mode: "none",
+        geometry_bounds: bounds ?? undefined,
+        geometry_view_box: undefined,
+        requested_bounds: bounds ?? undefined,
+        zoom,
+        feature_count: 0,
+        feature_collection: { type: "FeatureCollection", features: [] },
+        items: [],
+      };
+    }
   }
 }
 
