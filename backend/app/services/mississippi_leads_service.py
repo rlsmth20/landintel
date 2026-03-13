@@ -1265,6 +1265,33 @@ def get_geometry(
 
 
 def get_presets() -> list[dict[str, Any]]:
+    if _using_embedded_runtime():
+        presets: list[dict[str, Any]] = []
+        for view_name, definition in PRESET_DEFINITIONS.items():
+            expression = _embedded_filter_expression(**definition["filters"])
+            row_count = _embedded_count_rows(expression)
+            score_sum = 0.0
+            score_count = 0
+            scanner = _embedded_parcel_dataset().scanner(columns=["lead_score_total"], filter=expression, batch_size=50000)
+            for batch in scanner.to_batches():
+                frame = batch.to_pandas()
+                if frame.empty:
+                    continue
+                scores = pd.to_numeric(frame["lead_score_total"], errors="coerce")
+                score_sum += float(scores.fillna(0).sum())
+                score_count += int(scores.notna().sum())
+            mean_score = (score_sum / score_count) if score_count else 0
+            presets.append(
+                {
+                    "view_name": view_name,
+                    "description": definition["description"],
+                    "filter_expression": definition["filter_expression"],
+                    "row_count": str(row_count),
+                    "average_lead_score": f"{mean_score:.1f}",
+                }
+            )
+        return presets
+
     frame = load_base_frame()
     presets: list[dict[str, Any]] = []
     for view_name, definition in PRESET_DEFINITIONS.items():
