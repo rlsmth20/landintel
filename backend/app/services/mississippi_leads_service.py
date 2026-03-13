@@ -158,17 +158,16 @@ def load_app_ready_frame() -> pd.DataFrame:
     return frame
 
 
-@lru_cache(maxsize=1)
-def load_spatial_frame() -> pd.DataFrame:
-    frame = load_app_ready_frame().copy()
-    frame["_shape"] = frame["geometry"].apply(lambda value: wkb.loads(value) if value else None)
-    frame["_minx"] = frame["_shape"].apply(lambda geom: geom.bounds[0] if geom else None)
-    frame["_miny"] = frame["_shape"].apply(lambda geom: geom.bounds[1] if geom else None)
-    frame["_maxx"] = frame["_shape"].apply(lambda geom: geom.bounds[2] if geom else None)
-    frame["_maxy"] = frame["_shape"].apply(lambda geom: geom.bounds[3] if geom else None)
-    frame["_centroid_x"] = frame["_shape"].apply(lambda geom: geom.centroid.x if geom else None)
-    frame["_centroid_y"] = frame["_shape"].apply(lambda geom: geom.centroid.y if geom else None)
-    return frame
+def _attach_spatial_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    spatial = frame.copy()
+    spatial["_shape"] = spatial["geometry"].apply(lambda value: wkb.loads(value) if value else None)
+    spatial["_minx"] = spatial["_shape"].apply(lambda geom: geom.bounds[0] if geom else None)
+    spatial["_miny"] = spatial["_shape"].apply(lambda geom: geom.bounds[1] if geom else None)
+    spatial["_maxx"] = spatial["_shape"].apply(lambda geom: geom.bounds[2] if geom else None)
+    spatial["_maxy"] = spatial["_shape"].apply(lambda geom: geom.bounds[3] if geom else None)
+    spatial["_centroid_x"] = spatial["_shape"].apply(lambda geom: geom.centroid.x if geom else None)
+    spatial["_centroid_y"] = spatial["_shape"].apply(lambda geom: geom.centroid.y if geom else None)
+    return spatial
 
 
 @lru_cache(maxsize=1)
@@ -445,12 +444,13 @@ def get_geometry(
     road_distance_ft_max: float | None = None,
     limit: int = GEOMETRY_DEFAULT_LIMIT,
 ) -> dict[str, Any]:
-    frame = load_spatial_frame()
+    base_frame = load_app_ready_frame()
     if parcel_row_ids:
-        filtered = frame.loc[frame["parcel_row_id"].astype("string").isin(parcel_row_ids)].copy()
+        filtered = base_frame.loc[base_frame["parcel_row_id"].astype("string").isin(parcel_row_ids)].copy()
+        filtered = _attach_spatial_columns(filtered)
     else:
         filtered = _apply_filters(
-            frame,
+            base_frame,
             county_name=county_name,
             lead_score_tier=lead_score_tier,
             min_lead_score_total=min_lead_score_total,
@@ -469,9 +469,10 @@ def get_geometry(
             road_access_tier=road_access_tier,
             road_distance_ft_max=road_distance_ft_max,
         )
-        filtered = _apply_bounds_filter(filtered, bounds=bounds, selected_parcel_id=selected_parcel_id)
         safe_limit = _clamp_limit(limit, default=GEOMETRY_DEFAULT_LIMIT, max_limit=GEOMETRY_MAX_LIMIT)
         filtered = filtered.sort_values("lead_score_total", ascending=False, na_position="last").head(safe_limit)
+        filtered = _attach_spatial_columns(filtered)
+        filtered = _apply_bounds_filter(filtered, bounds=bounds, selected_parcel_id=selected_parcel_id)
 
     render_mode = _render_mode_for_zoom(zoom)
     feature_bounds = _feature_bounds(filtered)

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { fetchGeometryViewport, fetchLeadDetail, fetchLeads, fetchPresets, fetchSummary } from "./lead-explorer/api";
+import { fetchGeometry, fetchLeadDetail, fetchLeads, fetchPresets, fetchSummary } from "./lead-explorer/api";
 import { LeadDetail } from "./lead-explorer/LeadDetail";
 import { LeadMap } from "./lead-explorer/LeadMap";
 import type { ExplorerMeta, Filters, GeometryResponse, LeadRecord, MapOverlayId, MapViewportState, PresetItem, SortField } from "./lead-explorer/types";
@@ -176,7 +176,10 @@ export default function LeadExplorerClient() {
   }, [selectedId]);
 
   useEffect(() => {
-    if (!viewport.bounds) {
+    const parcelIds = leads.slice(0, GEOMETRY_LIMIT).map((lead) => lead.parcel_row_id);
+    if (selectedId && !parcelIds.includes(selectedId)) parcelIds.unshift(selectedId);
+    if (parcelIds.length === 0) {
+      setGeometryResponse(null);
       return;
     }
 
@@ -185,13 +188,7 @@ export default function LeadExplorerClient() {
       setGeometryLoading(true);
       setGeometryError(null);
       try {
-        const response = await fetchGeometryViewport(
-          debouncedFilters,
-          viewport.bounds,
-          viewport.zoom,
-          selectedId,
-          GEOMETRY_LIMIT,
-        );
+        const response = await fetchGeometry(parcelIds, viewport.zoom, selectedId);
         if (cancelled) return;
         setGeometryResponse(response);
       } catch (error) {
@@ -205,7 +202,7 @@ export default function LeadExplorerClient() {
     return () => {
       cancelled = true;
     };
-  }, [debouncedFilters, selectedId, viewport.bounds, viewport.zoom]);
+  }, [leads, selectedId, viewport.zoom]);
 
   const countySuggestions = useMemo(
     () => summary?.sections?.top_counties?.map((item) => item.key).filter(Boolean) ?? [],

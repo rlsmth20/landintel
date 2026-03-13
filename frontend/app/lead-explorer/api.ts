@@ -86,9 +86,11 @@ export async function fetchLeadDetail(parcelRowId: string): Promise<LeadRecord> 
   return fetchJson<LeadRecord>(`/api/leads/${parcelRowId}`);
 }
 
-export async function fetchGeometry(parcelRowIds: string[]): Promise<GeometryResponse> {
+export async function fetchGeometry(parcelRowIds: string[], zoom?: number, selectedParcelId?: string | null): Promise<GeometryResponse> {
   const searchParams = new URLSearchParams();
   parcelRowIds.forEach((id) => searchParams.append("parcel_row_id", id));
+  if (zoom !== undefined) searchParams.set("zoom", String(zoom));
+  if (selectedParcelId) searchParams.set("selected_parcel_id", selectedParcelId);
   return fetchJson<GeometryResponse>("/api/leads/geometry", searchParams);
 }
 
