@@ -220,11 +220,26 @@ function initializeParcelLayers(map: Map) {
     id: "parcel-hover",
     type: "line",
     source: PARCEL_SOURCE_ID,
-    filter: ["all", ["==", ["geometry-type"], "Polygon"], ["boolean", ["feature-state", "hover"], false]],
+    filter: ["==", ["geometry-type"], "Polygon"],
     paint: {
-      "line-color": "#ffe5cf",
-      "line-width": 3.6,
-      "line-opacity": 1,
+      "line-color": [
+        "case",
+        ["boolean", ["feature-state", "hover"], false],
+        "#ffe5cf",
+        "#ffe5cf",
+      ],
+      "line-width": [
+        "case",
+        ["boolean", ["feature-state", "hover"], false],
+        3.6,
+        0,
+      ],
+      "line-opacity": [
+        "case",
+        ["boolean", ["feature-state", "hover"], false],
+        1,
+        0,
+      ],
     },
   });
 }
