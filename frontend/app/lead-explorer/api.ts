@@ -53,6 +53,11 @@ async function fetchStaticLeadSource() {
   return staticLeadCache;
 }
 
+export async function fetchStaticLeadDetail(parcelRowId: string): Promise<LeadRecord | null> {
+  const rows = await fetchStaticLeadSource();
+  return rows.find((row) => row.parcel_row_id === parcelRowId) ?? null;
+}
+
 export async function fetchSummary(): Promise<ExplorerMeta> {
   try {
     return await fetchJson<ExplorerMeta>("/api/summary");

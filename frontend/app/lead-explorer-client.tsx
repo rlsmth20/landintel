@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { fetchGeometryViewport, fetchLeadDetail, fetchLeads, fetchPresets, fetchSummary } from "./lead-explorer/api";
+import { fetchGeometryViewport, fetchLeadDetail, fetchLeads, fetchPresets, fetchStaticLeadDetail, fetchSummary } from "./lead-explorer/api";
 import { LeadDetail } from "./lead-explorer/LeadDetail";
 import { LeadMap } from "./lead-explorer/LeadMap";
 import type { ExplorerMeta, Filters, GeometryResponse, LeadRecord, MapOverlayId, MapViewportState, PresetItem, SortField } from "./lead-explorer/types";
@@ -196,9 +196,18 @@ export default function LeadExplorerClient() {
         setSelectedLead(response);
       } catch (error) {
         if (cancelled) return;
-        setDetailError(error instanceof Error ? error.message : "Failed to load parcel detail");
-        if (summaryFallback) {
-          setSelectedLead(summaryFallback);
+        let staticFallback: LeadRecord | null = null;
+        try {
+          staticFallback = await fetchStaticLeadDetail(detailId);
+        } catch {
+          staticFallback = null;
+        }
+        const fallbackLead = staticFallback ?? summaryFallback;
+        if (fallbackLead) {
+          setSelectedLead(fallbackLead);
+          setDetailError(null);
+        } else {
+          setDetailError(error instanceof Error ? error.message : "Failed to load parcel detail");
         }
       } finally {
         if (!cancelled) setDetailLoading(false);
