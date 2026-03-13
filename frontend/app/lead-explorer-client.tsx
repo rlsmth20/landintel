@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { fetchGeometry, fetchLeadDetail, fetchLeads, fetchPresets, fetchSummary } from "./lead-explorer/api";
+import { fetchGeometryViewport, fetchLeadDetail, fetchLeads, fetchPresets, fetchSummary } from "./lead-explorer/api";
 import { LeadDetail } from "./lead-explorer/LeadDetail";
 import { LeadMap } from "./lead-explorer/LeadMap";
 import type { ExplorerMeta, Filters, GeometryResponse, LeadRecord, MapOverlayId, MapViewportState, PresetItem, SortField } from "./lead-explorer/types";
@@ -10,6 +10,7 @@ import {
   INITIAL_FILTERS,
   MAP_OVERLAYS,
   PRESET_LABELS,
+  TABLE_COLUMNS,
   applyPreset,
   badgeTone,
   formatCurrency,
@@ -22,13 +23,41 @@ const MAX_LIMIT = 250;
 const GEOMETRY_LIMIT = 250;
 const FILTER_DEBOUNCE_MS = 250;
 const DEFAULT_VIEWPORT: MapViewportState = {
-  center: [-98.5795, 39.8283],
-  zoom: 3.4,
-  bounds: null,
+  center: [-89.6787, 32.7416],
+  zoom: 6.1,
+  bounds: [-91.65, 30.15, -88.0, 35.1],
 };
 
 function LeadBadge({ label, tone }: { label: string; tone?: string }) {
   return <span className={`badge badge-${tone ?? "neutral"}`}>{label}</span>;
+}
+
+function HeaderCell({
+  label,
+  tooltip,
+  onSort,
+  indicator,
+}: {
+  label: string;
+  tooltip: string;
+  onSort?: () => void;
+  indicator?: string;
+}) {
+  return (
+    <th title={tooltip}>
+      {onSort ? (
+        <button type="button" className="table-header-button" onClick={onSort} title={tooltip}>
+          <span>{label}{indicator}</span>
+          <span className="header-help" aria-hidden="true">?</span>
+        </button>
+      ) : (
+        <div className="table-header-static">
+          <span>{label}</span>
+          <span className="header-help" aria-hidden="true">?</span>
+        </div>
+      )}
+    </th>
+  );
 }
 
 function SummaryValue({
@@ -175,9 +204,7 @@ export default function LeadExplorerClient() {
   }, [selectedId]);
 
   useEffect(() => {
-    const parcelIds = leads.slice(0, GEOMETRY_LIMIT).map((lead) => lead.parcel_row_id);
-    if (selectedId && !parcelIds.includes(selectedId)) parcelIds.unshift(selectedId);
-    if (parcelIds.length === 0) {
+    if (!viewport.bounds) {
       setGeometryResponse(null);
       return;
     }
@@ -187,7 +214,13 @@ export default function LeadExplorerClient() {
       setGeometryLoading(true);
       setGeometryError(null);
       try {
-        const response = await fetchGeometry(parcelIds, viewport.zoom, selectedId);
+        const response = await fetchGeometryViewport(
+          debouncedFilters,
+          viewport.bounds,
+          viewport.zoom,
+          selectedId,
+          GEOMETRY_LIMIT,
+        );
         if (cancelled) return;
         setGeometryResponse(response);
       } catch (error) {
@@ -201,7 +234,7 @@ export default function LeadExplorerClient() {
     return () => {
       cancelled = true;
     };
-  }, [leads, selectedId, viewport.zoom]);
+  }, [debouncedFilters, selectedId, viewport.bounds, viewport.zoom]);
 
   const countySuggestions = useMemo(
     () => summary?.sections?.top_counties?.map((item) => item.key).filter(Boolean) ?? [],
@@ -594,10 +627,8 @@ export default function LeadExplorerClient() {
           {summaryError ? <p className="error-text">{summaryError}</p> : null}
           <div className="stats-grid">
             <div>
-              <span className="stat-label">Statewide leads</span>
-              <strong>
-                <SummaryValue summary={summary} section="statewide" metric="lead_count" />
-              </strong>
+              <span className="stat-label">Statewide parcels</span>
+              <strong><SummaryValue summary={summary} section="statewide" metric="lead_count" /></strong>
             </div>
             <div>
               <span className="stat-label">Average score</span>
@@ -642,8 +673,8 @@ export default function LeadExplorerClient() {
           <section className="map-card">
             <div className="card-header">
               <div className="card-header-copy">
-                <h3>Map</h3>
-                <p>Map bounds auto-fit to the current parcel set. Layer controls are structured for future FEMA flood, wetlands, utilities, slope, road access, and zoning overlays.</p>
+                <h3>Parcel Map</h3>
+                <p>Statewide parcel exploration with overlay-ready GIS layers. Use filters to narrow parcels, then inspect geometry and details in place.</p>
               </div>
               <div className="card-header-actions">
                 <button type="button" className="chip" onClick={() => setFitNonce((current) => current + 1)}>
@@ -662,13 +693,20 @@ export default function LeadExplorerClient() {
               viewport={viewport}
               onViewportChange={setViewport}
             />
+            <div className="map-legend">
+              <span><i className="legend-swatch legend-base" /> Parcel</span>
+              <span><i className="legend-swatch legend-selected" /> Selected</span>
+              <span><i className="legend-swatch legend-wetland" /> Wetland overlay</span>
+              <span><i className="legend-swatch legend-road" /> Strong road access</span>
+              <span><i className="legend-swatch legend-flood" /> Flood signal</span>
+            </div>
           </section>
 
           <section className="list-card">
             <div className="card-header">
               <div className="card-header-copy">
-                <h3>Results</h3>
-                <p>Page {currentPage} of {pageCount}. Server-side sort, filter, and pagination.</p>
+                <h3>Parcel Results</h3>
+                <p>Page {currentPage} of {pageCount}. Filters narrow the full statewide parcel base; motivation and risk signals layer on top.</p>
               </div>
               <div className="inline-badges">
                 <button
@@ -695,36 +733,15 @@ export default function LeadExplorerClient() {
               <table>
                 <thead>
                   <tr>
-                    <th>County</th>
-                    <th>Parcel ID</th>
-                    <th>
-                      <button type="button" onClick={() => handleSort("acreage")}>
-                        Acreage{sortIndicator("acreage")}
-                      </button>
-                    </th>
-                    <th>Owner</th>
-                    <th>
-                      <button type="button" onClick={() => handleSort("lead_score_total")}>
-                        Score{sortIndicator("lead_score_total")}
-                      </button>
-                    </th>
-                    <th>Tier</th>
-                    <th>Vacant</th>
-                    <th>
-                      <button type="button" onClick={() => handleSort("road_distance_ft")}>
-                        Road{sortIndicator("road_distance_ft")}
-                      </button>
-                    </th>
-                    <th>Growth</th>
-                    <th>Source</th>
-                    <th>Confidence</th>
-                    <th>
-                      <button type="button" onClick={() => handleSort("delinquent_amount")}>
-                        Amount{sortIndicator("delinquent_amount")}
-                      </button>
-                    </th>
-                    <th>Amount trust</th>
-                    <th>Reason</th>
+                    {TABLE_COLUMNS.map((column) => (
+                      <HeaderCell
+                        key={column.key}
+                        label={column.label}
+                        tooltip={column.tooltip}
+                        onSort={column.sortField ? (() => handleSort(column.sortField!)) : undefined}
+                        indicator={column.sortField ? sortIndicator(column.sortField!) : ""}
+                      />
+                    ))}
                   </tr>
                 </thead>
                 <tbody>

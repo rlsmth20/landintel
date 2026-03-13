@@ -320,7 +320,7 @@ button {
 
 .map-card,
 .list-card {
-  padding: 18px;
+  padding: 22px;
 }
 
 .card-header {
@@ -335,7 +335,7 @@ button {
 
 .lead-map-shell {
   position: relative;
-  min-height: 520px;
+  min-height: 580px;
   border-radius: 22px;
   overflow: hidden;
   border: 1px solid rgba(58, 43, 24, 0.12);
@@ -344,12 +344,12 @@ button {
 
 .lead-map-canvas {
   width: 100%;
-  min-height: 520px;
+  min-height: 580px;
 }
 
 .lead-map-shell .maplibregl-map {
   width: 100%;
-  min-height: 520px;
+  min-height: 580px;
 }
 
 .lead-map-shell .maplibregl-canvas {
@@ -380,7 +380,7 @@ button {
 .map-empty-state {
   display: grid;
   place-items: center;
-  min-height: 520px;
+  min-height: 580px;
   padding: 24px;
   border: 1px dashed rgba(58, 43, 24, 0.16);
   border-radius: 22px;
@@ -406,7 +406,7 @@ button {
 .table-wrap {
   overflow-x: auto;
   overflow-y: auto;
-  max-height: 68vh;
+  max-height: 72vh;
   border-radius: 18px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.55);
@@ -414,17 +414,17 @@ button {
 
 table {
   width: 100%;
-  min-width: 1120px;
+  min-width: 1560px;
   border-collapse: collapse;
-  font-size: 0.9rem;
+  font-size: 0.94rem;
 }
 
 th,
 td {
-  padding: 11px 12px;
+  padding: 14px 16px;
   border-bottom: 1px solid rgba(58, 43, 24, 0.08);
   text-align: left;
-  vertical-align: top;
+  vertical-align: middle;
   min-width: 0;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -435,15 +435,39 @@ th {
   top: 0;
   background: rgba(246, 234, 216, 0.96);
   z-index: 1;
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 
-th button {
+.table-header-button,
+.table-header-static {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   border: 0;
   background: transparent;
   padding: 0;
   color: inherit;
   font-weight: 700;
   text-align: left;
+  white-space: nowrap;
+}
+
+.table-header-button {
+  cursor: pointer;
+}
+
+.header-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(47, 107, 109, 0.12);
+  color: var(--olive);
+  font-size: 0.7rem;
+  font-weight: 800;
 }
 
 tbody tr {
@@ -458,6 +482,49 @@ tbody tr.is-selected {
   background: rgba(217, 71, 47, 0.14);
   box-shadow: inset 4px 0 0 rgba(217, 71, 47, 0.78);
 }
+
+tbody td:first-child,
+tbody td:nth-child(2),
+tbody td:nth-child(5),
+tbody td:nth-child(6),
+tbody td:nth-child(7),
+tbody td:nth-child(8),
+tbody td:nth-child(9),
+tbody td:nth-child(10),
+tbody td:nth-child(11),
+tbody td:nth-child(12),
+tbody td:nth-child(13) {
+  white-space: nowrap;
+}
+
+.map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.map-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid rgba(23, 57, 58, 0.35);
+}
+
+.legend-base { background: rgba(47, 107, 109, 0.36); }
+.legend-selected { background: rgba(217, 71, 47, 0.42); }
+.legend-wetland { background: rgba(97, 127, 86, 0.38); }
+.legend-road { background: rgba(31, 127, 128, 0.4); }
+.legend-flood { background: rgba(95, 141, 184, 0.38); }
 
 .badge {
   display: inline-flex;

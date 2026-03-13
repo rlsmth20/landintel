@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import json
 import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
-from shapely.geometry import box, mapping
+import pyarrow.dataset as ds
 from shapely import wkb
+from shapely.geometry import mapping
 
 from app.settings import GEOMETRY_DEFAULT_LIMIT, GEOMETRY_MAX_LIMIT, LEADS_DEFAULT_LIMIT, LEADS_MAX_LIMIT
 
@@ -22,33 +23,16 @@ def _discover_project_root() -> Path:
     service_repo_root = Path(__file__).resolve().parents[3]
     candidates = [cwd, cwd.parent, service_repo_root]
     for candidate in candidates:
-        if (candidate / "frontend" / "public" / "data").exists():
+        if (candidate / "data" / "parcels").exists():
             return candidate
     return cwd
 
 
 PROJECT_ROOT = _discover_project_root()
-DATA_DIR = PROJECT_ROOT / "frontend" / "public" / "data"
-APP_READY_PATH = PROJECT_ROOT / "data" / "tax_published" / "ms" / "app_ready_mississippi_leads.parquet"
-STATIC_FEED_PATH = DATA_DIR / "mississippi_lead_explorer.json"
-META_PATH = DATA_DIR / "mississippi_lead_explorer_meta.json"
-GEOMETRY_PATH = DATA_DIR / "mississippi_lead_explorer_geometries.json"
-
-BOOL_FILTER_FIELDS = {
-    "parcel_vacant_flag",
-    "county_hosted_flag",
-    "high_confidence_link_flag",
-    "corporate_owner_flag",
-    "absentee_owner_flag",
-    "out_of_state_owner_flag",
-}
-LIST_FILTER_FIELDS = {
-    "lead_score_tier",
-    "amount_trust_tier",
-    "growth_pressure_bucket",
-    "recommended_view_bucket",
-    "road_access_tier",
-}
+PARCEL_MASTER_PATH = PROJECT_ROOT / "data" / "parcels" / "mississippi_parcels_master.parquet"
+OWNER_LEADS_PATH = PROJECT_ROOT / "data" / "parcels" / "mississippi_parcels_owner_leads.parquet"
+BUILDING_METRICS_PATH = PROJECT_ROOT / "data" / "buildings_processed" / "parcel_building_metrics.parquet"
+LEAD_SIGNALS_PATH = PROJECT_ROOT / "data" / "tax_published" / "ms" / "app_ready_mississippi_leads.parquet"
 
 SUMMARY_FIELDS = [
     "parcel_row_id",
@@ -71,18 +55,49 @@ SUMMARY_FIELDS = [
     "recommended_view_bucket",
 ]
 
-
-def _to_bool(value: str | bool | None) -> bool | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return value
-    lowered = value.strip().lower()
-    if lowered in {"true", "1", "yes"}:
-        return True
-    if lowered in {"false", "0", "no"}:
-        return False
-    return None
+PRESET_DEFINITIONS = {
+    "safest_early_investor_use": {
+        "description": "High-confidence county-hosted parcels with stronger amount reliability, no wetlands, and vacancy preference.",
+        "filter_expression": "county_hosted_flag=true AND high_confidence_link_flag=true AND parcel_vacant_flag=true AND wetland_flag=false AND amount_trust_tier in trusted/use_with_caution",
+        "filters": {
+            "parcel_vacant_flag": True,
+            "county_hosted_flag": True,
+            "high_confidence_link_flag": True,
+            "wetland_flag": False,
+            "amount_trust_tier": ["trusted", "use_with_caution"],
+            "min_lead_score_total": 65,
+        },
+    },
+    "vacant_land_targeting": {
+        "description": "Vacant parcels with stronger road access and fewer wetland constraints.",
+        "filter_expression": "parcel_vacant_flag=true AND wetland_flag=false AND road_access_tier in direct/near",
+        "filters": {
+            "parcel_vacant_flag": True,
+            "wetland_flag": False,
+            "road_access_tier": ["direct", "near"],
+            "min_lead_score_total": 65,
+        },
+    },
+    "larger_acreage_land_targeting": {
+        "description": "Vacant larger-acreage parcels for land assembly and development exploration.",
+        "filter_expression": "parcel_vacant_flag=true AND county_hosted_flag=true AND acreage>=5",
+        "filters": {
+            "parcel_vacant_flag": True,
+            "county_hosted_flag": True,
+            "acreage_min": 5,
+            "min_lead_score_total": 65,
+        },
+    },
+    "growth_edge_targeting": {
+        "description": "Parcels in moderate-to-high growth areas with usable road access.",
+        "filter_expression": "growth_pressure_bucket in moderate/high AND road_access_tier in direct/near/moderate",
+        "filters": {
+            "growth_pressure_bucket": ["moderate", "high"],
+            "road_access_tier": ["direct", "near", "moderate"],
+            "min_lead_score_total": 65,
+        },
+    },
+}
 
 
 def _normalize_string(series: pd.Series | None, index: pd.Index | None = None) -> pd.Series:
@@ -104,87 +119,316 @@ def _serialize_scalar(value: Any) -> Any:
     return value
 
 
-def _geometry_payload(value: bytes | None) -> dict[str, Any] | None:
-    if not value:
-        return None
-    geometry = wkb.loads(value)
-    centroid = geometry.centroid
-    bounds = geometry.bounds
-    return {
-        "type": geometry.geom_type,
-        "centroid": {"type": "Point", "coordinates": [round(float(centroid.x), 6), round(float(centroid.y), 6)]},
-        "bounds": [round(float(v), 6) for v in bounds],
+def _to_float_series(frame: pd.DataFrame, column: str) -> pd.Series:
+    if column not in frame.columns:
+        return pd.Series(np.nan, index=frame.index, dtype="float64")
+    return pd.to_numeric(frame[column], errors="coerce")
+
+
+def _coalesce_numeric(frame: pd.DataFrame, columns: list[str]) -> pd.Series:
+    result = pd.Series(np.nan, index=frame.index, dtype="float64")
+    for column in columns:
+        if column not in frame.columns:
+            continue
+        result = result.fillna(_to_float_series(frame, column))
+    return result
+
+
+def _score_tier(score: pd.Series) -> pd.Series:
+    return pd.cut(
+        score.fillna(0),
+        bins=[-1, 49.999, 64.999, 79.999, 100.001],
+        labels=["low", "medium", "high", "very_high"],
+    ).astype("string")
+
+
+def _row_top_drivers(frame: pd.DataFrame, components: list[str], top_n: int = 3) -> list[list[str | None]]:
+    rows: list[list[str | None]] = []
+    for _, row in frame[components].iterrows():
+        ordered = sorted(
+            ((component, float(row.get(component) or 0)) for component in components),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        rows.append([ordered[index][0] if index < len(ordered) else None for index in range(top_n)])
+    return rows
+
+
+def _component_reason(component: str | None) -> str | None:
+    reasons = {
+        "buildability_component": "buildability and development potential",
+        "environmental_component": "environmental resilience and lower constraint burden",
+        "owner_targeting_component": "owner motivation and outreach potential",
+        "vacant_land_component": "vacancy and limited building intensity",
+        "growth_pressure_component": "growth edge context and nearby activity",
+        "access_score": "usable road access",
+        "delinquency_component": "motivation signals from tax distress",
+        "source_confidence_component": "data reliability and source strength",
+        "size_score": "larger tract size",
     }
+    return reasons.get(component)
 
 
-def _serialize_bounds(bounds: tuple[float, float, float, float] | None) -> list[float] | None:
-    if bounds is None:
-        return None
-    return [round(float(value), 6) for value in bounds]
+def _county_hosted_flag(series: pd.Series) -> pd.Series:
+    normalized = _normalize_string(series, index=series.index).fillna("")
+    return normalized.str.contains("direct_download|county", case=False, regex=True)
 
 
-def runtime_file_diagnostics() -> dict[str, dict[str, int | bool | str | None]]:
-    diagnostics: dict[str, dict[str, int | bool | str | None]] = {}
-    paths = {
-        "app_ready_parquet": APP_READY_PATH,
-        "static_feed_json": STATIC_FEED_PATH,
-        "meta_json": META_PATH,
-        "geometry_json": GEOMETRY_PATH,
-    }
-    for name, path in paths.items():
-        diagnostics[name] = {
-            "cwd": str(Path.cwd()),
-            "project_root": str(PROJECT_ROOT),
-            "path": str(path.resolve(strict=False)),
-            "exists": path.exists(),
-            "size_bytes": path.stat().st_size if path.exists() else None,
-        }
-    return diagnostics
+@lru_cache(maxsize=1)
+def load_base_frame() -> pd.DataFrame:
+    if not PARCEL_MASTER_PATH.exists():
+        raise FileNotFoundError(f"Parcel master not found: {PARCEL_MASTER_PATH}")
 
+    parcel_columns = [
+        "parcel_row_id",
+        "parcel_id",
+        "county_name",
+        "county_fips",
+        "state_code",
+        "owner_name",
+        "land_use_raw",
+        "tax_acres",
+        "gis_acres",
+        "total_acres",
+        "parcel_area_acres",
+        "latitude",
+        "longitude",
+        "road_distance_ft",
+        "road_access_tier",
+        "wetland_flag",
+        "flood_risk_score",
+        "buildability_score",
+        "environment_score",
+        "investment_score",
+        "electric_provider_name",
+        "total_value",
+    ]
+    parcels = pd.read_parquet(PARCEL_MASTER_PATH, columns=parcel_columns, engine="pyarrow")
+    parcels["acreage"] = _coalesce_numeric(parcels, ["total_acres", "parcel_area_acres", "gis_acres", "tax_acres"])
+    parcels["land_use"] = _normalize_string(parcels.get("land_use_raw"), index=parcels.index)
+    parcels["assessed_total_value"] = _to_float_series(parcels, "total_value")
+    parcels = parcels.drop(columns=["land_use_raw", "tax_acres", "gis_acres", "total_acres", "parcel_area_acres", "total_value"])
 
-def _missing_runtime_file_error(label: str, path_key: str) -> FileNotFoundError:
-    diagnostics = runtime_file_diagnostics().get(path_key, {})
-    return FileNotFoundError(
-        f"{label} not found: {diagnostics.get('path')} | cwd={diagnostics.get('cwd')} | "
-        f"project_root={diagnostics.get('project_root')}"
+    owners = pd.read_parquet(
+        OWNER_LEADS_PATH,
+        columns=[
+            "parcel_row_id",
+            "owner_type",
+            "absentee_owner_flag",
+            "out_of_state_owner_flag",
+            "owner_parcel_count",
+            "owner_total_acres",
+            "mailer_target_score",
+            "corporate_owner_flag",
+        ],
+        engine="pyarrow",
     )
 
+    buildings = pd.read_parquet(
+        BUILDING_METRICS_PATH,
+        columns=[
+            "parcel_row_id",
+            "building_count",
+            "building_area_total",
+            "parcel_vacant_flag",
+            "nearby_building_count_1km",
+            "nearby_building_density",
+            "growth_pressure_bucket",
+        ],
+        engine="pyarrow",
+    )
 
-@lru_cache(maxsize=1)
-def load_app_ready_frame() -> pd.DataFrame:
-    if not APP_READY_PATH.exists():
-        raise _missing_runtime_file_error("Mississippi leads dataset", "app_ready_parquet")
-    frame = pd.read_parquet(APP_READY_PATH)
+    signals = pd.read_parquet(
+        LEAD_SIGNALS_PATH,
+        columns=[
+            "parcel_row_id",
+            "delinquent_amount",
+            "delinquent_amount_bucket",
+            "delinquent_flag",
+            "forfeited_flag",
+            "best_source_type",
+            "best_source_name",
+            "source_confidence_tier",
+            "county_source_coverage_tier",
+            "amount_trust_tier",
+            "high_confidence_link_flag",
+            "county_hosted_flag",
+            "lead_score_total",
+            "lead_score_tier",
+            "lead_score_driver_1",
+            "lead_score_driver_2",
+            "lead_score_driver_3",
+            "lead_score_explanation",
+            "size_score",
+            "access_score",
+            "buildability_component",
+            "environmental_component",
+            "owner_targeting_component",
+            "delinquency_component",
+            "source_confidence_component",
+            "vacant_land_component",
+            "growth_pressure_component",
+            "recommended_sort_reason",
+            "top_score_driver",
+            "caution_flags",
+            "vacant_reason",
+            "growth_pressure_reason",
+            "recommended_use_case",
+            "recommended_view_bucket",
+        ],
+        engine="pyarrow",
+    )
+
+    frame = parcels.merge(owners, on="parcel_row_id", how="left")
+    frame = frame.merge(buildings, on="parcel_row_id", how="left")
+    frame = frame.merge(signals, on="parcel_row_id", how="left")
+
+    frame["parcel_vacant_flag"] = frame["parcel_vacant_flag"].fillna(False)
+    frame["corporate_owner_flag"] = frame["corporate_owner_flag"].fillna(False)
+    frame["absentee_owner_flag"] = frame["absentee_owner_flag"].fillna(False)
+    frame["out_of_state_owner_flag"] = frame["out_of_state_owner_flag"].fillna(False)
+    frame["high_confidence_link_flag"] = frame["high_confidence_link_flag"].fillna(False)
+    frame["county_hosted_flag"] = frame["county_hosted_flag"].fillna(_county_hosted_flag(frame.get("best_source_type")))
+    frame["delinquent_flag"] = frame["delinquent_flag"].fillna(False)
+    frame["forfeited_flag"] = frame["forfeited_flag"].fillna(False)
+    frame["amount_trust_tier"] = _normalize_string(frame.get("amount_trust_tier"), index=frame.index).fillna("not_reported")
+    frame["source_confidence_tier"] = _normalize_string(frame.get("source_confidence_tier"), index=frame.index).fillna("parcel_master_only")
+    frame["county_source_coverage_tier"] = _normalize_string(frame.get("county_source_coverage_tier"), index=frame.index).fillna("statewide_parcel_base")
+    frame["best_source_type"] = _normalize_string(frame.get("best_source_type"), index=frame.index).fillna("parcel_master")
+    frame["best_source_name"] = _normalize_string(frame.get("best_source_name"), index=frame.index).fillna("Mississippi Parcel Master")
+    frame["growth_pressure_bucket"] = _normalize_string(frame.get("growth_pressure_bucket"), index=frame.index).fillna("unknown")
+    frame["recommended_view_bucket"] = _normalize_string(frame.get("recommended_view_bucket"), index=frame.index).fillna("general_ranked")
+    frame["owner_type"] = _normalize_string(frame.get("owner_type"), index=frame.index).fillna("unknown")
+    frame["state_code"] = _normalize_string(frame.get("state_code"), index=frame.index).fillna("MS")
+    frame["county_name"] = _normalize_string(frame.get("county_name"), index=frame.index)
+    frame["owner_name"] = _normalize_string(frame.get("owner_name"), index=frame.index)
+    frame["parcel_id"] = _normalize_string(frame.get("parcel_id"), index=frame.index)
+
+    acreage = _to_float_series(frame, "acreage").fillna(0)
+    computed_size_score = pd.Series(35.0, index=frame.index)
+    computed_size_score = computed_size_score.mask(acreage >= 1, 55.0)
+    computed_size_score = computed_size_score.mask(acreage >= 5, 72.0)
+    computed_size_score = computed_size_score.mask(acreage >= 20, 86.0)
+    frame["size_score"] = pd.to_numeric(frame.get("size_score"), errors="coerce").fillna(computed_size_score)
+
+    road_distance_ft = _to_float_series(frame, "road_distance_ft")
+    computed_access_score = pd.Series(25.0, index=frame.index)
+    computed_access_score = computed_access_score.mask(road_distance_ft.le(250).fillna(False), 92.0)
+    computed_access_score = computed_access_score.mask(road_distance_ft.between(251, 1000).fillna(False), 76.0)
+    computed_access_score = computed_access_score.mask(road_distance_ft.between(1001, 2500).fillna(False), 58.0)
+    computed_access_score = computed_access_score.mask(road_distance_ft.between(2501, 5280).fillna(False), 42.0)
+    frame["access_score"] = pd.to_numeric(frame.get("access_score"), errors="coerce").fillna(computed_access_score)
+
+    frame["buildability_component"] = pd.to_numeric(frame.get("buildability_component"), errors="coerce").fillna(_to_float_series(frame, "buildability_score").fillna(0))
+    frame["environmental_component"] = pd.to_numeric(frame.get("environmental_component"), errors="coerce").fillna(_to_float_series(frame, "environment_score").fillna(0))
+
+    owner_targeting_base = _to_float_series(frame, "mailer_target_score").fillna(25)
+    owner_targeting_base = owner_targeting_base + frame["absentee_owner_flag"].astype(int) * 12 + frame["out_of_state_owner_flag"].astype(int) * 10 + frame["corporate_owner_flag"].astype(int) * 8
+    frame["owner_targeting_component"] = pd.to_numeric(frame.get("owner_targeting_component"), errors="coerce").fillna(owner_targeting_base.clip(0, 100))
+
+    delinquency_base = pd.Series(0.0, index=frame.index)
+    delinquency_base = delinquency_base.mask(frame["delinquent_flag"], 78.0)
+    delinquency_base = delinquency_base.mask(frame["forfeited_flag"], 92.0)
+    frame["delinquency_component"] = pd.to_numeric(frame.get("delinquency_component"), errors="coerce").fillna(delinquency_base)
+
+    source_conf_base = pd.Series(24.0, index=frame.index)
+    source_conf_base = source_conf_base.mask(frame["source_confidence_tier"].eq("high"), 90.0)
+    source_conf_base = source_conf_base.mask(frame["source_confidence_tier"].eq("medium"), 62.0)
+    source_conf_base = source_conf_base.mask(frame["source_confidence_tier"].eq("parcel_master_only"), 38.0)
+    frame["source_confidence_component"] = pd.to_numeric(frame.get("source_confidence_component"), errors="coerce").fillna(source_conf_base)
+
+    vacant_base = pd.Series(18.0, index=frame.index)
+    vacant_base = vacant_base.mask(frame["parcel_vacant_flag"], 94.0)
+    vacant_base = vacant_base.mask((pd.to_numeric(frame.get("building_count"), errors="coerce").fillna(0) <= 1) & acreage.ge(5), 72.0)
+    frame["vacant_land_component"] = pd.to_numeric(frame.get("vacant_land_component"), errors="coerce").fillna(vacant_base)
+
+    growth_map = {"very_low": 20.0, "low": 38.0, "moderate": 68.0, "high": 88.0, "unknown": 28.0}
+    growth_base = frame["growth_pressure_bucket"].map(growth_map).astype("float64")
+    frame["growth_pressure_component"] = pd.to_numeric(frame.get("growth_pressure_component"), errors="coerce").fillna(growth_base.fillna(28.0))
+
+    base_total = (
+        frame["size_score"] * 0.08
+        + frame["access_score"] * 0.10
+        + frame["buildability_component"] * 0.20
+        + frame["environmental_component"] * 0.18
+        + frame["owner_targeting_component"] * 0.16
+        + frame["delinquency_component"] * 0.10
+        + frame["source_confidence_component"] * 0.08
+        + frame["vacant_land_component"] * 0.05
+        + frame["growth_pressure_component"] * 0.05
+    ).round(2)
+    frame["lead_score_total"] = pd.to_numeric(frame.get("lead_score_total"), errors="coerce").fillna(base_total)
+    frame["lead_score_tier"] = _normalize_string(frame.get("lead_score_tier"), index=frame.index).fillna(_score_tier(frame["lead_score_total"]))
+
+    component_columns = [
+        "buildability_component",
+        "environmental_component",
+        "owner_targeting_component",
+        "vacant_land_component",
+        "growth_pressure_component",
+        "access_score",
+        "delinquency_component",
+        "source_confidence_component",
+        "size_score",
+    ]
+    driver_frame = pd.DataFrame(_row_top_drivers(frame, component_columns), columns=["driver_1", "driver_2", "driver_3"], index=frame.index)
+    frame["lead_score_driver_1"] = _normalize_string(frame.get("lead_score_driver_1"), index=frame.index).fillna(driver_frame["driver_1"])
+    frame["lead_score_driver_2"] = _normalize_string(frame.get("lead_score_driver_2"), index=frame.index).fillna(driver_frame["driver_2"])
+    frame["lead_score_driver_3"] = _normalize_string(frame.get("lead_score_driver_3"), index=frame.index).fillna(driver_frame["driver_3"])
+    frame["top_score_driver"] = _normalize_string(frame.get("top_score_driver"), index=frame.index).fillna(frame["lead_score_driver_1"])
+    frame["lead_score_explanation"] = _normalize_string(frame.get("lead_score_explanation"), index=frame.index).fillna(
+        frame["lead_score_driver_1"].map(_component_reason).fillna("balanced parcel quality and signal coverage")
+    )
+    frame["recommended_sort_reason"] = _normalize_string(frame.get("recommended_sort_reason"), index=frame.index).fillna(
+        frame["lead_score_driver_1"].str.replace("_component", "", regex=False).str.replace("_score", "", regex=False).str.replace("_", " ", regex=False)
+    )
+    frame["vacant_reason"] = _normalize_string(frame.get("vacant_reason"), index=frame.index).fillna(
+        frame["parcel_vacant_flag"].map({True: "No mapped building footprints on parcel.", False: "Existing building footprint detected."})
+    )
+    frame["growth_pressure_reason"] = _normalize_string(frame.get("growth_pressure_reason"), index=frame.index).fillna(
+        frame["growth_pressure_bucket"].map(
+            {
+                "high": "Strong nearby building density suggests active development pressure.",
+                "moderate": "Moderate nearby building density suggests edge growth potential.",
+                "low": "Lower nearby building density suggests slower market growth.",
+                "very_low": "Minimal nearby building density suggests very limited growth pressure.",
+                "unknown": "Growth pressure is not yet classified for this parcel.",
+            }
+        )
+    )
+    frame["recommended_use_case"] = _normalize_string(frame.get("recommended_use_case"), index=frame.index).fillna(
+        frame["recommended_view_bucket"].map(
+            {
+                "safest_outreach": "prioritized outreach",
+                "larger_land_target": "larger land acquisition",
+                "vacant_buildable": "vacant buildable land search",
+                "growth_edge_opportunity": "growth-edge targeting",
+                "general_ranked": "general parcel review",
+            }
+        ).fillna("general parcel review")
+    )
+    frame["caution_flags"] = _normalize_string(frame.get("caution_flags"), index=frame.index).fillna(
+        frame["amount_trust_tier"].map(
+            {
+                "use_with_caution": "Tax amount should be reviewed before outreach.",
+                "not_trusted_for_prominent_display": "Tax amount should not be treated as reliable.",
+                "not_reported": "No reported delinquent amount is currently available.",
+            }
+        )
+    )
+    frame["recommended_view_bucket"] = frame["recommended_view_bucket"].mask(
+        frame["parcel_vacant_flag"] & frame["buildability_component"].ge(75),
+        "vacant_buildable",
+    )
+    frame["recommended_view_bucket"] = frame["recommended_view_bucket"].mask(
+        frame["growth_pressure_component"].ge(68),
+        "growth_edge_opportunity",
+    )
+    frame["recommended_view_bucket"] = frame["recommended_view_bucket"].mask(
+        acreage.ge(5) & frame["parcel_vacant_flag"],
+        "larger_land_target",
+    )
     return frame
-
-
-def _attach_spatial_columns(frame: pd.DataFrame) -> pd.DataFrame:
-    spatial = frame.copy()
-    spatial["_shape"] = spatial["geometry"].apply(lambda value: wkb.loads(value) if value else None)
-    spatial["_minx"] = spatial["_shape"].apply(lambda geom: geom.bounds[0] if geom else None)
-    spatial["_miny"] = spatial["_shape"].apply(lambda geom: geom.bounds[1] if geom else None)
-    spatial["_maxx"] = spatial["_shape"].apply(lambda geom: geom.bounds[2] if geom else None)
-    spatial["_maxy"] = spatial["_shape"].apply(lambda geom: geom.bounds[3] if geom else None)
-    spatial["_centroid_x"] = spatial["_shape"].apply(lambda geom: geom.centroid.x if geom else None)
-    spatial["_centroid_y"] = spatial["_shape"].apply(lambda geom: geom.centroid.y if geom else None)
-    return spatial
-
-
-@lru_cache(maxsize=1)
-def load_meta() -> dict[str, Any]:
-    if not META_PATH.exists():
-        raise _missing_runtime_file_error("Mississippi explorer meta file", "meta_json")
-    with META_PATH.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
-
-
-@lru_cache(maxsize=1)
-def load_geometry_lookup() -> dict[str, str]:
-    if not GEOMETRY_PATH.exists():
-        raise _missing_runtime_file_error("Mississippi geometry file", "geometry_json")
-    with GEOMETRY_PATH.open("r", encoding="utf-8") as handle:
-        rows = json.load(handle)
-    return {str(row["parcel_row_id"]): row.get("path") or "" for row in rows}
 
 
 def _clamp_limit(requested_limit: int | None, *, default: int, max_limit: int) -> int:
@@ -252,37 +496,29 @@ def _apply_filters(
     return filtered
 
 
-def _apply_bounds_filter(
-    frame: pd.DataFrame,
-    *,
-    bounds: tuple[float, float, float, float] | None = None,
-    selected_parcel_id: str | None = None,
-) -> pd.DataFrame:
-    if bounds is None:
-        return frame
-
-    min_lng, min_lat, max_lng, max_lat = bounds
-    bbox_mask = (
-        pd.to_numeric(frame["_maxx"], errors="coerce").ge(min_lng).fillna(False)
-        & pd.to_numeric(frame["_minx"], errors="coerce").le(max_lng).fillna(False)
-        & pd.to_numeric(frame["_maxy"], errors="coerce").ge(min_lat).fillna(False)
-        & pd.to_numeric(frame["_miny"], errors="coerce").le(max_lat).fillna(False)
-    )
-    if selected_parcel_id:
-        bbox_mask = bbox_mask | frame["parcel_row_id"].astype("string").eq(selected_parcel_id)
-    return frame.loc[bbox_mask].copy()
-
-
-def _feature_bounds(frame: pd.DataFrame) -> tuple[float, float, float, float] | None:
-    if frame.empty:
+def _detail_geometry(parcel_row_id: str) -> dict[str, Any] | None:
+    dataset = ds.dataset(PARCEL_MASTER_PATH, format="parquet")
+    table = dataset.to_table(columns=["parcel_row_id", "geometry"], filter=ds.field("parcel_row_id") == parcel_row_id)
+    if table.num_rows == 0:
         return None
-    minx = pd.to_numeric(frame["_minx"], errors="coerce").min()
-    miny = pd.to_numeric(frame["_miny"], errors="coerce").min()
-    maxx = pd.to_numeric(frame["_maxx"], errors="coerce").max()
-    maxy = pd.to_numeric(frame["_maxy"], errors="coerce").max()
-    if not all(pd.notna(value) for value in [minx, miny, maxx, maxy]):
+    frame = table.to_pandas()
+    geometry_bytes = frame.iloc[0]["geometry"]
+    if not geometry_bytes:
         return None
-    return (float(minx), float(miny), float(maxx), float(maxy))
+    geometry = wkb.loads(geometry_bytes)
+    centroid = geometry.centroid
+    bounds = geometry.bounds
+    return {
+        "type": geometry.geom_type,
+        "centroid": {"type": "Point", "coordinates": [round(float(centroid.x), 6), round(float(centroid.y), 6)]},
+        "bounds": [round(float(value), 6) for value in bounds],
+    }
+
+
+def _geometry_table_for_ids(parcel_row_ids: list[str]) -> pd.DataFrame:
+    dataset = ds.dataset(PARCEL_MASTER_PATH, format="parquet")
+    table = dataset.to_table(columns=["parcel_row_id", "geometry"], filter=ds.field("parcel_row_id").isin(parcel_row_ids))
+    return table.to_pandas()
 
 
 def _render_mode_for_zoom(zoom: float | None) -> str:
@@ -307,44 +543,23 @@ def _simplification_tolerance(zoom: float | None) -> float:
     return 0.0003
 
 
-def _geometry_feature(row: pd.Series, *, render_mode: str, zoom: float | None, selected_parcel_id: str | None) -> dict[str, Any] | None:
-    shape = row.get("_shape")
-    if shape is None:
-        return None
-
-    if render_mode == "points":
-        geometry = {
-            "type": "Point",
-            "coordinates": [round(float(row["_centroid_x"]), 6), round(float(row["_centroid_y"]), 6)],
-        }
-    elif render_mode == "centroids":
-        geometry = {
-            "type": "Point",
-            "coordinates": [round(float(row["_centroid_x"]), 6), round(float(row["_centroid_y"]), 6)],
-        }
-    else:
-        tolerance = _simplification_tolerance(zoom)
-        geometry_shape = shape.simplify(tolerance, preserve_topology=True) if tolerance > 0 else shape
-        geometry = mapping(geometry_shape)
-
-    return {
-        "type": "Feature",
-        "geometry": geometry,
-        "properties": {
-            "parcel_row_id": str(row["parcel_row_id"]),
-            "parcel_id": _serialize_scalar(row.get("parcel_id")),
-            "county_name": _serialize_scalar(row.get("county_name")),
-            "lead_score_total": _serialize_scalar(row.get("lead_score_total")),
-            "lead_score_tier": _serialize_scalar(row.get("lead_score_tier")),
-            "parcel_vacant_flag": _serialize_scalar(row.get("parcel_vacant_flag")),
-            "wetland_flag": _serialize_scalar(row.get("wetland_flag")),
-            "flood_risk_score": _serialize_scalar(row.get("flood_risk_score")),
-            "road_access_tier": _serialize_scalar(row.get("road_access_tier")),
-            "county_hosted_flag": _serialize_scalar(row.get("county_hosted_flag")),
-            "best_source_type": _serialize_scalar(row.get("best_source_type")),
-            "selected": str(row["parcel_row_id"]) == (selected_parcel_id or ""),
-        },
+def runtime_file_diagnostics() -> dict[str, dict[str, int | bool | str | None]]:
+    diagnostics: dict[str, dict[str, int | bool | str | None]] = {}
+    paths = {
+        "parcel_master": PARCEL_MASTER_PATH,
+        "owner_leads": OWNER_LEADS_PATH,
+        "building_metrics": BUILDING_METRICS_PATH,
+        "lead_signals": LEAD_SIGNALS_PATH,
     }
+    for name, path in paths.items():
+        diagnostics[name] = {
+            "cwd": str(Path.cwd()),
+            "project_root": str(PROJECT_ROOT),
+            "path": str(path.resolve(strict=False)),
+            "exists": path.exists(),
+            "size_bytes": path.stat().st_size if path.exists() else None,
+        }
+    return diagnostics
 
 
 def get_leads(
@@ -371,7 +586,7 @@ def get_leads(
     limit: int = LEADS_DEFAULT_LIMIT,
     offset: int = 0,
 ) -> dict[str, Any]:
-    frame = load_app_ready_frame()
+    frame = load_base_frame()
     filtered = _apply_filters(
         frame,
         county_name=county_name,
@@ -393,7 +608,6 @@ def get_leads(
         road_distance_ft_max=road_distance_ft_max,
     )
     total_count = len(filtered)
-
     if sort_by not in filtered.columns:
         sort_by = "lead_score_total"
     ascending = sort_direction.lower() == "asc"
@@ -401,21 +615,18 @@ def get_leads(
     safe_limit = _clamp_limit(limit, default=LEADS_DEFAULT_LIMIT, max_limit=LEADS_MAX_LIMIT)
     safe_offset = max(int(offset), 0)
     paged = filtered.iloc[safe_offset : safe_offset + safe_limit].copy()
-
-    items: list[dict[str, Any]] = []
-    for _, row in paged.loc[:, SUMMARY_FIELDS].iterrows():
-        items.append({column: _serialize_scalar(row[column]) for column in SUMMARY_FIELDS})
+    items = [{column: _serialize_scalar(row[column]) for column in SUMMARY_FIELDS} for _, row in paged.loc[:, SUMMARY_FIELDS].iterrows()]
     return {"total_count": total_count, "limit": safe_limit, "offset": safe_offset, "items": items}
 
 
 def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
-    frame = load_app_ready_frame()
+    frame = load_base_frame()
     match = frame.loc[frame["parcel_row_id"].astype("string").eq(parcel_row_id)]
     if match.empty:
         return None
     row = match.iloc[0]
-    payload = {column: _serialize_scalar(row[column]) for column in frame.columns if column != "geometry"}
-    payload["geometry"] = _geometry_payload(row.get("geometry"))
+    payload = {column: _serialize_scalar(row[column]) for column in frame.columns if column not in {"latitude", "longitude"}}
+    payload["geometry"] = _detail_geometry(parcel_row_id)
     return payload
 
 
@@ -444,13 +655,12 @@ def get_geometry(
     road_distance_ft_max: float | None = None,
     limit: int = GEOMETRY_DEFAULT_LIMIT,
 ) -> dict[str, Any]:
-    base_frame = load_app_ready_frame()
+    frame = load_base_frame()
     if parcel_row_ids:
-        filtered = base_frame.loc[base_frame["parcel_row_id"].astype("string").isin(parcel_row_ids)].copy()
-        filtered = _attach_spatial_columns(filtered)
+        filtered = frame.loc[frame["parcel_row_id"].astype("string").isin(parcel_row_ids)].copy()
     else:
         filtered = _apply_filters(
-            base_frame,
+            frame,
             county_name=county_name,
             lead_score_tier=lead_score_tier,
             min_lead_score_total=min_lead_score_total,
@@ -469,33 +679,104 @@ def get_geometry(
             road_access_tier=road_access_tier,
             road_distance_ft_max=road_distance_ft_max,
         )
+        if bounds is not None:
+            min_lng, min_lat, max_lng, max_lat = bounds
+            bbox_mask = (
+                pd.to_numeric(filtered["longitude"], errors="coerce").between(min_lng, max_lng).fillna(False)
+                & pd.to_numeric(filtered["latitude"], errors="coerce").between(min_lat, max_lat).fillna(False)
+            )
+            if selected_parcel_id:
+                bbox_mask = bbox_mask | filtered["parcel_row_id"].astype("string").eq(selected_parcel_id)
+            filtered = filtered.loc[bbox_mask].copy()
         safe_limit = _clamp_limit(limit, default=GEOMETRY_DEFAULT_LIMIT, max_limit=GEOMETRY_MAX_LIMIT)
         filtered = filtered.sort_values("lead_score_total", ascending=False, na_position="last").head(safe_limit)
-        filtered = _attach_spatial_columns(filtered)
-        filtered = _apply_bounds_filter(filtered, bounds=bounds, selected_parcel_id=selected_parcel_id)
 
     render_mode = _render_mode_for_zoom(zoom)
-    feature_bounds = _feature_bounds(filtered)
-    features = [
-        feature
-        for _, row in filtered.iterrows()
-        if (feature := _geometry_feature(row, render_mode=render_mode, zoom=zoom, selected_parcel_id=selected_parcel_id))
-        is not None
-    ]
+    features: list[dict[str, Any]] = []
+
+    if render_mode in {"points", "centroids"}:
+        for _, row in filtered.iterrows():
+            lng = _serialize_scalar(row.get("longitude"))
+            lat = _serialize_scalar(row.get("latitude"))
+            if lng is None or lat is None:
+                continue
+            features.append(
+                {
+                    "type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": [round(float(lng), 6), round(float(lat), 6)]},
+                    "properties": {
+                        "parcel_row_id": str(row["parcel_row_id"]),
+                        "parcel_id": _serialize_scalar(row.get("parcel_id")),
+                        "county_name": _serialize_scalar(row.get("county_name")),
+                        "lead_score_total": _serialize_scalar(row.get("lead_score_total")),
+                        "lead_score_tier": _serialize_scalar(row.get("lead_score_tier")),
+                        "parcel_vacant_flag": _serialize_scalar(row.get("parcel_vacant_flag")),
+                        "wetland_flag": _serialize_scalar(row.get("wetland_flag")),
+                        "flood_risk_score": _serialize_scalar(row.get("flood_risk_score")),
+                        "road_access_tier": _serialize_scalar(row.get("road_access_tier")),
+                        "county_hosted_flag": _serialize_scalar(row.get("county_hosted_flag")),
+                        "best_source_type": _serialize_scalar(row.get("best_source_type")),
+                        "selected": str(row["parcel_row_id"]) == (selected_parcel_id or ""),
+                    },
+                }
+            )
+        bounds_payload = None
+        if features:
+            lngs = [feature["geometry"]["coordinates"][0] for feature in features]
+            lats = [feature["geometry"]["coordinates"][1] for feature in features]
+            bounds_payload = [round(min(lngs), 6), round(min(lats), 6), round(max(lngs), 6), round(max(lats), 6)]
+    else:
+        geometry_frame = _geometry_table_for_ids(filtered["parcel_row_id"].astype(str).tolist())
+        geometry_lookup = dict(zip(geometry_frame["parcel_row_id"].astype(str), geometry_frame["geometry"]))
+        feature_bounds: list[tuple[float, float, float, float]] = []
+        for _, row in filtered.iterrows():
+            parcel_row_id = str(row["parcel_row_id"])
+            geometry_bytes = geometry_lookup.get(parcel_row_id)
+            if not geometry_bytes:
+                continue
+            shape = wkb.loads(geometry_bytes)
+            tolerance = _simplification_tolerance(zoom)
+            rendered_shape = shape.simplify(tolerance, preserve_topology=True) if tolerance > 0 else shape
+            feature_bounds.append(shape.bounds)
+            features.append(
+                {
+                    "type": "Feature",
+                    "geometry": mapping(rendered_shape),
+                    "properties": {
+                        "parcel_row_id": parcel_row_id,
+                        "parcel_id": _serialize_scalar(row.get("parcel_id")),
+                        "county_name": _serialize_scalar(row.get("county_name")),
+                        "lead_score_total": _serialize_scalar(row.get("lead_score_total")),
+                        "lead_score_tier": _serialize_scalar(row.get("lead_score_tier")),
+                        "parcel_vacant_flag": _serialize_scalar(row.get("parcel_vacant_flag")),
+                        "wetland_flag": _serialize_scalar(row.get("wetland_flag")),
+                        "flood_risk_score": _serialize_scalar(row.get("flood_risk_score")),
+                        "road_access_tier": _serialize_scalar(row.get("road_access_tier")),
+                        "county_hosted_flag": _serialize_scalar(row.get("county_hosted_flag")),
+                        "best_source_type": _serialize_scalar(row.get("best_source_type")),
+                        "selected": parcel_row_id == (selected_parcel_id or ""),
+                    },
+                }
+            )
+        bounds_payload = None
+        if feature_bounds:
+            bounds_payload = [
+                round(min(bound[0] for bound in feature_bounds), 6),
+                round(min(bound[1] for bound in feature_bounds), 6),
+                round(max(bound[2] for bound in feature_bounds), 6),
+                round(max(bound[3] for bound in feature_bounds), 6),
+            ]
+
     items = [
-        {
-            "parcel_row_id": str(row["parcel_row_id"]),
-            "path": None,
-            "lead_score_total": _serialize_scalar(row["lead_score_total"]),
-        }
+        {"parcel_row_id": str(row["parcel_row_id"]), "path": None, "lead_score_total": _serialize_scalar(row["lead_score_total"])}
         for _, row in filtered.iterrows()
     ]
     return {
         "geometry_mode": "viewport_geojson",
         "render_mode": render_mode,
-        "geometry_bounds": _serialize_bounds(feature_bounds),
+        "geometry_bounds": bounds_payload,
         "geometry_view_box": None,
-        "requested_bounds": _serialize_bounds(bounds),
+        "requested_bounds": [round(value, 6) for value in bounds] if bounds is not None else None,
         "zoom": zoom,
         "feature_count": len(features),
         "feature_collection": {"type": "FeatureCollection", "features": features},
@@ -504,33 +785,46 @@ def get_geometry(
 
 
 def get_presets() -> list[dict[str, Any]]:
-    meta = load_meta()
-    grouped: dict[str, dict[str, Any]] = {}
-    for row in meta.get("defaultViews", []):
-        name = row.get("view_name")
-        if not name:
-            continue
-        preset = grouped.setdefault(
-            name,
+    frame = load_base_frame()
+    presets: list[dict[str, Any]] = []
+    for view_name, definition in PRESET_DEFINITIONS.items():
+        filtered = _apply_filters(frame, **definition["filters"])
+        mean_score = pd.to_numeric(filtered["lead_score_total"], errors="coerce").mean() if len(filtered) else 0
+        presets.append(
             {
-                "view_name": name,
-                "description": row.get("description"),
-                "filter_expression": row.get("filter_expression"),
-            },
+                "view_name": view_name,
+                "description": definition["description"],
+                "filter_expression": definition["filter_expression"],
+                "row_count": str(len(filtered)),
+                "average_lead_score": f"{mean_score:.1f}",
+            }
         )
-        preset[row.get("metric", "value")] = row.get("value")
-    return list(grouped.values())
+    return presets
 
 
 def get_summary() -> dict[str, Any]:
-    meta = load_meta()
-    summary_rows = meta.get("summary", [])
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for row in summary_rows:
-        grouped.setdefault(row.get("section", "unknown"), []).append(row)
+    frame = load_base_frame()
+    county_counts = frame.groupby("county_name", dropna=True).size().sort_values(ascending=False).head(20)
+    recommended_counts = frame.groupby("recommended_view_bucket", dropna=True).size().sort_values(ascending=False)
+    average_score = pd.to_numeric(frame["lead_score_total"], errors="coerce").mean()
     return {
-        "row_count": meta.get("rowCount"),
-        "source": meta.get("source"),
-        "geometry_mode": meta.get("geometryMode"),
-        "sections": grouped,
+        "row_count": int(len(frame)),
+        "source": "mississippi_parcels_master + owner leads + building metrics + motivation signals",
+        "geometry_mode": "viewport_geojson",
+        "sections": {
+            "statewide": [
+                {"section": "statewide", "metric": "lead_count", "value": str(len(frame))},
+                {"section": "statewide", "metric": "average_lead_score", "value": f"{average_score:.1f}"},
+                {"section": "statewide", "metric": "vacant_share_pct", "value": f"{frame['parcel_vacant_flag'].fillna(False).mean() * 100:.1f}"},
+                {"section": "statewide", "metric": "county_hosted_share_pct", "value": f"{frame['county_hosted_flag'].fillna(False).mean() * 100:.1f}"},
+            ],
+            "top_counties": [
+                {"section": "top_counties", "key": county, "metric": "parcel_count", "value": str(int(count))}
+                for county, count in county_counts.items()
+            ],
+            "recommended_view_bucket": [
+                {"section": "recommended_view_bucket", "key": bucket, "metric": "parcel_count", "value": str(int(count))}
+                for bucket, count in recommended_counts.items()
+            ],
+        },
     }

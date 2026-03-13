@@ -9,6 +9,10 @@ import type { FeatureCollectionPayload, GeometryFeature, GeometryResponse, MapOv
 
 const DEFAULT_CENTER: [number, number] = [-98.5795, 39.8283];
 const DEFAULT_ZOOM = 3.4;
+const MISSISSIPPI_BOUNDS: [[number, number], [number, number]] = [
+  [-91.65, 30.15],
+  [-88.0, 35.1],
+];
 const PARCEL_SOURCE_ID = "landintel-parcels";
 
 const BASE_STYLE: maplibregl.StyleSpecification = {
@@ -302,6 +306,8 @@ export function LeadMap({
       });
     });
 
+    map.fitBounds(MISSISSIPPI_BOUNDS, { padding: 28, duration: 0, maxZoom: 7.2 });
+
     map.on("moveend", () => {
       const currentBounds = map.getBounds();
       onViewportChange({
@@ -382,10 +388,9 @@ export function LeadMap({
     const map = mapRef.current;
     if (!map || featureCount === 0) return;
 
-    const isFirstFit = !hasInitializedViewportRef.current;
     const hasNewFitRequest = fitNonce !== lastAppliedFitNonceRef.current;
     const hasSelectionChange = selectedId !== lastSelectedIdRef.current && Boolean(selectedId);
-    if (!isFirstFit && !hasNewFitRequest && !hasSelectionChange) {
+    if (!hasNewFitRequest && !hasSelectionChange) {
       return;
     }
 

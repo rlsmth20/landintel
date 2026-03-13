@@ -1,5 +1,12 @@
 import type { Filters, MapOverlayDefinition } from "./types";
 
+type TableColumnDefinition = {
+  key: string;
+  label: string;
+  tooltip: string;
+  sortField?: "lead_score_total" | "acreage" | "delinquent_amount" | "road_distance_ft";
+};
+
 export const PRESET_LABELS: Record<string, string> = {
   safest_early_investor_use: "Safest Outreach",
   vacant_land_targeting: "Vacant Buildable",
@@ -54,8 +61,8 @@ export const MAP_OVERLAYS: MapOverlayDefinition[] = [
 
 export const INITIAL_FILTERS: Filters = {
   countyName: "all",
-  leadScoreTier: ["high", "very_high"],
-  minLeadScore: 65,
+  leadScoreTier: [],
+  minLeadScore: 0,
   acreageMin: "",
   acreageMax: "",
   parcelVacantOnly: false,
@@ -71,6 +78,83 @@ export const INITIAL_FILTERS: Filters = {
   roadDistanceMax: "",
   roadAccessTiers: [],
 };
+
+export const TABLE_COLUMNS: TableColumnDefinition[] = [
+  {
+    key: "county",
+    label: "County",
+    tooltip: "The Mississippi county where the parcel is located.",
+  },
+  {
+    key: "parcel_id",
+    label: "Parcel ID",
+    tooltip: "The county parcel identifier used for parcel-level lookup and review.",
+  },
+  {
+    key: "acreage",
+    label: "Acreage",
+    tooltip: "Estimated parcel acreage from the statewide parcel master.",
+    sortField: "acreage",
+  },
+  {
+    key: "owner",
+    label: "Owner",
+    tooltip: "Current owner name from parcel ownership records.",
+  },
+  {
+    key: "lead_score_total",
+    label: "Acquisition Score",
+    tooltip: "A composite score estimating how attractive a parcel may be for acquisition based on ownership signals, physical constraints, and market indicators.",
+    sortField: "lead_score_total",
+  },
+  {
+    key: "lead_score_tier",
+    label: "Lead Tier",
+    tooltip: "A bucketed view of the acquisition score from low to very high.",
+  },
+  {
+    key: "parcel_vacant_flag",
+    label: "Likely Vacant",
+    tooltip: "Indicates whether building footprints suggest the parcel is likely vacant land.",
+  },
+  {
+    key: "road_access_tier",
+    label: "Road Access",
+    tooltip: "An access tier derived from parcel-to-road distance.",
+    sortField: "road_distance_ft",
+  },
+  {
+    key: "growth_pressure_bucket",
+    label: "Area Growth Potential",
+    tooltip: "A nearby-building-density bucket that approximates local growth pressure.",
+  },
+  {
+    key: "best_source_type",
+    label: "Data Source",
+    tooltip: "The strongest available motivation-source context for the parcel, such as county-hosted delinquent data or statewide inventory.",
+  },
+  {
+    key: "source_confidence_tier",
+    label: "Data Confidence",
+    tooltip: "An overall confidence tier for the parcel’s motivation and signal data.",
+  },
+  {
+    key: "delinquent_amount",
+    label: "Delinquent Tax Amount",
+    tooltip: "The best available reported delinquent tax amount when a tax signal exists.",
+    sortField: "delinquent_amount",
+  },
+  {
+    key: "amount_trust_tier",
+    label: "Amount Reliability",
+    tooltip: "Indicates whether the displayed delinquent tax amount is trusted, cautionary, or not ready for prominent display.",
+  },
+  {
+    key: "recommended_sort_reason",
+    label: "Lead Reason",
+    tooltip: "The main factor currently pushing the parcel toward the top of the ranked view.",
+  },
+] as const;
 
 export function formatNumber(value: number | null | undefined, digits = 0) {
   if (value === null || value === undefined || Number.isNaN(value)) return "-";

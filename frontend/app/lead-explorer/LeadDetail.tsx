@@ -29,7 +29,7 @@ export function LeadDetail({ lead }: { lead: LeadRecord }) {
   return (
     <div className="detail-scroll">
       <div className="detail-header">
-        <p className="eyebrow">{lead.county_name} dataset parcel</p>
+        <p className="eyebrow">{lead.county_name} parcel intelligence record</p>
         <h3>{lead.parcel_id ?? lead.parcel_row_id}</h3>
         <div className="inline-badges">
           <LeadBadge label={lead.lead_score_tier ?? "-"} tone="good" />
