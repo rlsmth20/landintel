@@ -50,7 +50,11 @@ export type LeadRecord = {
   acreage: number | null;
   acreage_bucket: string | null;
   land_use: string | null;
+  assessed_total_value: number | null;
   parcel_vacant_flag: boolean | null;
+  county_vacant_flag: boolean | null;
+  ai_building_present_flag: boolean | null;
+  vacancy_confidence_score: number | null;
   building_count: number | null;
   building_area_total: number | null;
   nearby_building_count_1km: number | null;
@@ -60,6 +64,14 @@ export type LeadRecord = {
   road_access_tier: string | null;
   wetland_flag: boolean | null;
   flood_risk_score: number | null;
+  mean_slope_pct: number | null;
+  max_slope_pct: number | null;
+  slope_class: string | null;
+  slope_score: number | null;
+  elevation_mean_ft: number | null;
+  shape_compactness: number | null;
+  parcel_frontage_ft_estimate: number | null;
+  parcel_width_ft_estimate: number | null;
   buildability_score: number | null;
   environment_score: number | null;
   investment_score: number | null;
@@ -192,3 +204,5 @@ export type MapViewportState = {
   zoom: number;
   bounds: GeometryBounds | null;
 };
+
+export type BasemapMode = "street" | "satellite";

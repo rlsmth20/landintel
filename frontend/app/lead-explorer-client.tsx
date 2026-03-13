@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchLeadDetail, fetchLeads, fetchParcelGeometryById, fetchPresets, fetchStaticLeadDetail, fetchSummary } from "./lead-explorer/api";
 import { LeadDetail } from "./lead-explorer/LeadDetail";
 import { LeadMap } from "./lead-explorer/LeadMap";
-import type { ExplorerMeta, Filters, GeometryResponse, LeadRecord, MapOverlayId, MapViewportState, PresetItem, SortField } from "./lead-explorer/types";
+import type { BasemapMode, ExplorerMeta, Filters, GeometryResponse, LeadRecord, MapOverlayId, MapViewportState, PresetItem, SortField } from "./lead-explorer/types";
 import {
   INITIAL_FILTERS,
   MAP_OVERLAYS,
@@ -94,6 +94,7 @@ export default function LeadExplorerClient() {
   const [fitNonce, setFitNonce] = useState(0);
   const [locateSelectedNonce, setLocateSelectedNonce] = useState(0);
   const [activeOverlays, setActiveOverlays] = useState<MapOverlayId[]>(["parcels", "road_access"]);
+  const [basemapMode, setBasemapMode] = useState<BasemapMode>("street");
   const [viewport, setViewport] = useState<MapViewportState>(DEFAULT_VIEWPORT);
 
   const [summaryLoading, setSummaryLoading] = useState(true);
@@ -706,6 +707,14 @@ export default function LeadExplorerClient() {
                 <p>Statewide parcel exploration with overlay-ready GIS layers. Use filters to narrow parcels, then inspect geometry and details in place.</p>
               </div>
               <div className="card-header-actions">
+                <div className="inline-badges">
+                  <button type="button" className={`chip ${basemapMode === "street" ? "is-selected" : ""}`} onClick={() => setBasemapMode("street")}>
+                    Street
+                  </button>
+                  <button type="button" className={`chip ${basemapMode === "satellite" ? "is-selected" : ""}`} onClick={() => setBasemapMode("satellite")}>
+                    Satellite
+                  </button>
+                </div>
                 <button type="button" className="chip" onClick={() => setFitNonce((current) => current + 1)}>
                   Reset map view
                 </button>
@@ -725,6 +734,7 @@ export default function LeadExplorerClient() {
               activeOverlays={activeOverlays}
               viewport={viewport}
               onViewportChange={setViewport}
+              basemapMode={basemapMode}
               resultsLoading={leadsLoading}
               loading={geometryLoading}
               error={geometryError}

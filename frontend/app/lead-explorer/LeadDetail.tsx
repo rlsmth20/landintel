@@ -46,6 +46,7 @@ export function LeadDetail({ lead }: { lead: LeadRecord }) {
         <DetailRow label="Acreage" value={formatNumber(lead.acreage, 2)} />
         <DetailRow label="Acreage bucket" value={lead.acreage_bucket} />
         <DetailRow label="Land use" value={lead.land_use} />
+        <DetailRow label="Assessed total value" value={formatCurrency(lead.assessed_total_value)} />
       </DetailSection>
 
       <DetailSection title="Motivation Signals">
@@ -54,6 +55,14 @@ export function LeadDetail({ lead }: { lead: LeadRecord }) {
         <DetailRow label="Delinquent amount bucket" value={lead.delinquent_amount_bucket} />
         <DetailRow label="Delinquent flag" value={formatBoolean(lead.delinquent_flag)} />
         <DetailRow label="Forfeited flag" value={formatBoolean(lead.forfeited_flag)} />
+      </DetailSection>
+
+      <DetailSection title="Vacancy Intelligence">
+        <DetailRow label="Parcel vacant flag" value={formatBoolean(lead.parcel_vacant_flag)} />
+        <DetailRow label="County vacant flag" value={formatBoolean(lead.county_vacant_flag)} />
+        <DetailRow label="AI building-present signal" value={formatBoolean(lead.ai_building_present_flag)} />
+        <DetailRow label="Vacancy confidence score" value={formatNumber(lead.vacancy_confidence_score, 1)} />
+        <DetailRow label="Vacant reason" value={lead.vacant_reason} />
       </DetailSection>
 
       <DetailSection title="Ownership">
@@ -74,6 +83,17 @@ export function LeadDetail({ lead }: { lead: LeadRecord }) {
         <DetailRow label="Road access tier" value={lead.road_access_tier} />
         <DetailRow label="Buildability score" value={formatNumber(lead.buildability_score, 1)} />
         <DetailRow label="Environment score" value={formatNumber(lead.environment_score, 1)} />
+      </DetailSection>
+
+      <DetailSection title="Terrain & Shape">
+        <DetailRow label="Slope mean %" value={formatNumber(lead.mean_slope_pct, 2)} />
+        <DetailRow label="Slope max %" value={formatNumber(lead.max_slope_pct, 2)} />
+        <DetailRow label="Slope class" value={lead.slope_class} />
+        <DetailRow label="Slope score" value={formatNumber(lead.slope_score, 1)} />
+        <DetailRow label="Elevation mean ft" value={formatNumber(lead.elevation_mean_ft, 0)} />
+        <DetailRow label="Shape compactness" value={formatNumber(lead.shape_compactness, 3)} />
+        <DetailRow label="Frontage estimate ft" value={formatNumber(lead.parcel_frontage_ft_estimate, 0)} />
+        <DetailRow label="Width estimate ft" value={formatNumber(lead.parcel_width_ft_estimate, 0)} />
       </DetailSection>
 
       <DetailSection title="Utilities">
@@ -123,7 +143,6 @@ export function LeadDetail({ lead }: { lead: LeadRecord }) {
         <DetailRow label="Recommended sort reason" value={lead.recommended_sort_reason} />
         <DetailRow label="Top score driver" value={lead.top_score_driver} />
         <DetailRow label="Caution flags" value={lead.caution_flags} />
-        <DetailRow label="Vacant reason" value={lead.vacant_reason} />
         <DetailRow label="Growth pressure reason" value={lead.growth_pressure_reason} />
         <DetailRow label="Recommended use case" value={lead.recommended_use_case} />
       </DetailSection>

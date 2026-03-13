@@ -154,6 +154,53 @@ def _to_float_series(frame: pd.DataFrame, column: str) -> pd.Series:
     return pd.to_numeric(frame[column], errors="coerce")
 
 
+def _vacancy_confidence_series(frame: pd.DataFrame) -> pd.Series:
+    building_count = _to_float_series(frame, "building_count").fillna(0)
+    building_area_total = _to_float_series(frame, "building_area_total").fillna(0)
+    acreage = _to_float_series(frame, "acreage").fillna(0)
+    parcel_vacant = frame.get("parcel_vacant_flag")
+    vacant_mask = parcel_vacant.fillna(False) if parcel_vacant is not None else pd.Series(False, index=frame.index)
+
+    confidence = pd.Series(45.0, index=frame.index, dtype="float64")
+    confidence = confidence.mask(vacant_mask & building_count.eq(0) & building_area_total.le(0), 92.0)
+    confidence = confidence.mask(vacant_mask & building_count.le(1) & building_area_total.le(750) & acreage.ge(1), 78.0)
+    confidence = confidence.mask(~vacant_mask & building_count.gt(0), 18.0)
+    confidence = confidence.mask(~vacant_mask & building_area_total.gt(1500), 8.0)
+    return confidence.clip(0, 100)
+
+
+def _ensure_intelligence_fields(frame: pd.DataFrame) -> pd.DataFrame:
+    numeric_defaults = {
+        "assessed_total_value": _to_float_series(frame, "assessed_total_value"),
+        "mean_slope_pct": _to_float_series(frame, "mean_slope_pct"),
+        "max_slope_pct": _to_float_series(frame, "max_slope_pct"),
+        "slope_score": _to_float_series(frame, "slope_score"),
+        "elevation_mean_ft": _to_float_series(frame, "elevation_mean_ft"),
+        "shape_compactness": _to_float_series(frame, "shape_compactness"),
+        "parcel_frontage_ft_estimate": _to_float_series(frame, "parcel_frontage_ft_estimate"),
+        "parcel_width_ft_estimate": _to_float_series(frame, "parcel_width_ft_estimate"),
+    }
+    for column, series in numeric_defaults.items():
+        frame[column] = series
+
+    frame["slope_class"] = _normalize_string(frame.get("slope_class"), index=frame.index)
+
+    if "county_vacant_flag" in frame.columns:
+        county_vacant = frame["county_vacant_flag"].astype("boolean")
+    else:
+        county_vacant = pd.Series(pd.NA, index=frame.index, dtype="boolean")
+    if "ai_building_present_flag" in frame.columns:
+        ai_building_present = frame["ai_building_present_flag"].astype("boolean")
+    else:
+        ai_building_present = pd.Series(pd.NA, index=frame.index, dtype="boolean")
+    frame["county_vacant_flag"] = county_vacant
+    frame["ai_building_present_flag"] = ai_building_present
+    frame["vacancy_confidence_score"] = pd.to_numeric(frame.get("vacancy_confidence_score"), errors="coerce").fillna(
+        _vacancy_confidence_series(frame)
+    )
+    return frame
+
+
 def _coalesce_numeric(frame: pd.DataFrame, columns: list[str]) -> pd.Series:
     result = pd.Series(np.nan, index=frame.index, dtype="float64")
     for column in columns:
@@ -513,6 +560,7 @@ def load_base_frame() -> pd.DataFrame:
         frame["owner_name"] = _normalize_string(frame.get("owner_name"), index=frame.index)
         frame["parcel_id"] = _normalize_string(frame.get("parcel_id"), index=frame.index)
         frame["electric_provider_name"] = _normalize_string(frame.get("electric_provider_name"), index=frame.index)
+        frame = _ensure_intelligence_fields(frame)
         return frame
 
     if not _full_runtime_available():
@@ -547,6 +595,7 @@ def load_base_frame() -> pd.DataFrame:
         longitudes, latitudes = _centroids_from_wkb(frame.get("geometry"))
         frame["longitude"] = longitudes
         frame["latitude"] = latitudes
+        frame = _ensure_intelligence_fields(frame)
         return frame
 
     parcel_columns = [
@@ -567,6 +616,10 @@ def load_base_frame() -> pd.DataFrame:
         "road_access_tier",
         "wetland_flag",
         "flood_risk_score",
+        "mean_slope_pct",
+        "max_slope_pct",
+        "slope_class",
+        "slope_score",
         "buildability_score",
         "environment_score",
         "investment_score",
@@ -673,6 +726,7 @@ def load_base_frame() -> pd.DataFrame:
     frame["county_name"] = _normalize_string(frame.get("county_name"), index=frame.index)
     frame["owner_name"] = _normalize_string(frame.get("owner_name"), index=frame.index)
     frame["parcel_id"] = _normalize_string(frame.get("parcel_id"), index=frame.index)
+    frame = _ensure_intelligence_fields(frame)
 
     acreage = _to_float_series(frame, "acreage").fillna(0)
     computed_size_score = pd.Series(35.0, index=frame.index)

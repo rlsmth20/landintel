@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef } from "react";
 import maplibregl, { GeoJSONSource, LngLatBoundsLike, Map } from "maplibre-gl";
 import { PMTiles, Protocol } from "pmtiles";
 
-import type { FeatureCollectionPayload, GeometryFeature, GeometryResponse, MapOverlayId, MapViewportState } from "./types";
+import type { BasemapMode, FeatureCollectionPayload, GeometryFeature, GeometryResponse, MapOverlayId, MapViewportState } from "./types";
 
 const DEFAULT_CENTER: [number, number] = [-98.5795, 39.8283];
 const DEFAULT_ZOOM = 3.4;
@@ -54,13 +54,27 @@ const BASE_STYLE: maplibregl.StyleSpecification = {
       tileSize: 256,
       attribution: "&copy; OpenStreetMap contributors",
     },
+    satellite: {
+      type: "raster",
+      tiles: ["https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+      tileSize: 256,
+      attribution: "Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+    },
   },
   glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
   layers: [
     {
-      id: "osm",
+      id: "street-base",
       type: "raster",
       source: "osm",
+    },
+    {
+      id: "satellite-base",
+      type: "raster",
+      source: "satellite",
+      layout: {
+        visibility: "none",
+      },
     },
   ],
 };
@@ -248,6 +262,7 @@ export function LeadMap({
   fitNonce,
   locateSelectedNonce,
   activeOverlays,
+  basemapMode,
   viewport,
   onViewportChange,
   resultsLoading,
@@ -261,6 +276,7 @@ export function LeadMap({
   fitNonce: number;
   locateSelectedNonce: number;
   activeOverlays: MapOverlayId[];
+  basemapMode: BasemapMode;
   viewport: MapViewportState;
   onViewportChange: (value: MapViewportState) => void;
   resultsLoading: boolean;
@@ -397,6 +413,8 @@ export function LeadMap({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !map.isStyleLoaded()) return;
+    updateLayerVisibility(map, "street-base", basemapMode === "street");
+    updateLayerVisibility(map, "satellite-base", basemapMode === "satellite");
     updateLayerVisibility(map, "parcel-fills", activeOverlays.includes("parcels"));
     updateLayerVisibility(map, "parcel-lines", activeOverlays.includes("parcels"));
     updateLayerVisibility(map, "parcel-hover", activeOverlays.includes("parcels"));
@@ -405,7 +423,7 @@ export function LeadMap({
     updateLayerVisibility(map, "parcel-wetlands-overlay", activeOverlays.includes("wetlands"));
     updateLayerVisibility(map, "parcel-road-overlay", activeOverlays.includes("road_access"));
     updateLayerVisibility(map, "parcel-flood-overlay", activeOverlays.includes("fema_flood"));
-  }, [activeOverlays]);
+  }, [activeOverlays, basemapMode]);
 
   useEffect(() => {
     const map = mapRef.current;

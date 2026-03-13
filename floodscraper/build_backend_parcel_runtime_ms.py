@@ -38,6 +38,10 @@ PARCEL_COLUMNS = [
     "road_access_tier",
     "wetland_flag",
     "flood_risk_score",
+    "mean_slope_pct",
+    "max_slope_pct",
+    "slope_class",
+    "slope_score",
     "buildability_score",
     "environment_score",
     "investment_score",
@@ -149,6 +153,20 @@ def json_scalar(value):
     return value
 
 
+def vacancy_confidence(frame: pd.DataFrame) -> pd.Series:
+    building_count = pd.to_numeric(frame.get("building_count"), errors="coerce").fillna(0)
+    building_area_total = pd.to_numeric(frame.get("building_area_total"), errors="coerce").fillna(0)
+    acreage = pd.to_numeric(frame.get("acreage"), errors="coerce").fillna(0)
+    parcel_vacant = frame["parcel_vacant_flag"].fillna(False)
+
+    confidence = pd.Series(45.0, index=frame.index, dtype="float64")
+    confidence = confidence.mask(parcel_vacant & building_count.eq(0) & building_area_total.le(0), 92.0)
+    confidence = confidence.mask(parcel_vacant & building_count.le(1) & building_area_total.le(750) & acreage.ge(1), 78.0)
+    confidence = confidence.mask(~parcel_vacant & building_count.gt(0), 18.0)
+    confidence = confidence.mask(~parcel_vacant & building_area_total.gt(1500), 8.0)
+    return confidence.clip(0, 100)
+
+
 def build_runtime_frame() -> pd.DataFrame:
     parcels = pd.read_parquet(PARCEL_MASTER_PATH, columns=PARCEL_COLUMNS, engine="pyarrow")
     parcels["acreage"] = coalesce_numeric(parcels, ["total_acres", "parcel_area_acres", "gis_acres", "tax_acres"])
@@ -190,6 +208,10 @@ def build_runtime_frame() -> pd.DataFrame:
     frame["amount_trust_tier"] = frame["amount_trust_tier"].astype("string").fillna("not_reported")
     frame["growth_pressure_bucket"] = frame["growth_pressure_bucket"].astype("string").fillna("unknown")
     frame["recommended_view_bucket"] = frame["recommended_view_bucket"].astype("string").fillna("general_ranked")
+    frame["slope_class"] = frame["slope_class"].astype("string")
+    frame["county_vacant_flag"] = pd.Series(pd.NA, index=frame.index, dtype="boolean")
+    frame["ai_building_present_flag"] = pd.Series(pd.NA, index=frame.index, dtype="boolean")
+    frame["vacancy_confidence_score"] = vacancy_confidence(frame)
 
     return frame
 
