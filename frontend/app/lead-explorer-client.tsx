@@ -182,10 +182,14 @@ export default function LeadExplorerClient() {
       return;
     }
     const detailId = selectedId;
+    const summaryFallback = leads.find((item) => item.parcel_row_id === detailId) ?? null;
     let cancelled = false;
     async function loadDetail() {
       setDetailLoading(true);
       setDetailError(null);
+      if (summaryFallback) {
+        setSelectedLead(summaryFallback);
+      }
       try {
         const response = await fetchLeadDetail(detailId);
         if (cancelled) return;
@@ -193,6 +197,9 @@ export default function LeadExplorerClient() {
       } catch (error) {
         if (cancelled) return;
         setDetailError(error instanceof Error ? error.message : "Failed to load parcel detail");
+        if (summaryFallback) {
+          setSelectedLead(summaryFallback);
+        }
       } finally {
         if (!cancelled) setDetailLoading(false);
       }

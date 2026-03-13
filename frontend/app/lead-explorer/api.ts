@@ -1,6 +1,8 @@
 import type {
   ExplorerMeta,
   GeometryBounds,
+  FeatureCollectionPayload,
+  GeometryPoint,
   GeometryResponse,
   LeadRecord,
   LeadsResponse,
@@ -26,13 +28,73 @@ async function fetchJson<T>(path: string, searchParams?: URLSearchParams): Promi
   return response.json() as Promise<T>;
 }
 
+let staticMetaCache: Record<string, unknown> | null = null;
+let staticLeadCache: LeadRecord[] | null = null;
+
+async function fetchStaticJson<T>(path: string): Promise<T> {
+  const response = await fetch(path, { cache: "force-cache" });
+  if (!response.ok) {
+    throw new Error(`Static request failed: ${response.status} ${response.statusText}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+async function fetchStaticMetaSource() {
+  if (!staticMetaCache) {
+    staticMetaCache = await fetchStaticJson<Record<string, unknown>>("/data/mississippi_lead_explorer_meta.json");
+  }
+  return staticMetaCache;
+}
+
+async function fetchStaticLeadSource() {
+  if (!staticLeadCache) {
+    staticLeadCache = await fetchStaticJson<LeadRecord[]>("/data/mississippi_lead_explorer.json");
+  }
+  return staticLeadCache;
+}
+
 export async function fetchSummary(): Promise<ExplorerMeta> {
-  return fetchJson<ExplorerMeta>("/api/summary");
+  try {
+    return await fetchJson<ExplorerMeta>("/api/summary");
+  } catch {
+    const source = await fetchStaticMetaSource();
+    return {
+      row_count: Number(source.rowCount ?? 0),
+      source: typeof source.source === "string" ? source.source : "static explorer fallback",
+      geometry_mode: typeof source.geometryMode === "string" ? source.geometryMode : undefined,
+      geometry_bounds: Array.isArray(source.geometryBounds) ? (source.geometryBounds as number[]) : undefined,
+      geometry_view_box: Array.isArray(source.geometryViewBox) ? (source.geometryViewBox as number[]) : undefined,
+      sections: {
+        statewide: [],
+        top_counties: [],
+        recommended_view_bucket: [],
+      },
+    };
+  }
 }
 
 export async function fetchPresets(): Promise<PresetItem[]> {
-  const response = await fetchJson<{ items: PresetItem[] }>("/api/presets");
-  return response.items;
+  try {
+    const response = await fetchJson<{ items: PresetItem[] }>("/api/presets");
+    return response.items;
+  } catch {
+    const source = await fetchStaticMetaSource();
+    const defaultViews = Array.isArray(source.defaultViews) ? (source.defaultViews as Array<Record<string, string>>) : [];
+    const grouped = new Map<string, PresetItem>();
+    defaultViews.forEach((item) => {
+      const key = item.view_name;
+      if (!key) return;
+      const current = grouped.get(key) ?? {
+        view_name: key,
+        description: item.description,
+        filter_expression: item.filter_expression,
+      };
+      if (item.metric === "row_count") current.row_count = item.value;
+      if (item.metric === "average_lead_score") current.average_lead_score = item.value;
+      grouped.set(key, current);
+    });
+    return [...grouped.values()];
+  }
 }
 
 function appendList(searchParams: URLSearchParams, key: string, values: string[]) {
@@ -79,7 +141,25 @@ export async function fetchLeads(
   limit: number,
   offset: number,
 ): Promise<LeadsResponse> {
-  return fetchJson<LeadsResponse>("/api/leads", buildLeadQuery(filters, sortField, sortDirection, limit, offset));
+  try {
+    return await fetchJson<LeadsResponse>("/api/leads", buildLeadQuery(filters, sortField, sortDirection, limit, offset));
+  } catch {
+    const rows = await fetchStaticLeadSource();
+    const sorted = [...rows].sort((left, right) => {
+      const leftValue = (left as Record<string, unknown>)[sortField] as number | null | undefined;
+      const rightValue = (right as Record<string, unknown>)[sortField] as number | null | undefined;
+      const a = leftValue ?? (sortDirection === "asc" ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY);
+      const b = rightValue ?? (sortDirection === "asc" ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY);
+      return sortDirection === "asc" ? a - b : b - a;
+    });
+    const paged = sorted.slice(offset, offset + limit);
+    return {
+      total_count: rows.length,
+      limit,
+      offset,
+      items: paged,
+    };
+  }
 }
 
 export async function fetchLeadDetail(parcelRowId: string): Promise<LeadRecord> {
@@ -101,16 +181,72 @@ export async function fetchGeometryViewport(
   selectedParcelId: string | null,
   limit = 200,
 ): Promise<GeometryResponse> {
-  const searchParams = buildLeadQuery(filters, "lead_score_total", "desc", limit, 0);
-  if (bounds) {
-    searchParams.set("min_lng", String(bounds[0]));
-    searchParams.set("min_lat", String(bounds[1]));
-    searchParams.set("max_lng", String(bounds[2]));
-    searchParams.set("max_lat", String(bounds[3]));
+  const requestedLimit = zoom >= 12 ? Math.min(limit, 60) : zoom >= 10 ? Math.min(limit, 100) : limit;
+
+  async function requestGeometry(nextLimit: number) {
+    const searchParams = buildLeadQuery(filters, "lead_score_total", "desc", nextLimit, 0);
+    if (bounds) {
+      searchParams.set("min_lng", String(bounds[0]));
+      searchParams.set("min_lat", String(bounds[1]));
+      searchParams.set("max_lng", String(bounds[2]));
+      searchParams.set("max_lat", String(bounds[3]));
+    }
+    searchParams.set("zoom", String(zoom));
+    if (selectedParcelId) {
+      searchParams.set("selected_parcel_id", selectedParcelId);
+    }
+    return fetchJson<GeometryResponse>("/api/leads/geometry", searchParams);
   }
-  searchParams.set("zoom", String(zoom));
-  if (selectedParcelId) {
-    searchParams.set("selected_parcel_id", selectedParcelId);
+
+  try {
+    return await requestGeometry(requestedLimit);
+  } catch {
+    if (requestedLimit > 40) {
+      try {
+        return await requestGeometry(40);
+      } catch {
+        // fall through
+      }
+    }
+    const rows = await fetchStaticLeadSource();
+    const features = rows.slice(0, 250).flatMap((row) => {
+      const geometry = (row.geometry?.centroid ?? row.geometry) as GeometryPoint | null | undefined;
+      if (!geometry || geometry.type !== "Point" || !geometry.coordinates) return [];
+      return [
+        {
+          type: "Feature",
+          geometry,
+          properties: {
+            parcel_row_id: row.parcel_row_id,
+            parcel_id: row.parcel_id,
+            county_name: row.county_name,
+            lead_score_total: row.lead_score_total,
+            lead_score_tier: row.lead_score_tier,
+            parcel_vacant_flag: row.parcel_vacant_flag,
+            wetland_flag: row.wetland_flag,
+            flood_risk_score: row.flood_risk_score,
+            road_access_tier: row.road_access_tier,
+            county_hosted_flag: row.county_hosted_flag,
+            best_source_type: row.best_source_type,
+            selected: row.parcel_row_id === selectedParcelId,
+          },
+        },
+      ];
+    }) as FeatureCollectionPayload["features"];
+    return {
+      geometry_mode: "static_fallback_points",
+      render_mode: "points",
+      geometry_bounds: bounds ?? undefined,
+      geometry_view_box: undefined,
+      requested_bounds: bounds ?? undefined,
+      zoom,
+      feature_count: features.length,
+      feature_collection: { type: "FeatureCollection", features },
+      items: features.map((feature) => ({
+        parcel_row_id: feature.properties.parcel_row_id,
+        path: null,
+        lead_score_total: feature.properties.lead_score_total ?? null,
+      })),
+    };
   }
-  return fetchJson<GeometryResponse>("/api/leads/geometry", searchParams);
 }
