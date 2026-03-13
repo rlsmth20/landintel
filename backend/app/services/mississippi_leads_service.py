@@ -174,10 +174,61 @@ def _county_hosted_flag(series: pd.Series) -> pd.Series:
     return normalized.str.contains("direct_download|county", case=False, regex=True)
 
 
+def _full_runtime_available() -> bool:
+    return PARCEL_MASTER_PATH.exists() and OWNER_LEADS_PATH.exists() and BUILDING_METRICS_PATH.exists()
+
+
+def _centroids_from_wkb(series: pd.Series) -> tuple[pd.Series, pd.Series]:
+    longitudes = pd.Series(np.nan, index=series.index, dtype="float64")
+    latitudes = pd.Series(np.nan, index=series.index, dtype="float64")
+    for index, geometry_bytes in series.items():
+        if not geometry_bytes:
+            continue
+        try:
+            shape = wkb.loads(geometry_bytes)
+        except Exception:
+            continue
+        centroid = shape.centroid
+        longitudes.at[index] = float(centroid.x)
+        latitudes.at[index] = float(centroid.y)
+    return longitudes, latitudes
+
+
 @lru_cache(maxsize=1)
 def load_base_frame() -> pd.DataFrame:
-    if not PARCEL_MASTER_PATH.exists():
-        raise FileNotFoundError(f"Parcel master not found: {PARCEL_MASTER_PATH}")
+    if not LEAD_SIGNALS_PATH.exists():
+        raise FileNotFoundError(f"Lead signals dataset not found: {LEAD_SIGNALS_PATH}")
+
+    if not _full_runtime_available():
+        frame = pd.read_parquet(LEAD_SIGNALS_PATH, engine="pyarrow").copy()
+        frame["acreage"] = _to_float_series(frame, "acreage")
+        frame["land_use"] = _normalize_string(frame.get("land_use"), index=frame.index)
+        frame["assessed_total_value"] = _to_float_series(frame, "assessed_total_value")
+        frame["county_hosted_flag"] = frame["county_hosted_flag"].fillna(_county_hosted_flag(frame.get("best_source_type")))
+        frame["parcel_vacant_flag"] = frame["parcel_vacant_flag"].fillna(False)
+        frame["corporate_owner_flag"] = frame["corporate_owner_flag"].fillna(False)
+        frame["absentee_owner_flag"] = frame["absentee_owner_flag"].fillna(False)
+        frame["out_of_state_owner_flag"] = frame["out_of_state_owner_flag"].fillna(False)
+        frame["high_confidence_link_flag"] = frame["high_confidence_link_flag"].fillna(False)
+        frame["delinquent_flag"] = frame["delinquent_flag"].fillna(False)
+        frame["forfeited_flag"] = frame["forfeited_flag"].fillna(False)
+        frame["amount_trust_tier"] = _normalize_string(frame.get("amount_trust_tier"), index=frame.index).fillna("not_reported")
+        frame["source_confidence_tier"] = _normalize_string(frame.get("source_confidence_tier"), index=frame.index).fillna("medium")
+        frame["county_source_coverage_tier"] = _normalize_string(frame.get("county_source_coverage_tier"), index=frame.index).fillna("county_dataset")
+        frame["best_source_type"] = _normalize_string(frame.get("best_source_type"), index=frame.index).fillna("lead_dataset")
+        frame["best_source_name"] = _normalize_string(frame.get("best_source_name"), index=frame.index).fillna("Mississippi Lead Dataset")
+        frame["growth_pressure_bucket"] = _normalize_string(frame.get("growth_pressure_bucket"), index=frame.index).fillna("unknown")
+        frame["recommended_view_bucket"] = _normalize_string(frame.get("recommended_view_bucket"), index=frame.index).fillna("general_ranked")
+        frame["owner_type"] = _normalize_string(frame.get("owner_type"), index=frame.index).fillna("unknown")
+        frame["state_code"] = _normalize_string(frame.get("state_code"), index=frame.index).fillna("MS")
+        frame["county_name"] = _normalize_string(frame.get("county_name"), index=frame.index)
+        frame["owner_name"] = _normalize_string(frame.get("owner_name"), index=frame.index)
+        frame["parcel_id"] = _normalize_string(frame.get("parcel_id"), index=frame.index)
+        frame["electric_provider_name"] = _normalize_string(frame.get("electric_provider_name"), index=frame.index)
+        longitudes, latitudes = _centroids_from_wkb(frame.get("geometry"))
+        frame["longitude"] = longitudes
+        frame["latitude"] = latitudes
+        return frame
 
     parcel_columns = [
         "parcel_row_id",
@@ -497,12 +548,18 @@ def _apply_filters(
 
 
 def _detail_geometry(parcel_row_id: str) -> dict[str, Any] | None:
-    dataset = ds.dataset(PARCEL_MASTER_PATH, format="parquet")
-    table = dataset.to_table(columns=["parcel_row_id", "geometry"], filter=ds.field("parcel_row_id") == parcel_row_id)
-    if table.num_rows == 0:
-        return None
-    frame = table.to_pandas()
-    geometry_bytes = frame.iloc[0]["geometry"]
+    geometry_bytes = None
+    if PARCEL_MASTER_PATH.exists():
+        dataset = ds.dataset(PARCEL_MASTER_PATH, format="parquet")
+        table = dataset.to_table(columns=["parcel_row_id", "geometry"], filter=ds.field("parcel_row_id") == parcel_row_id)
+        if table.num_rows:
+            frame = table.to_pandas()
+            geometry_bytes = frame.iloc[0]["geometry"]
+    if geometry_bytes is None:
+        base_frame = load_base_frame()
+        match = base_frame.loc[base_frame["parcel_row_id"].astype("string").eq(parcel_row_id), ["geometry"]]
+        if not match.empty:
+            geometry_bytes = match.iloc[0]["geometry"]
     if not geometry_bytes:
         return None
     geometry = wkb.loads(geometry_bytes)
@@ -516,9 +573,12 @@ def _detail_geometry(parcel_row_id: str) -> dict[str, Any] | None:
 
 
 def _geometry_table_for_ids(parcel_row_ids: list[str]) -> pd.DataFrame:
-    dataset = ds.dataset(PARCEL_MASTER_PATH, format="parquet")
-    table = dataset.to_table(columns=["parcel_row_id", "geometry"], filter=ds.field("parcel_row_id").isin(parcel_row_ids))
-    return table.to_pandas()
+    if PARCEL_MASTER_PATH.exists():
+        dataset = ds.dataset(PARCEL_MASTER_PATH, format="parquet")
+        table = dataset.to_table(columns=["parcel_row_id", "geometry"], filter=ds.field("parcel_row_id").isin(parcel_row_ids))
+        return table.to_pandas()
+    base_frame = load_base_frame()
+    return base_frame.loc[base_frame["parcel_row_id"].astype("string").isin(parcel_row_ids), ["parcel_row_id", "geometry"]].copy()
 
 
 def _render_mode_for_zoom(zoom: float | None) -> str:
@@ -807,9 +867,14 @@ def get_summary() -> dict[str, Any]:
     county_counts = frame.groupby("county_name", dropna=True).size().sort_values(ascending=False).head(20)
     recommended_counts = frame.groupby("recommended_view_bucket", dropna=True).size().sort_values(ascending=False)
     average_score = pd.to_numeric(frame["lead_score_total"], errors="coerce").mean()
+    source_label = (
+        "mississippi_parcels_master + owner leads + building metrics + motivation signals"
+        if _full_runtime_available()
+        else "mississippi lead dataset"
+    )
     return {
         "row_count": int(len(frame)),
-        "source": "mississippi_parcels_master + owner leads + building metrics + motivation signals",
+        "source": source_label,
         "geometry_mode": "viewport_geojson",
         "sections": {
             "statewide": [
