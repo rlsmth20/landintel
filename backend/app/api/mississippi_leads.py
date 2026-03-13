@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 
@@ -15,6 +17,7 @@ from app.settings import GEOMETRY_DEFAULT_LIMIT, LEADS_DEFAULT_LIMIT
 
 
 router = APIRouter(prefix="/api", tags=["mississippi-leads"])
+logger = logging.getLogger("parcel-tiles")
 
 
 @router.get("/leads")
@@ -81,8 +84,12 @@ def parcel_geometry(parcel_row_id: str, zoom: float | None = None):
 
 @router.get("/tiles/parcels/{z}/{x}/{y}.mvt")
 def parcel_tile(z: int, x: int, y: int):
-    tile = get_parcel_tile(z, x, y)
-    return Response(content=tile, media_type="application/vnd.mapbox-vector-tile")
+    try:
+        tile = get_parcel_tile(z, x, y)
+        return Response(content=tile, media_type="application/vnd.mapbox-vector-tile")
+    except Exception:
+        logger.exception("parcel tile endpoint failed z=%s x=%s y=%s", z, x, y)
+        raise
 
 
 @router.get("/presets")

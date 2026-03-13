@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import time
 from collections import Counter
 from functools import lru_cache
 from pathlib import Path
@@ -120,7 +122,9 @@ PRESET_DEFINITIONS = {
 }
 
 PARCEL_TILE_LAYER = "parcels"
-PARCEL_TILE_MIN_ZOOM = 7
+PARCEL_TILE_MIN_ZOOM = 14
+MISSISSIPPI_TILE_BOUNDS = (-91.65, 30.15, -88.0, 35.1)
+tile_logger = logging.getLogger("parcel-tiles")
 
 
 def _normalize_string(series: pd.Series | None, index: pd.Index | None = None) -> pd.Series:
@@ -966,13 +970,13 @@ def _tile_simplification_tolerance(z: int) -> float:
 
 
 def _tile_feature_limit(z: int) -> int:
-    if z >= 13:
-        return 8000
-    if z >= 11:
+    if z >= 14:
         return 5000
-    if z >= 9:
+    if z >= 13:
         return 3000
-    return 1800
+    if z >= 12:
+        return 1800
+    return 900
 
 
 def runtime_file_diagnostics() -> dict[str, dict[str, int | bool | str | None]]:
@@ -1173,11 +1177,24 @@ def get_parcel_geometry(parcel_row_id: str, zoom: float | None = None) -> dict[s
 
 
 def get_parcel_tile(z: int, x: int, y: int) -> bytes:
+    started_at = time.perf_counter()
+    tile_logger.info("parcel tile start z=%s x=%s y=%s", z, x, y)
     if z < PARCEL_TILE_MIN_ZOOM:
-        return mapbox_vector_tile.encode({"name": PARCEL_TILE_LAYER, "features": []})
+        payload = mapbox_vector_tile.encode({"name": PARCEL_TILE_LAYER, "features": []})
+        tile_logger.info("parcel tile skipped z=%s x=%s y=%s reason=min_zoom bytes=%s", z, x, y, len(payload))
+        return payload
 
     tile = mercantile.bounds(x, y, z)
     bounds = (tile.west, tile.south, tile.east, tile.north)
+    if (
+        bounds[2] < MISSISSIPPI_TILE_BOUNDS[0]
+        or bounds[0] > MISSISSIPPI_TILE_BOUNDS[2]
+        or bounds[3] < MISSISSIPPI_TILE_BOUNDS[1]
+        or bounds[1] > MISSISSIPPI_TILE_BOUNDS[3]
+    ):
+        payload = mapbox_vector_tile.encode({"name": PARCEL_TILE_LAYER, "features": []})
+        tile_logger.info("parcel tile skipped z=%s x=%s y=%s reason=outside_state bytes=%s", z, x, y, len(payload))
+        return payload
     tile_columns = [
         "parcel_row_id",
         "parcel_id",
@@ -1192,57 +1209,98 @@ def get_parcel_tile(z: int, x: int, y: int) -> bytes:
     ]
 
     if _using_embedded_runtime():
+        query_started = time.perf_counter()
         expression = _embedded_filter_expression(bounds=bounds)
-        frame = _bounded_scan_batches(
-            columns=tile_columns,
-            expression=expression,
-            keep_rows=_tile_feature_limit(z),
+        frame = _embedded_to_pandas(tile_columns, expression).head(_tile_feature_limit(z))
+        tile_logger.info(
+            "parcel tile query z=%s x=%s y=%s runtime=embedded candidates=%s elapsed_ms=%s",
+            z,
+            x,
+            y,
+            len(frame),
+            round((time.perf_counter() - query_started) * 1000, 1),
         )
     else:
+        query_started = time.perf_counter()
         frame = load_base_frame()
         bbox_mask = (
             pd.to_numeric(frame["longitude"], errors="coerce").between(bounds[0], bounds[2]).fillna(False)
             & pd.to_numeric(frame["latitude"], errors="coerce").between(bounds[1], bounds[3]).fillna(False)
         )
         frame = frame.loc[bbox_mask, tile_columns].head(_tile_feature_limit(z)).copy()
+        tile_logger.info(
+            "parcel tile query z=%s x=%s y=%s runtime=full candidates=%s elapsed_ms=%s",
+            z,
+            x,
+            y,
+            len(frame),
+            round((time.perf_counter() - query_started) * 1000, 1),
+        )
 
     if frame.empty:
-        return mapbox_vector_tile.encode({"name": PARCEL_TILE_LAYER, "features": []})
+        payload = mapbox_vector_tile.encode({"name": PARCEL_TILE_LAYER, "features": []})
+        tile_logger.info(
+            "parcel tile empty z=%s x=%s y=%s bytes=%s elapsed_ms=%s",
+            z,
+            x,
+            y,
+            len(payload),
+            round((time.perf_counter() - started_at) * 1000, 1),
+        )
+        return payload
 
     geometry_frame = _geometry_table_for_ids(frame["parcel_row_id"].astype(str).tolist())
     geometry_lookup = dict(zip(geometry_frame["parcel_row_id"].astype(str), geometry_frame["geometry"]))
     tolerance = _tile_simplification_tolerance(z)
     features: list[dict[str, Any]] = []
+    skipped = 0
     for _, row in frame.iterrows():
         parcel_row_id = str(row["parcel_row_id"])
         geometry_value = geometry_lookup.get(parcel_row_id)
         if geometry_value is None:
+            skipped += 1
             continue
         if isinstance(geometry_value, dict):
+            skipped += 1
             continue
-        shape = wkb.loads(geometry_value)
-        rendered_shape = shape.simplify(tolerance, preserve_topology=True) if tolerance > 0 else shape
-        features.append(
-            {
-                "id": parcel_row_id,
-                "geometry": mapping(rendered_shape),
-                "properties": {
-                    "parcel_row_id": parcel_row_id,
-                    "parcel_id": _serialize_scalar(row.get("parcel_id")),
-                    "county_name": _serialize_scalar(row.get("county_name")),
-                    "wetland_flag": bool(_serialize_scalar(row.get("wetland_flag"))),
-                    "flood_risk_score": _serialize_scalar(row.get("flood_risk_score")),
-                    "road_access_tier": _serialize_scalar(row.get("road_access_tier")),
-                    "county_hosted_flag": bool(_serialize_scalar(row.get("county_hosted_flag"))),
-                    "best_source_type": _serialize_scalar(row.get("best_source_type")),
-                },
-            }
-        )
+        try:
+            shape = wkb.loads(geometry_value)
+            rendered_shape = shape.simplify(tolerance, preserve_topology=True) if tolerance > 0 else shape
+            features.append(
+                {
+                    "id": parcel_row_id,
+                    "geometry": mapping(rendered_shape),
+                    "properties": {
+                        "parcel_row_id": parcel_row_id,
+                        "parcel_id": _serialize_scalar(row.get("parcel_id")),
+                        "county_name": _serialize_scalar(row.get("county_name")),
+                        "wetland_flag": bool(_serialize_scalar(row.get("wetland_flag"))),
+                        "flood_risk_score": _serialize_scalar(row.get("flood_risk_score")),
+                        "road_access_tier": _serialize_scalar(row.get("road_access_tier")),
+                        "county_hosted_flag": bool(_serialize_scalar(row.get("county_hosted_flag"))),
+                        "best_source_type": _serialize_scalar(row.get("best_source_type")),
+                    },
+                }
+            )
+        except Exception:
+            skipped += 1
+            tile_logger.exception("parcel tile feature decode failed z=%s x=%s y=%s parcel_row_id=%s", z, x, y, parcel_row_id)
 
-    return mapbox_vector_tile.encode(
+    payload = mapbox_vector_tile.encode(
         {"name": PARCEL_TILE_LAYER, "features": features},
         default_options={"quantize_bounds": bounds, "extents": 4096},
     )
+    tile_logger.info(
+        "parcel tile complete z=%s x=%s y=%s features=%s skipped=%s bytes=%s elapsed_ms=%s",
+        z,
+        x,
+        y,
+        len(features),
+        skipped,
+        len(payload),
+        round((time.perf_counter() - started_at) * 1000, 1),
+    )
+    return payload
 
 
 def get_geometry(

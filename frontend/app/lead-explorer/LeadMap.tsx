@@ -20,6 +20,7 @@ const MISSISSIPPI_BOUNDS: [[number, number], [number, number]] = [
 const PARCEL_TILE_SOURCE_ID = "landintel-parcel-tiles";
 const PARCEL_TILE_LAYER = "parcels";
 const SELECTED_PARCEL_SOURCE_ID = "landintel-selected-parcel";
+const PARCEL_TILE_MIN_ZOOM = 14;
 
 const BASE_STYLE: maplibregl.StyleSpecification = {
   version: 8,
@@ -107,7 +108,7 @@ function initializeParcelLayers(map: Map) {
   map.addSource(PARCEL_TILE_SOURCE_ID, {
     type: "vector",
     tiles: [`${API_BASE_URL}/api/tiles/parcels/{z}/{x}/{y}.mvt`],
-    minzoom: 7,
+    minzoom: PARCEL_TILE_MIN_ZOOM,
     maxzoom: 15,
     promoteId: { [PARCEL_TILE_LAYER]: "parcel_row_id" },
   });
@@ -451,7 +452,7 @@ export function LeadMap({
   } else if (totalCount === 0) {
     emptyTitle = "No parcels match current filters";
     emptyBody = "Try broadening the current filter set or clearing preset constraints.";
-  } else if (viewport.zoom < 7) {
+  } else if (viewport.zoom < PARCEL_TILE_MIN_ZOOM) {
     emptyTitle = "Zoom in to inspect parcel boundaries";
     emptyBody = "The base parcel layer uses tiles and becomes legible once you zoom further into Mississippi.";
   } else if (loading && selectedId) {

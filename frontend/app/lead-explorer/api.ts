@@ -45,11 +45,7 @@ async function fetchStaticMetaSource() {
 
 async function fetchStaticLeadSource() {
   if (!staticLeadCache) {
-    try {
-      staticLeadCache = await fetchStaticJson<LeadRecord[]>("/data/mississippi_lead_explorer.json");
-    } catch {
-      staticLeadCache = await fetchStaticLeadDetailSource();
-    }
+    staticLeadCache = await fetchStaticLeadDetailSource();
   }
   return staticLeadCache;
 }
