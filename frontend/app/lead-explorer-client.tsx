@@ -183,7 +183,7 @@ export default function LeadExplorerClient() {
       setGeometryLoading(true);
       setGeometryError(null);
       try {
-        const response = await fetchParcelGeometryById(selectedParcelId, Math.max(viewport.zoom, 13));
+        const response = await fetchParcelGeometryById(selectedParcelId, 14);
         if (cancelled) return;
         setSelectedGeometryResponse(response);
       } catch (error) {
@@ -201,7 +201,7 @@ export default function LeadExplorerClient() {
     return () => {
       cancelled = true;
     };
-  }, [selectedId, viewport.zoom]);
+  }, [selectedId]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -694,7 +694,7 @@ export default function LeadExplorerClient() {
             <LeadBadge label={`${totalCount.toLocaleString()} parcels`} tone="good" />
             <LeadBadge label={`${visibleLeads.length} loaded`} tone="neutral" />
             <LeadBadge label={`${visibleVacantCount.toLocaleString()} likely vacant in view`} tone="warn" />
-            <LeadBadge label={geometryLoading ? "Geometry loading" : "Geometry ready"} tone={geometryLoading ? "warn" : "good"} />
+            <LeadBadge label={geometryLoading ? "Selected overlay loading" : "Base tiles live"} tone={geometryLoading ? "warn" : "good"} />
           </div>
         </section>
 
