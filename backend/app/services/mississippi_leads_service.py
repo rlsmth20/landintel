@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -11,7 +12,13 @@ import pyarrow.dataset as ds
 from shapely import wkb
 from shapely.geometry import mapping
 
-from app.settings import GEOMETRY_DEFAULT_LIMIT, GEOMETRY_MAX_LIMIT, LEADS_DEFAULT_LIMIT, LEADS_MAX_LIMIT
+from app.settings import (
+    GEOMETRY_DEFAULT_LIMIT,
+    GEOMETRY_MAX_LIMIT,
+    LEADS_DEFAULT_LIMIT,
+    LEADS_MAX_LIMIT,
+    MISSISSIPPI_STATIC_FEED_PATH,
+)
 
 
 def _discover_project_root() -> Path:
@@ -109,6 +116,8 @@ def _normalize_string(series: pd.Series | None, index: pd.Index | None = None) -
 
 
 def _serialize_scalar(value: Any) -> Any:
+    if isinstance(value, (dict, list, tuple)):
+        return value
     if pd.isna(value):
         return None
     if hasattr(value, "item"):
@@ -178,6 +187,22 @@ def _full_runtime_available() -> bool:
     return PARCEL_MASTER_PATH.exists() and OWNER_LEADS_PATH.exists() and BUILDING_METRICS_PATH.exists()
 
 
+def _load_static_feed_frame() -> pd.DataFrame:
+    if not MISSISSIPPI_STATIC_FEED_PATH.exists():
+        raise FileNotFoundError(f"Static explorer feed not found: {MISSISSIPPI_STATIC_FEED_PATH}")
+    with MISSISSIPPI_STATIC_FEED_PATH.open("r", encoding="utf-8") as handle:
+        records = json.load(handle)
+    frame = pd.DataFrame(records)
+    if "geometry" in frame.columns:
+        frame["longitude"] = frame["geometry"].apply(
+            lambda value: value.get("coordinates", [None, None])[0] if isinstance(value, dict) else None
+        )
+        frame["latitude"] = frame["geometry"].apply(
+            lambda value: value.get("coordinates", [None, None])[1] if isinstance(value, dict) else None
+        )
+    return frame
+
+
 def _centroids_from_wkb(series: pd.Series) -> tuple[pd.Series, pd.Series]:
     longitudes = pd.Series(np.nan, index=series.index, dtype="float64")
     latitudes = pd.Series(np.nan, index=series.index, dtype="float64")
@@ -196,11 +221,16 @@ def _centroids_from_wkb(series: pd.Series) -> tuple[pd.Series, pd.Series]:
 
 @lru_cache(maxsize=1)
 def load_base_frame() -> pd.DataFrame:
-    if not LEAD_SIGNALS_PATH.exists():
-        raise FileNotFoundError(f"Lead signals dataset not found: {LEAD_SIGNALS_PATH}")
+    if not LEAD_SIGNALS_PATH.exists() and not MISSISSIPPI_STATIC_FEED_PATH.exists():
+        raise FileNotFoundError(
+            f"Lead signals dataset not found: {LEAD_SIGNALS_PATH}; static feed not found: {MISSISSIPPI_STATIC_FEED_PATH}"
+        )
 
     if not _full_runtime_available():
-        frame = pd.read_parquet(LEAD_SIGNALS_PATH, engine="pyarrow").copy()
+        try:
+            frame = pd.read_parquet(LEAD_SIGNALS_PATH, engine="pyarrow").copy()
+        except Exception:
+            frame = _load_static_feed_frame()
         frame["acreage"] = _to_float_series(frame, "acreage")
         frame["land_use"] = _normalize_string(frame.get("land_use"), index=frame.index)
         frame["assessed_total_value"] = _to_float_series(frame, "assessed_total_value")
@@ -562,6 +592,17 @@ def _detail_geometry(parcel_row_id: str) -> dict[str, Any] | None:
             geometry_bytes = match.iloc[0]["geometry"]
     if not geometry_bytes:
         return None
+    if isinstance(geometry_bytes, dict):
+        coordinates = geometry_bytes.get("coordinates")
+        if isinstance(coordinates, list) and len(coordinates) >= 2:
+            lng = float(coordinates[0])
+            lat = float(coordinates[1])
+            return {
+                "type": geometry_bytes.get("type", "Point"),
+                "centroid": {"type": "Point", "coordinates": [round(lng, 6), round(lat, 6)]},
+                "bounds": [round(lng, 6), round(lat, 6), round(lng, 6), round(lat, 6)],
+            }
+        return None
     geometry = wkb.loads(geometry_bytes)
     centroid = geometry.centroid
     bounds = geometry.bounds
@@ -619,6 +660,13 @@ def runtime_file_diagnostics() -> dict[str, dict[str, int | bool | str | None]]:
             "exists": path.exists(),
             "size_bytes": path.stat().st_size if path.exists() else None,
         }
+    diagnostics["static_feed"] = {
+        "cwd": str(Path.cwd()),
+        "project_root": str(PROJECT_ROOT),
+        "path": str(MISSISSIPPI_STATIC_FEED_PATH.resolve(strict=False)),
+        "exists": MISSISSIPPI_STATIC_FEED_PATH.exists(),
+        "size_bytes": MISSISSIPPI_STATIC_FEED_PATH.stat().st_size if MISSISSIPPI_STATIC_FEED_PATH.exists() else None,
+    }
     return diagnostics
 
 
@@ -794,6 +842,34 @@ def get_geometry(
             geometry_bytes = geometry_lookup.get(parcel_row_id)
             if not geometry_bytes:
                 continue
+            if isinstance(geometry_bytes, dict):
+                coordinates = geometry_bytes.get("coordinates")
+                if not (isinstance(coordinates, list) and len(coordinates) >= 2):
+                    continue
+                lng = float(coordinates[0])
+                lat = float(coordinates[1])
+                feature_bounds.append((lng, lat, lng, lat))
+                features.append(
+                    {
+                        "type": "Feature",
+                        "geometry": geometry_bytes,
+                        "properties": {
+                            "parcel_row_id": parcel_row_id,
+                            "parcel_id": _serialize_scalar(row.get("parcel_id")),
+                            "county_name": _serialize_scalar(row.get("county_name")),
+                            "lead_score_total": _serialize_scalar(row.get("lead_score_total")),
+                            "lead_score_tier": _serialize_scalar(row.get("lead_score_tier")),
+                            "parcel_vacant_flag": _serialize_scalar(row.get("parcel_vacant_flag")),
+                            "wetland_flag": _serialize_scalar(row.get("wetland_flag")),
+                            "flood_risk_score": _serialize_scalar(row.get("flood_risk_score")),
+                            "road_access_tier": _serialize_scalar(row.get("road_access_tier")),
+                            "county_hosted_flag": _serialize_scalar(row.get("county_hosted_flag")),
+                            "best_source_type": _serialize_scalar(row.get("best_source_type")),
+                            "selected": parcel_row_id == (selected_parcel_id or ""),
+                        },
+                    }
+                )
+                continue
             shape = wkb.loads(geometry_bytes)
             tolerance = _simplification_tolerance(zoom)
             rendered_shape = shape.simplify(tolerance, preserve_topology=True) if tolerance > 0 else shape
@@ -870,7 +946,7 @@ def get_summary() -> dict[str, Any]:
     source_label = (
         "mississippi_parcels_master + owner leads + building metrics + motivation signals"
         if _full_runtime_available()
-        else "mississippi lead dataset"
+        else ("mississippi lead dataset" if LEAD_SIGNALS_PATH.exists() else "mississippi explorer static feed")
     )
     return {
         "row_count": int(len(frame)),
