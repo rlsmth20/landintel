@@ -250,6 +250,8 @@ export function LeadMap({
   const mapRef = useRef<Map | null>(null);
   const hoveredFeatureIdRef = useRef<string | null>(null);
   const hasInitializedViewportRef = useRef(false);
+  const lastAppliedFitNonceRef = useRef<number>(-1);
+  const lastSelectedIdRef = useRef<string | null>(null);
 
   const featureCollection = geometryResponse?.feature_collection;
   const featureCount = featureCollection?.features.length ?? 0;
@@ -388,6 +390,13 @@ export function LeadMap({
     const map = mapRef.current;
     if (!map || featureCount === 0) return;
 
+    const isFirstFit = !hasInitializedViewportRef.current;
+    const hasNewFitRequest = fitNonce !== lastAppliedFitNonceRef.current;
+    const hasSelectionChange = selectedId !== lastSelectedIdRef.current && Boolean(selectedId);
+    if (!isFirstFit && !hasNewFitRequest && !hasSelectionChange) {
+      return;
+    }
+
     const targetBounds = selectedBounds ?? resultBounds;
     if (!targetBounds) {
       if (process.env.NODE_ENV !== "production") {
@@ -408,6 +417,8 @@ export function LeadMap({
         maxZoom: selectedBounds ? 16.5 : 14.5,
       });
       hasInitializedViewportRef.current = true;
+      lastAppliedFitNonceRef.current = fitNonce;
+      lastSelectedIdRef.current = selectedId;
     } catch (error) {
       if (process.env.NODE_ENV !== "production") {
         console.debug("[landintel-map] fit_failed", {
@@ -418,7 +429,7 @@ export function LeadMap({
         });
       }
     }
-  }, [featureCollection, featureCount, fitNonce, geometryResponse, resultBounds, selectedBounds]);
+  }, [featureCount, fitNonce, geometryResponse, resultBounds, selectedBounds, selectedId]);
 
   return (
     <div className="lead-map-shell">
