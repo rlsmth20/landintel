@@ -1,27 +1,37 @@
 from __future__ import annotations
 
 import json
+import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from shapely import wkb
 
-from app.settings import (
-    GEOMETRY_DEFAULT_LIMIT,
-    GEOMETRY_MAX_LIMIT,
-    LEADS_DEFAULT_LIMIT,
-    LEADS_MAX_LIMIT,
-    MISSISSIPPI_APP_READY_PATH,
-    MISSISSIPPI_GEOMETRY_PATH,
-    MISSISSIPPI_META_PATH,
-    runtime_file_diagnostics,
-)
+from app.settings import GEOMETRY_DEFAULT_LIMIT, GEOMETRY_MAX_LIMIT, LEADS_DEFAULT_LIMIT, LEADS_MAX_LIMIT
 
 
-APP_READY_PATH = MISSISSIPPI_APP_READY_PATH
-META_PATH = MISSISSIPPI_META_PATH
-GEOMETRY_PATH = MISSISSIPPI_GEOMETRY_PATH
+def _discover_project_root() -> Path:
+    explicit_root = os.getenv("MISSISSIPPI_EXPLORER_DATA_ROOT")
+    if explicit_root:
+        return Path(explicit_root).expanduser().resolve(strict=False)
+
+    cwd = Path.cwd().resolve(strict=False)
+    service_repo_root = Path(__file__).resolve().parents[3]
+    candidates = [cwd, cwd.parent, service_repo_root]
+    for candidate in candidates:
+        if (candidate / "frontend" / "public" / "data").exists():
+            return candidate
+    return cwd
+
+
+PROJECT_ROOT = _discover_project_root()
+DATA_DIR = PROJECT_ROOT / "frontend" / "public" / "data"
+APP_READY_PATH = PROJECT_ROOT / "data" / "tax_published" / "ms" / "app_ready_mississippi_leads.parquet"
+STATIC_FEED_PATH = DATA_DIR / "mississippi_lead_explorer.json"
+META_PATH = DATA_DIR / "mississippi_lead_explorer_meta.json"
+GEOMETRY_PATH = DATA_DIR / "mississippi_lead_explorer_geometries.json"
 
 BOOL_FILTER_FIELDS = {
     "parcel_vacant_flag",
@@ -106,11 +116,30 @@ def _geometry_payload(value: bytes | None) -> dict[str, Any] | None:
     }
 
 
+def runtime_file_diagnostics() -> dict[str, dict[str, int | bool | str | None]]:
+    diagnostics: dict[str, dict[str, int | bool | str | None]] = {}
+    paths = {
+        "app_ready_parquet": APP_READY_PATH,
+        "static_feed_json": STATIC_FEED_PATH,
+        "meta_json": META_PATH,
+        "geometry_json": GEOMETRY_PATH,
+    }
+    for name, path in paths.items():
+        diagnostics[name] = {
+            "cwd": str(Path.cwd()),
+            "project_root": str(PROJECT_ROOT),
+            "path": str(path.resolve(strict=False)),
+            "exists": path.exists(),
+            "size_bytes": path.stat().st_size if path.exists() else None,
+        }
+    return diagnostics
+
+
 def _missing_runtime_file_error(label: str, path_key: str) -> FileNotFoundError:
     diagnostics = runtime_file_diagnostics().get(path_key, {})
     return FileNotFoundError(
         f"{label} not found: {diagnostics.get('path')} | cwd={diagnostics.get('cwd')} | "
-        f"candidates={diagnostics.get('candidates')}"
+        f"project_root={diagnostics.get('project_root')}"
     )
 
 
