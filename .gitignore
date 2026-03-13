@@ -21,6 +21,7 @@ backend/.venv/
 data/
 storage/
 frontend/public/data/
+!data/
 !data/tax_published/
 !data/tax_published/ms/
 !data/tax_published/ms/app_ready_mississippi_leads.parquet
