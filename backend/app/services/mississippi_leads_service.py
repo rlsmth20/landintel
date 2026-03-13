@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections import Counter
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -291,6 +292,31 @@ def _embedded_filter_expression(
 def _embedded_to_pandas(columns: list[str], expression: ds.Expression | None = None) -> pd.DataFrame:
     table = _embedded_parcel_dataset().to_table(columns=columns, filter=expression)
     return table.to_pandas()
+
+
+def _embedded_count_rows(expression: ds.Expression | None = None) -> int:
+    return int(_embedded_parcel_dataset().count_rows(filter=expression))
+
+
+def _bounded_sorted_batches(
+    *,
+    columns: list[str],
+    expression: ds.Expression | None,
+    sort_by: str,
+    ascending: bool,
+    keep_rows: int,
+    batch_size: int = 50000,
+) -> pd.DataFrame:
+    dataset = _embedded_parcel_dataset()
+    candidate = pd.DataFrame(columns=columns)
+    scanner = dataset.scanner(columns=columns, filter=expression, batch_size=batch_size)
+    for batch in scanner.to_batches():
+        frame = batch.to_pandas()
+        if frame.empty:
+            continue
+        candidate = pd.concat([candidate, frame], ignore_index=True)
+        candidate = candidate.sort_values(sort_by, ascending=ascending, na_position="last").head(keep_rows)
+    return candidate.sort_values(sort_by, ascending=ascending, na_position="last").head(keep_rows)
 
 
 def _load_static_feed_frame() -> pd.DataFrame:
@@ -842,6 +868,8 @@ def get_leads(
     offset: int = 0,
 ) -> dict[str, Any]:
     if _using_embedded_runtime():
+        safe_limit = _clamp_limit(limit, default=LEADS_DEFAULT_LIMIT, max_limit=LEADS_MAX_LIMIT)
+        safe_offset = max(int(offset), 0)
         expression = _embedded_filter_expression(
             county_name=county_name,
             lead_score_tier=lead_score_tier,
@@ -861,14 +889,17 @@ def get_leads(
             road_access_tier=road_access_tier,
             road_distance_ft_max=road_distance_ft_max,
         )
-        filtered = _embedded_to_pandas(SUMMARY_FIELDS, expression)
-        total_count = len(filtered)
-        if sort_by not in filtered.columns:
+        total_count = _embedded_count_rows(expression)
+        if sort_by not in SUMMARY_FIELDS:
             sort_by = "lead_score_total"
         ascending = sort_direction.lower() == "asc"
-        filtered = filtered.sort_values(sort_by, ascending=ascending, na_position="last")
-        safe_limit = _clamp_limit(limit, default=LEADS_DEFAULT_LIMIT, max_limit=LEADS_MAX_LIMIT)
-        safe_offset = max(int(offset), 0)
+        filtered = _bounded_sorted_batches(
+            columns=SUMMARY_FIELDS,
+            expression=expression,
+            sort_by=sort_by,
+            ascending=ascending,
+            keep_rows=safe_limit + safe_offset,
+        )
         paged = filtered.iloc[safe_offset : safe_offset + safe_limit].copy()
         items = [{column: _serialize_scalar(row[column]) for column in SUMMARY_FIELDS} for _, row in paged.loc[:, SUMMARY_FIELDS].iterrows()]
         return {"total_count": total_count, "limit": safe_limit, "offset": safe_offset, "items": items}
@@ -991,9 +1022,14 @@ def get_geometry(
             selected_parcel_id=selected_parcel_id,
             bounds=bounds,
         )
-        filtered = _embedded_to_pandas(geometry_columns, expression)
         safe_limit = _clamp_limit(limit, default=GEOMETRY_DEFAULT_LIMIT, max_limit=GEOMETRY_MAX_LIMIT)
-        filtered = filtered.sort_values("lead_score_total", ascending=False, na_position="last").head(safe_limit)
+        filtered = _bounded_sorted_batches(
+            columns=geometry_columns,
+            expression=expression,
+            sort_by="lead_score_total",
+            ascending=False,
+            keep_rows=safe_limit,
+        )
 
         render_mode = _render_mode_for_zoom(zoom)
         features: list[dict[str, Any]] = []
@@ -1249,28 +1285,46 @@ def get_presets() -> list[dict[str, Any]]:
 def get_summary() -> dict[str, Any]:
     if _using_embedded_runtime():
         summary_columns = ["county_name", "recommended_view_bucket", "lead_score_total", "parcel_vacant_flag", "county_hosted_flag"]
-        frame = _embedded_to_pandas(summary_columns)
-        county_counts = frame.groupby("county_name", dropna=True).size().sort_values(ascending=False).head(20)
-        recommended_counts = frame.groupby("recommended_view_bucket", dropna=True).size().sort_values(ascending=False)
-        average_score = pd.to_numeric(frame["lead_score_total"], errors="coerce").mean()
+        total_rows = 0
+        vacant_rows = 0
+        county_hosted_rows = 0
+        score_sum = 0.0
+        score_count = 0
+        county_counts: Counter[str] = Counter()
+        recommended_counts: Counter[str] = Counter()
+        scanner = _embedded_parcel_dataset().scanner(columns=summary_columns, batch_size=50000)
+        for batch in scanner.to_batches():
+            frame = batch.to_pandas()
+            if frame.empty:
+                continue
+            total_rows += len(frame)
+            vacant_rows += int(frame["parcel_vacant_flag"].fillna(False).sum())
+            county_hosted_rows += int(frame["county_hosted_flag"].fillna(False).sum())
+            scores = pd.to_numeric(frame["lead_score_total"], errors="coerce")
+            score_sum += float(scores.fillna(0).sum())
+            score_count += int(scores.notna().sum())
+            county_counts.update(frame["county_name"].dropna().astype(str).tolist())
+            recommended_counts.update(frame["recommended_view_bucket"].dropna().astype(str).tolist())
+        top_counties = county_counts.most_common(20)
+        average_score = (score_sum / score_count) if score_count else 0.0
         return {
-            "row_count": int(len(frame)),
+            "row_count": int(total_rows),
             "source": "mississippi parcel runtime dataset",
             "geometry_mode": "viewport_geojson",
             "sections": {
                 "statewide": [
-                    {"section": "statewide", "metric": "lead_count", "value": str(len(frame))},
+                    {"section": "statewide", "metric": "lead_count", "value": str(total_rows)},
                     {"section": "statewide", "metric": "average_lead_score", "value": f"{average_score:.1f}"},
-                    {"section": "statewide", "metric": "vacant_share_pct", "value": f"{frame['parcel_vacant_flag'].fillna(False).mean() * 100:.1f}"},
-                    {"section": "statewide", "metric": "county_hosted_share_pct", "value": f"{frame['county_hosted_flag'].fillna(False).mean() * 100:.1f}"},
+                    {"section": "statewide", "metric": "vacant_share_pct", "value": f"{(vacant_rows / total_rows * 100) if total_rows else 0:.1f}"},
+                    {"section": "statewide", "metric": "county_hosted_share_pct", "value": f"{(county_hosted_rows / total_rows * 100) if total_rows else 0:.1f}"},
                 ],
                 "top_counties": [
                     {"section": "top_counties", "key": county, "metric": "parcel_count", "value": str(int(count))}
-                    for county, count in county_counts.items()
+                    for county, count in top_counties
                 ],
                 "recommended_view_bucket": [
                     {"section": "recommended_view_bucket", "key": bucket, "metric": "parcel_count", "value": str(int(count))}
-                    for bucket, count in recommended_counts.items()
+                    for bucket, count in recommended_counts.most_common()
                 ],
             },
         }
