@@ -802,7 +802,7 @@ export default function LeadExplorerClient() {
         <div className="panel-header">
           <p className="eyebrow">Parcel detail</p>
           <h1>Selection</h1>
-          <p className="muted">All detail fields are loaded on demand from the backend detail endpoint.</p>
+          <p className="muted">Parcel details load from the API when available and fall back to the packaged explorer detail dataset if the backend detail request fails.</p>
         </div>
         {detailLoading ? <p className="muted">Loading parcel detail...</p> : null}
         {detailError ? <p className="error-text">{detailError}</p> : null}

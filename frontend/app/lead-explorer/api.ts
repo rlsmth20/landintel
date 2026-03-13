@@ -30,6 +30,7 @@ async function fetchJson<T>(path: string, searchParams?: URLSearchParams): Promi
 
 let staticMetaCache: Record<string, unknown> | null = null;
 let staticLeadCache: LeadRecord[] | null = null;
+let staticLeadDetailCache: LeadRecord[] | null = null;
 
 async function fetchStaticJson<T>(path: string): Promise<T> {
   const response = await fetch(path, { cache: "force-cache" });
@@ -53,8 +54,15 @@ async function fetchStaticLeadSource() {
   return staticLeadCache;
 }
 
+async function fetchStaticLeadDetailSource() {
+  if (!staticLeadDetailCache) {
+    staticLeadDetailCache = await fetchStaticJson<LeadRecord[]>("/data/mississippi_lead_detail_fallback.json");
+  }
+  return staticLeadDetailCache;
+}
+
 export async function fetchStaticLeadDetail(parcelRowId: string): Promise<LeadRecord | null> {
-  const rows = await fetchStaticLeadSource();
+  const rows = await fetchStaticLeadDetailSource();
   return rows.find((row) => row.parcel_row_id === parcelRowId) ?? null;
 }
 
