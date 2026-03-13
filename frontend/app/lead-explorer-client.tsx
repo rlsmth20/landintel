@@ -258,6 +258,10 @@ export default function LeadExplorerClient() {
   );
 
   const visibleLeads = leads;
+  const visibleVacantCount = useMemo(
+    () => visibleLeads.reduce((count, lead) => count + (lead.parcel_vacant_flag ? 1 : 0), 0),
+    [visibleLeads],
+  );
   const currentPage = Math.floor(offset / limit) + 1;
   const pageCount = Math.max(1, Math.ceil(totalCount / limit));
 
@@ -647,6 +651,12 @@ export default function LeadExplorerClient() {
               <strong><SummaryValue summary={summary} section="statewide" metric="lead_count" /></strong>
             </div>
             <div>
+              <span className="stat-label">Likely vacant parcels</span>
+              <strong>
+                <SummaryValue summary={summary} section="statewide" metric="likely_vacant_count" />
+              </strong>
+            </div>
+            <div>
               <span className="stat-label">Average score</span>
               <strong>
                 <SummaryValue summary={summary} section="statewide" metric="average_lead_score" />
@@ -681,6 +691,7 @@ export default function LeadExplorerClient() {
             <LeadBadge label={`Dataset: Mississippi`} tone="neutral" />
             <LeadBadge label={`${totalCount.toLocaleString()} parcels`} tone="good" />
             <LeadBadge label={`${visibleLeads.length} loaded`} tone="neutral" />
+            <LeadBadge label={`${visibleVacantCount.toLocaleString()} likely vacant in view`} tone="warn" />
             <LeadBadge label={geometryLoading ? "Geometry loading" : "Geometry ready"} tone={geometryLoading ? "warn" : "good"} />
           </div>
         </section>

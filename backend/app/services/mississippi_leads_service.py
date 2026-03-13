@@ -1524,6 +1524,7 @@ def get_summary() -> dict[str, Any]:
                 "statewide": [
                     {"section": "statewide", "metric": "lead_count", "value": str(total_rows)},
                     {"section": "statewide", "metric": "average_lead_score", "value": f"{average_score:.1f}"},
+                    {"section": "statewide", "metric": "likely_vacant_count", "value": str(vacant_rows)},
                     {"section": "statewide", "metric": "vacant_share_pct", "value": f"{(vacant_rows / total_rows * 100) if total_rows else 0:.1f}"},
                     {"section": "statewide", "metric": "county_hosted_share_pct", "value": f"{(county_hosted_rows / total_rows * 100) if total_rows else 0:.1f}"},
                 ],
@@ -1559,6 +1560,7 @@ def get_summary() -> dict[str, Any]:
             "statewide": [
                 {"section": "statewide", "metric": "lead_count", "value": str(len(frame))},
                 {"section": "statewide", "metric": "average_lead_score", "value": f"{average_score:.1f}"},
+                {"section": "statewide", "metric": "likely_vacant_count", "value": str(int(frame["parcel_vacant_flag"].fillna(False).sum()))},
                 {"section": "statewide", "metric": "vacant_share_pct", "value": f"{frame['parcel_vacant_flag'].fillna(False).mean() * 100:.1f}"},
                 {"section": "statewide", "metric": "county_hosted_share_pct", "value": f"{frame['county_hosted_flag'].fillna(False).mean() * 100:.1f}"},
             ],

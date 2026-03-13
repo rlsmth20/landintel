@@ -204,6 +204,7 @@ def build_summary_payload(frame: pd.DataFrame) -> dict[str, object]:
     county_counts = frame.groupby("county_name", dropna=True).size().sort_values(ascending=False).head(20)
     recommended_counts = frame.groupby("recommended_view_bucket", dropna=True).size().sort_values(ascending=False)
     average_score = pd.to_numeric(frame["lead_score_total"], errors="coerce").mean()
+    vacant_count = int(frame["parcel_vacant_flag"].fillna(False).sum())
     return {
         "row_count": int(len(frame)),
         "source": "mississippi parcel runtime dataset",
@@ -212,6 +213,7 @@ def build_summary_payload(frame: pd.DataFrame) -> dict[str, object]:
             "statewide": [
                 {"section": "statewide", "metric": "lead_count", "value": str(len(frame))},
                 {"section": "statewide", "metric": "average_lead_score", "value": f"{average_score:.1f}"},
+                {"section": "statewide", "metric": "likely_vacant_count", "value": str(vacant_count)},
                 {"section": "statewide", "metric": "vacant_share_pct", "value": f"{frame['parcel_vacant_flag'].fillna(False).mean() * 100:.1f}"},
                 {"section": "statewide", "metric": "county_hosted_share_pct", "value": f"{frame['county_hosted_flag'].fillna(False).mean() * 100:.1f}"},
             ],
