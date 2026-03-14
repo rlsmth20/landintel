@@ -28,6 +28,50 @@ let staticMetaCache: Record<string, unknown> | null = null;
 let staticLeadCache: LeadRecord[] | null = null;
 let staticLeadDetailCache: LeadRecord[] | null = null;
 
+const CANONICAL_DETAIL_NULL_FIELDS = [
+  "ai_building_present_flag",
+  "assessed_total_value",
+  "building_presence_reason",
+  "building_present_confidence",
+  "county_tax_coverage_reason",
+  "county_tax_coverage_status",
+  "county_tax_source_configured_flag",
+  "county_tax_source_loaded_flag",
+  "county_vacant_flag",
+  "delinquency_last_verified",
+  "delinquent_year",
+  "elevation_mean_ft",
+  "flood_area_sqft",
+  "flood_pct",
+  "max_slope_pct",
+  "mean_slope_pct",
+  "overall_vacancy_assessment",
+  "parcel_frontage_ft_estimate",
+  "parcel_tax_status",
+  "parcel_width_ft_estimate",
+  "primary_fema_zone",
+  "shape_compactness",
+  "slope_class",
+  "slope_score",
+  "tax_data_available_flag",
+  "tax_data_source",
+  "tax_data_upload_date",
+  "tax_data_year",
+  "vacancy_confidence_score",
+  "wetland_area_sqft",
+  "wetland_pct",
+] as const;
+
+export function normalizeDetailLeadRecord(record: LeadRecord): LeadRecord {
+  const normalized = { ...record } as LeadRecord & Record<string, unknown>;
+  for (const field of CANONICAL_DETAIL_NULL_FIELDS) {
+    if (!(field in normalized)) {
+      normalized[field] = null;
+    }
+  }
+  return normalized;
+}
+
 async function fetchStaticJson<T>(path: string): Promise<T> {
   const response = await fetch(path, { cache: "force-cache" });
   if (!response.ok) {
@@ -59,7 +103,8 @@ async function fetchStaticLeadDetailSource() {
 
 export async function fetchStaticLeadDetail(parcelRowId: string): Promise<LeadRecord | null> {
   const rows = await fetchStaticLeadDetailSource();
-  return rows.find((row) => row.parcel_row_id === parcelRowId) ?? null;
+  const row = rows.find((item) => item.parcel_row_id === parcelRowId) ?? null;
+  return row ? normalizeDetailLeadRecord(row) : null;
 }
 
 export async function fetchSummary(): Promise<ExplorerMeta> {
