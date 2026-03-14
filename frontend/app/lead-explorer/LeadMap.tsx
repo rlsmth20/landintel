@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef } from "react";
 import maplibregl, { GeoJSONSource, LngLatBoundsLike, Map } from "maplibre-gl";
 import { PMTiles, Protocol } from "pmtiles";
 
-import type { BasemapMode, FeatureCollectionPayload, GeometryFeature, GeometryResponse, MapOverlayId, MapViewportState } from "./types";
+import type { BasemapMode, FeatureCollectionPayload, GeometryFeature, GeometryResponse, LeadRecord, MapOverlayId, MapViewportState } from "./types";
 
 const DEFAULT_CENTER: [number, number] = [-98.5795, 39.8283];
 const DEFAULT_ZOOM = 3.4;
@@ -272,7 +272,7 @@ export function LeadMap({
 }: {
   geometryResponse: GeometryResponse | null;
   selectedId: string | null;
-  onSelect: (value: string) => void;
+  onSelect: (value: string, lead?: LeadRecord | null) => void;
   fitNonce: number;
   locateSelectedNonce: number;
   activeOverlays: MapOverlayId[];

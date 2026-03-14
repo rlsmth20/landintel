@@ -115,6 +115,13 @@ export default function LeadExplorerClient() {
   }, [filters]);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const deepLinkedParcelId = params.get("parcel_row_id") ?? params.get("parcel");
+    if (!deepLinkedParcelId) return;
+    setSelectedId((current) => current ?? deepLinkedParcelId);
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     async function loadBootstrap() {
       setSummaryLoading(true);
@@ -153,13 +160,6 @@ export default function LeadExplorerClient() {
         if (cancelled) return;
         setLeads(response.items);
         setTotalCount(response.total_count);
-        if (response.items.length === 0) {
-          return;
-        }
-        setSelectedId((current) => {
-          if (current) return current;
-          return response.items[0].parcel_row_id;
-        });
       } catch (error) {
         if (cancelled) return;
         setLeadsError(error instanceof Error ? error.message : "Failed to load leads");
@@ -207,6 +207,7 @@ export default function LeadExplorerClient() {
   useEffect(() => {
     if (!selectedId) {
       setSelectedLead(null);
+      setDetailError(null);
       return;
     }
     const detailId = selectedId;
@@ -219,6 +220,9 @@ export default function LeadExplorerClient() {
         setSelectedLead(normalizeDetailLeadRecord(summaryFallback));
       }
       try {
+        if (process.env.NODE_ENV !== "production") {
+          console.debug("[lead-explorer] detail request", { parcelRowId: detailId });
+        }
         const response = await fetchLeadDetail(detailId);
         if (cancelled) return;
         setSelectedLead(normalizeDetailLeadRecord(response));
@@ -235,7 +239,11 @@ export default function LeadExplorerClient() {
           setSelectedLead(normalizeDetailLeadRecord(fallbackLead));
           setDetailError(null);
         } else {
-          setDetailError(error instanceof Error ? error.message : "Failed to load parcel detail");
+          if (process.env.NODE_ENV !== "production") {
+            console.error("[lead-explorer] detail request failed", { parcelRowId: detailId, error });
+          }
+          setSelectedLead(null);
+          setDetailError(error instanceof Error ? `Failed to load parcel detail for ${detailId}: ${error.message}` : `Failed to load parcel detail for ${detailId}`);
         }
       } finally {
         if (!cancelled) setDetailLoading(false);
@@ -271,10 +279,12 @@ export default function LeadExplorerClient() {
     setFitNonce((current) => current + 1);
   }
 
-  const handleSelectParcel = useCallback((parcelRowId: string) => {
+  const handleSelectParcel = useCallback((parcelRowId: string, lead?: LeadRecord | null) => {
     if (process.env.NODE_ENV !== "production") {
       console.debug("[lead-explorer] row-or-map selection", { parcelRowId });
     }
+    setDetailError(null);
+    setSelectedLead(lead ? normalizeDetailLeadRecord(lead) : null);
     setSelectedId(parcelRowId);
     setFitNonce((current) => current + 1);
   }, []);
@@ -796,7 +806,7 @@ export default function LeadExplorerClient() {
                     <tr
                       key={lead.parcel_row_id}
                       className={selectedId === lead.parcel_row_id ? "is-selected" : ""}
-                      onClick={() => handleSelectParcel(lead.parcel_row_id)}
+                      onClick={() => handleSelectParcel(lead.parcel_row_id, lead)}
                     >
                       <td>{lead.county_name ?? "-"}</td>
                       <td>{lead.parcel_id ?? lead.parcel_row_id}</td>

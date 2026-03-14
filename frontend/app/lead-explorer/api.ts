@@ -217,7 +217,10 @@ export async function fetchLeads(
 }
 
 export async function fetchLeadDetail(parcelRowId: string): Promise<LeadRecord> {
-  return fetchJson<LeadRecord>(`/api/leads/${parcelRowId}`);
+  if (process.env.NODE_ENV !== "production") {
+    console.debug("[lead-explorer] fetchLeadDetail", { parcelRowId });
+  }
+  return fetchJson<LeadRecord>(`/api/leads/${encodeURIComponent(parcelRowId)}`);
 }
 
 export async function fetchParcelGeometryById(parcelRowId: string, zoom = 14): Promise<GeometryResponse> {
@@ -226,5 +229,5 @@ export async function fetchParcelGeometryById(parcelRowId: string, zoom = 14): P
   if (process.env.NODE_ENV !== "production") {
     console.debug("[lead-explorer] parcel geometry request", { parcelRowId, zoom });
   }
-  return fetchJson<GeometryResponse>(`/api/parcels/${parcelRowId}/geometry`, searchParams, { timeoutMs: 6000 });
+  return fetchJson<GeometryResponse>(`/api/parcels/${encodeURIComponent(parcelRowId)}/geometry`, searchParams, { timeoutMs: 6000 });
 }
