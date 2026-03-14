@@ -102,6 +102,18 @@ def source_paths(download_dir: Path, county_fips: str, source_name: str, county_
     }
 
 
+def load_cached_raw_records(download_dir: Path, county_fips: str, source_name: str) -> pd.DataFrame:
+    source_dir = download_dir / county_fips / source_name
+    if not source_dir.exists():
+        return pd.DataFrame()
+    raw_candidates = sorted(source_dir.glob("*/land_redemption_list.json"), reverse=True)
+    if not raw_candidates:
+        return pd.DataFrame()
+    payload = json.loads(raw_candidates[0].read_text(encoding="utf-8"))
+    records = payload.get("records") or payload.get("data") or []
+    return pd.DataFrame(records)
+
+
 def fetch_county_records(county_code: int) -> pd.DataFrame:
     base_url = "https://cs.datasysmgt.com/lrdsmp/ldredweb"
     offset = 0
@@ -120,7 +132,7 @@ def fetch_county_records(county_code: int) -> pd.DataFrame:
         )
         if total is None:
             total = int(payload.get("totalcount", 0))
-        page = payload.get("data") or []
+        page = payload.get("data") or payload.get("records") or []
         if not page:
             break
         all_rows.extend(page)
@@ -295,6 +307,8 @@ def ingest_county(config: dict[str, str | int], download_dir: Path, master: pd.D
     paths = source_paths(download_dir, county_fips, source_name, county_name)
 
     raw_frame = fetch_county_records(county_code)
+    if raw_frame.empty:
+        raw_frame = load_cached_raw_records(download_dir, county_fips, source_name)
     if raw_frame.empty:
         return {"county_name": county_name, "rows": 0, "linked_rows": 0}
 

@@ -4,11 +4,11 @@ alcorn,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delin
 attala,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
 benton,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
 bolivar,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+calhoun,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
 chickasaw,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
 claiborne,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
 clarke,suspiciously_low_match_count,warning,1.0,"County source loaded, but matched parcel count is unusually low for county size."
 clarke,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
-clay,suspiciously_low_match_count,warning,4.0,"County source loaded, but matched parcel count is unusually low for county size."
 clay,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
 coahoma,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
 copiah,suspiciously_low_match_count,warning,2.0,"County source loaded, but matched parcel count is unusually low for county size."

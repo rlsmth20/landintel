@@ -94,6 +94,14 @@ counties:
     source_county_field: county_name
     source_county_value: bolivar
     coverage_scope: partial
+  calhoun:
+    ingest_mode: linked_parquet
+    source_type: direct_download_page
+    source_path: data/tax_linked/ms/calhoun/calhoun_land_redemption_linked_tax_records.parquet
+    source_name: calhoun_land_redemption
+    source_url: https://cs.datasysmgt.com/tax?state=MS&county=7
+    coverage_scope: partial
+    note: County-specific public land-redemption snapshot linked on 2026-03-14 and currently tops out at tax year 2024; no newer public 2025 or 2026 county tax-delinquency source was found as of 2026-03-14.
   chickasaw:
     ingest_mode: linked_parquet
     source_type: statewide_public_inventory
@@ -120,12 +128,12 @@ counties:
     coverage_scope: partial
   clay:
     ingest_mode: linked_parquet
-    source_type: statewide_public_inventory
-    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
-    source_name: sos_tax_forfeited_lands_gis
-    source_county_field: county_name
-    source_county_value: clay
+    source_type: direct_download_page
+    source_path: data/tax_linked/ms/clay/clay_land_redemption_linked_tax_records.parquet
+    source_name: clay_land_redemption
+    source_url: https://cs.datasysmgt.com/tax?state=MS&county=13
     coverage_scope: partial
+    note: County-specific public land-redemption snapshot linked on 2026-03-14 and currently tops out at tax year 2024; no newer public 2025 or 2026 county tax-delinquency source was found as of 2026-03-14.
   coahoma:
     ingest_mode: linked_parquet
     source_type: statewide_public_inventory
@@ -134,6 +142,7 @@ counties:
     source_county_field: county_name
     source_county_value: coahoma
     coverage_scope: partial
+    note: A county-specific public land-redemption snapshot reaching tax year 2024 exists, but it currently links far fewer parcels than the broader SOS partial inventory; keep SOS coverage until a safe multi-source merge path is added.
   copiah:
     ingest_mode: linked_parquet
     source_type: statewide_public_inventory
@@ -581,11 +590,6 @@ pending:
     source_type: subscription_bulk_download
     source_url: https://www.deltacomputersystems.com/taxsale.html
     note: County source is discovered, but currently requires subscription access and is not yet wired into the local ingest pipeline.
-  calhoun:
-    discovery_status: pending_parser_needed
-    source_type: direct_download_page
-    source_url: https://cs.datasysmgt.com/tax?state=MS&county=7
-    note: Public redemption source is discovered, but county-specific parsing and parcel linking are not yet implemented safely enough to enable in production.
   carroll:
     discovery_status: pending_subscription_gated
     source_type: subscription_portal

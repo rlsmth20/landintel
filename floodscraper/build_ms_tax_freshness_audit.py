@@ -14,9 +14,16 @@ from parcel_tax_delinquency_ms import parse_registry, resolve_path
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRY_PATH = ROOT / "mississippi_tax_source_registry.yaml"
 COVERAGE_MATRIX_PATH = ROOT / "data" / "parcels" / "mississippi_tax_coverage_matrix.csv"
-OUTPUT_CSV = ROOT / "data" / "parcels" / "mississippi_tax_source_freshness_audit.csv"
-OUTPUT_JSON = ROOT / "data" / "parcels" / "mississippi_tax_source_freshness_audit.json"
-TARGET_COUNTIES = ["jackson", "madison", "pike", "jasper", "warren"]
+OUTPUT_CSV = ROOT / "data" / "parcels" / "mississippi_tax_source_discovery_audit.csv"
+OUTPUT_JSON = ROOT / "data" / "parcels" / "mississippi_tax_source_discovery_audit.json"
+LEGACY_OUTPUT_CSV = ROOT / "data" / "parcels" / "mississippi_tax_source_freshness_audit.csv"
+LEGACY_OUTPUT_JSON = ROOT / "data" / "parcels" / "mississippi_tax_source_freshness_audit.json"
+TARGET_COUNTIES = ["jackson", "madison", "jasper", "pike", "warren", "calhoun", "clay", "coahoma"]
+LDRED_LINKED_PATHS = {
+    "calhoun": ROOT / "data" / "tax_linked" / "ms" / "calhoun" / "calhoun_land_redemption_linked_tax_records.parquet",
+    "clay": ROOT / "data" / "tax_linked" / "ms" / "clay" / "clay_land_redemption_linked_tax_records.parquet",
+    "coahoma": ROOT / "data" / "tax_linked" / "ms" / "coahoma" / "coahoma_land_redemption_linked_tax_records.parquet",
+}
 
 
 def _freshness_bucket(tax_year: int | None, current_year: int) -> str:
@@ -47,6 +54,22 @@ def _safe_head(url: str) -> requests.Response | None:
         return None
 
 
+def _linked_snapshot_summary(county_name: str) -> tuple[int | None, int]:
+    path = LDRED_LINKED_PATHS.get(county_name)
+    if path is None or not path.exists():
+        return None, 0
+    frame = pd.read_parquet(path, columns=["parcel_row_id", "tax_year"])
+    year = pd.to_numeric(frame["tax_year"], errors="coerce").dropna()
+    return (int(year.max()) if not year.empty else None, int(frame["parcel_row_id"].nunique()))
+
+
+def _clean_optional_string(value: Any) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip()
+    return text if text and text.lower() != "nan" else None
+
+
 def _audit_jackson(current_url: str, current_tax_year: int | None, current_year: int) -> dict[str, Any]:
     response = _safe_get(current_url)
     text = response.text if response is not None and response.ok else ""
@@ -66,7 +89,10 @@ def _audit_jackson(current_url: str, current_tax_year: int | None, current_year:
     return {
         "newer_public_source_found_flag": newer_found,
         "newer_public_source_url": newer_url,
-        "audit_note": " ".join(note_parts) or "No newer public Jackson county tax source was found.",
+        "newer_public_source_type": "county_documentcenter_text" if newer_found else None,
+        "discovered_tax_year": 2025 if newer_found else None,
+        "source_access_type": "public_document" if newer_found else "not_found",
+        "notes": " ".join(note_parts) or "No newer public Jackson county tax source was found.",
         "refresh_status": "public_source_found_parser_needed" if newer_found else "no_newer_public_source_found",
         "recommended_action": "build_parser_for_newer_source" if newer_found else ("keep_stale_caution" if _freshness_bucket(current_tax_year, current_year) == "stale_caution" else "keep_historical_only"),
     }
@@ -83,7 +109,10 @@ def _audit_madison(current_url: str, current_tax_year: int | None) -> dict[str, 
     return {
         "newer_public_source_found_flag": newer_found,
         "newer_public_source_url": newer_url,
-        "audit_note": "Current public Madison workbook remains the 2024 tax-year file; 2025/2026 replacement workbook URLs were not publicly reachable." if not newer_found else "Newer public Madison workbook found.",
+        "newer_public_source_type": "county_xlsx_workbook" if newer_found else None,
+        "discovered_tax_year": 2025 if newer_found else None,
+        "source_access_type": "public_direct" if newer_found else "not_found",
+        "notes": "Current public Madison workbook remains the 2024 tax-year file; 2025/2026 replacement workbook URLs were not publicly reachable." if not newer_found else "Newer public Madison workbook found.",
         "refresh_status": "public_source_found_parser_needed" if newer_found else "no_newer_public_source_found",
         "recommended_action": "build_parser_for_newer_source" if newer_found else "keep_stale_caution",
     }
@@ -102,7 +131,10 @@ def _audit_pike(current_url: str, current_tax_year: int | None, current_year: in
     return {
         "newer_public_source_found_flag": newer_found,
         "newer_public_source_url": newer_url,
-        "audit_note": f"Current Pike page links LANDSALE years: {', '.join(str(year) for year in years) if years else 'none'}." if not newer_found else f"Newer Pike LANDSALE file for {newer_year} found.",
+        "newer_public_source_type": "county_taxsale_download" if newer_found else None,
+        "discovered_tax_year": newer_year if newer_found else None,
+        "source_access_type": "public_direct" if newer_found else "not_found",
+        "notes": f"Current Pike page links LANDSALE years: {', '.join(str(year) for year in years) if years else 'none'}." if not newer_found else f"Newer Pike LANDSALE file for {newer_year} found.",
         "refresh_status": "public_source_found_parser_needed" if newer_found else ("still_historical" if bucket in {"historical_only", "non_actionable_historical"} else "no_newer_public_source_found"),
         "recommended_action": "build_parser_for_newer_source" if newer_found else ("keep_historical_only" if bucket in {"historical_only", "non_actionable_historical"} else "keep_stale_caution"),
     }
@@ -119,7 +151,10 @@ def _audit_jasper(current_url: str, current_tax_year: int | None) -> dict[str, A
     return {
         "newer_public_source_found_flag": newer_found,
         "newer_public_source_url": newer_url,
-        "audit_note": f"Current Jasper page exposes tax-year PDFs: {', '.join(str(year) for year in years) if years else 'none'}." if not newer_found else f"Newer Jasper PDF for {newer_year} found.",
+        "newer_public_source_type": "county_pdf_notice" if newer_found else None,
+        "discovered_tax_year": newer_year if newer_found else None,
+        "source_access_type": "public_document" if newer_found else "not_found",
+        "notes": f"Current Jasper page exposes tax-year PDFs: {', '.join(str(year) for year in years) if years else 'none'}." if not newer_found else f"Newer Jasper PDF for {newer_year} found.",
         "refresh_status": "public_source_found_parser_needed" if newer_found else "no_newer_public_source_found",
         "recommended_action": "build_parser_for_newer_source" if newer_found else "keep_stale_caution",
     }
@@ -139,9 +174,53 @@ def _audit_warren(current_url: str, current_tax_year: int | None, current_year: 
     return {
         "newer_public_source_found_flag": newer_found,
         "newer_public_source_url": None,
-        "audit_note": note,
+        "newer_public_source_type": None,
+        "discovered_tax_year": None,
+        "source_access_type": "not_found",
+        "notes": note,
         "refresh_status": "still_historical" if bucket in {"historical_only", "non_actionable_historical"} else "no_newer_public_source_found",
         "recommended_action": "keep_historical_only" if bucket in {"historical_only", "non_actionable_historical"} else "keep_stale_caution",
+    }
+
+
+def _audit_ldred_candidate(county_name: str, current_tax_year: int | None, current_source_url: str, current_match_count: int) -> dict[str, Any]:
+    discovered_tax_year, discovered_match_count = _linked_snapshot_summary(county_name)
+    newer_found = discovered_tax_year is not None and (current_tax_year is None or discovered_tax_year > current_tax_year)
+    url = _clean_optional_string(current_source_url) or {
+        "calhoun": "https://cs.datasysmgt.com/tax?state=MS&county=7",
+        "clay": "https://cs.datasysmgt.com/tax?state=MS&county=13",
+        "coahoma": "https://cs.datasysmgt.com/tax?state=MS&county=14",
+    }.get(county_name)
+    if county_name == "coahoma":
+        recommended_action = "parser_needed"
+        refresh_status = "public_source_found_parser_needed"
+        notes = (
+            f"County-specific public land-redemption snapshot reaches tax year {discovered_tax_year} with {discovered_match_count} exact parcel matches, "
+            f"but the currently configured SOS partial source still covers {current_match_count} parcels; a safe multi-source merge is needed before replacement."
+        )
+    elif county_name == "calhoun":
+        recommended_action = "integrate_now"
+        refresh_status = "refreshed"
+        notes = (
+            f"County-specific public land-redemption snapshot reaches tax year {discovered_tax_year} with {discovered_match_count} exact parcel matches; "
+            "it safely promoted Calhoun from pending coverage to explicit county-specific stale-caution coverage."
+        )
+    else:
+        recommended_action = "integrate_now"
+        refresh_status = "refreshed"
+        notes = (
+            f"County-specific public land-redemption snapshot reaches tax year {discovered_tax_year} with {discovered_match_count} exact parcel matches; "
+            "it safely replaced the older low-match SOS partial source."
+        )
+    return {
+        "newer_public_source_found_flag": bool(newer_found or county_name in {"calhoun", "clay", "coahoma"}),
+        "newer_public_source_url": url,
+        "newer_public_source_type": "county_land_redemption_json",
+        "discovered_tax_year": discovered_tax_year,
+        "source_access_type": "public_direct",
+        "notes": notes,
+        "refresh_status": refresh_status,
+        "recommended_action": recommended_action,
     }
 
 
@@ -158,41 +237,49 @@ def main() -> None:
             continue
         coverage_row = row.iloc[0].to_dict()
         entry = county_entries.get(county_name, {})
-        current_url = str(coverage_row.get("source_url") or entry.get("source_url") or "")
+        current_url = _clean_optional_string(coverage_row.get("source_url")) or _clean_optional_string(entry.get("source_url")) or ""
         current_tax_year = pd.to_numeric(pd.Series([coverage_row.get("tax_data_year")]), errors="coerce").iloc[0]
         current_tax_year_int = int(current_tax_year) if pd.notna(current_tax_year) else None
 
+        current_match_count = int(coverage_row.get("parcel_match_count") or 0)
         if county_name == "jackson":
             audit = _audit_jackson(current_url, current_tax_year_int, current_year)
         elif county_name == "madison":
             audit = _audit_madison(current_url, current_tax_year_int)
-        elif county_name == "pike":
-            audit = _audit_pike(current_url, current_tax_year_int, current_year)
         elif county_name == "jasper":
             audit = _audit_jasper(current_url, current_tax_year_int)
-        else:
+        elif county_name == "pike":
+            audit = _audit_pike(current_url, current_tax_year_int, current_year)
+        elif county_name == "warren":
             audit = _audit_warren(current_url, current_tax_year_int, current_year)
+        else:
+            audit = _audit_ldred_candidate(county_name, current_tax_year_int, current_url, current_match_count)
 
         bucket = _freshness_bucket(current_tax_year_int, current_year)
         audit_rows.append(
             {
                 "county_name": county_name,
-                "current_configured_source_url": current_url or None,
+                "currently_configured_source_url": current_url or None,
                 "current_tax_data_year": current_tax_year_int,
                 "freshness_bucket": bucket,
-                "parcel_match_count": int(coverage_row.get("parcel_match_count") or 0),
+                "parcel_match_count": current_match_count,
                 "newer_public_source_found_flag": bool(audit["newer_public_source_found_flag"]),
                 "newer_public_source_url": audit["newer_public_source_url"],
+                "newer_public_source_type": audit["newer_public_source_type"],
+                "discovered_tax_year": audit["discovered_tax_year"],
+                "source_access_type": audit["source_access_type"],
                 "refresh_status": audit["refresh_status"],
                 "recommended_action": audit["recommended_action"],
-                "audit_note": audit["audit_note"],
+                "notes": audit["notes"],
             }
         )
 
-    audit_frame = pd.DataFrame(audit_rows).sort_values(["freshness_bucket", "parcel_match_count"], ascending=[True, False]).reset_index(drop=True)
+    audit_frame = pd.DataFrame(audit_rows).sort_values(["parcel_match_count", "county_name"], ascending=[False, True]).reset_index(drop=True)
     OUTPUT_CSV.parent.mkdir(parents=True, exist_ok=True)
     audit_frame.to_csv(OUTPUT_CSV, index=False)
     OUTPUT_JSON.write_text(json.dumps(audit_frame.to_dict(orient="records"), indent=2), encoding="utf-8")
+    audit_frame.to_csv(LEGACY_OUTPUT_CSV, index=False)
+    LEGACY_OUTPUT_JSON.write_text(json.dumps(audit_frame.to_dict(orient="records"), indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":
