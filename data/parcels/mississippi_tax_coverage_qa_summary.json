@@ -3,11 +3,12 @@
   "coverage_status_counts": {
     "stale": 69,
     "pending": 11,
-    "partial": 2
+    "covered": 1,
+    "partial": 1
   },
   "qa_issue_counts": {
-    "null_rate::delinquent_year": 68,
+    "null_rate::delinquent_year": 69,
     "suspiciously_low_match_count": 17,
-    "zero_match_count": 2
+    "zero_match_count": 1
   }
 }

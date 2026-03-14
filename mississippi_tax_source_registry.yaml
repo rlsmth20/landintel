@@ -566,57 +566,57 @@ counties:
 
 pending:
   amite:
-    discovery_status: pending_non_ingestable
+    discovery_status: pending_subscription_gated
     source_type: subscription_bulk_download
     source_url: https://www.deltacomputersystems.com/taxsale.html
     note: County source is discovered, but currently requires subscription access and is not yet wired into the local ingest pipeline.
   calhoun:
-    discovery_status: pending_non_ingestable
+    discovery_status: pending_parser_needed
     source_type: direct_download_page
     source_url: https://cs.datasysmgt.com/tax?state=MS&county=7
     note: Public redemption source is discovered, but county-specific parsing and parcel linking are not yet implemented safely enough to enable in production.
   carroll:
-    discovery_status: pending_non_ingestable
+    discovery_status: pending_subscription_gated
     source_type: subscription_portal
     source_url: https://www.deltacomputersystems.com/MS/MS08/INDEX.HTML
     note: County source is discovered, but current access path is subscription-gated and not yet usable in the automated ingest pipeline.
   choctaw:
-    discovery_status: pending_non_ingestable
+    discovery_status: pending_subscription_gated
     source_type: subscription_portal
     source_url: https://www.deltacomputersystems.com/MS/MS10/INDEX.HTML
     note: County source is discovered, but current access path is subscription-gated and not yet usable in the automated ingest pipeline.
   issaquena:
-    discovery_status: pending_non_ingestable
+    discovery_status: pending_subscription_gated
     source_type: subscription_bulk_download
     source_url: https://www.deltacomputersystems.com/taxsale.html
     note: County source is discovered, but currently requires subscription access and is not yet wired into the local ingest pipeline.
   kemper:
-    discovery_status: pending_non_ingestable
+    discovery_status: pending_subscription_gated
     source_type: subscription_bulk_download
     source_url: https://www.deltacomputersystems.com/taxsale.html
     note: County source is discovered, but currently requires subscription access and is not yet wired into the local ingest pipeline.
   montgomery:
-    discovery_status: pending_non_ingestable
+    discovery_status: pending_subscription_gated
     source_type: subscription_portal
     source_url: https://www.deltacomputersystems.com/MS/MS49/INDEX.HTML
     note: County source is discovered, but current access path is subscription-gated and not yet usable in the automated ingest pipeline.
   noxubee:
-    discovery_status: pending_non_ingestable
+    discovery_status: pending_subscription_gated
     source_type: subscription_bulk_download
     source_url: https://www.deltacomputersystems.com/taxsale.html
     note: County source is discovered, but currently requires subscription access and is not yet wired into the local ingest pipeline.
   sharkey:
-    discovery_status: pending_non_ingestable
+    discovery_status: pending_subscription_gated
     source_type: subscription_bulk_download
     source_url: https://www.deltacomputersystems.com/taxsale.html
     note: County source is discovered, but currently requires subscription access and is not yet wired into the local ingest pipeline.
   tishomingo:
-    discovery_status: pending_non_ingestable
+    discovery_status: pending_subscription_gated
     source_type: subscription_bulk_download
     source_url: https://www.deltacomputersystems.com/taxsale.html
     note: County source is discovered, but currently requires subscription access and is not yet wired into the local ingest pipeline.
   yalobusha:
-    discovery_status: pending_non_ingestable
+    discovery_status: pending_subscription_gated
     source_type: subscription_portal
     source_url: https://www.deltacomputersystems.com/MS/MS81/INDEX.HTML
     note: County source is discovered, but current access path is subscription-gated and not yet usable in the automated ingest pipeline.

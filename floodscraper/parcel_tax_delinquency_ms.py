@@ -40,6 +40,8 @@ COUNTY_COVERAGE_MATRIX_PARQUET = PARCELS_DIR / "mississippi_tax_coverage_matrix.
 COUNTY_COVERAGE_MATRIX_CSV = PARCELS_DIR / "mississippi_tax_coverage_matrix.csv"
 COUNTY_COVERAGE_QA_CSV = PARCELS_DIR / "mississippi_tax_coverage_qa.csv"
 COUNTY_COVERAGE_QA_SUMMARY_JSON = PARCELS_DIR / "mississippi_tax_coverage_qa_summary.json"
+COUNTY_LINKAGE_DIAGNOSTICS_CSV = PARCELS_DIR / "mississippi_tax_county_diagnostics.csv"
+COUNTY_REMEDIATION_PRIORITY_CSV = PARCELS_DIR / "mississippi_tax_county_work_queue.csv"
 COUNTY_PARTS_DIR = PARCELS_DIR / "ms_parcels_tax_parts"
 NORMALIZED_PARTS_DIR = TAX_PROCESSED_DIR / "ms_tax_normalized_parts"
 
@@ -88,6 +90,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--coverage-matrix-csv", type=str, default=str(COUNTY_COVERAGE_MATRIX_CSV))
     parser.add_argument("--coverage-qa-csv", type=str, default=str(COUNTY_COVERAGE_QA_CSV))
     parser.add_argument("--coverage-qa-summary-json", type=str, default=str(COUNTY_COVERAGE_QA_SUMMARY_JSON))
+    parser.add_argument("--county-diagnostics-csv", type=str, default=str(COUNTY_LINKAGE_DIAGNOSTICS_CSV))
+    parser.add_argument("--county-work-queue-csv", type=str, default=str(COUNTY_REMEDIATION_PRIORITY_CSV))
     parser.add_argument("--county-parts-dir", type=str, default=str(COUNTY_PARTS_DIR))
     parser.add_argument("--normalized-parts-dir", type=str, default=str(NORMALIZED_PARTS_DIR))
     parser.add_argument("--distressed-threshold", type=float, default=5.0)
@@ -654,6 +658,7 @@ def build_county_coverage_matrix(
         blocker_reason = None
         quality_flag = None
         last_successful_ingest_timestamp = None
+        discovery_status = None
 
         if pending_entry:
             coverage_status = "pending"
@@ -664,8 +669,9 @@ def build_county_coverage_matrix(
             source_url = pending_entry.get("source_url")
             source_county_field = pending_entry.get("source_county_field")
             source_county_value = pending_entry.get("source_county_value")
+            discovery_status = pending_entry.get("discovery_status")
             blocker_reason = pending_entry.get("note") or "County tax source has been discovered but is not yet ingestable."
-            quality_flag = "pending_source"
+            quality_flag = discovery_status or "pending_source"
         elif entry is None:
             coverage_status = "unavailable"
             coverage_scope = "unavailable"
@@ -721,6 +727,7 @@ def build_county_coverage_matrix(
                 "source_url": source_url,
                 "source_county_field": source_county_field,
                 "source_county_value": source_county_value,
+                "discovery_status": discovery_status,
                 "county_tax_source_configured_flag": bool(entry is not None),
                 "county_tax_source_loaded_flag": bool(source_loaded),
                 "tax_data_available_flag": bool(tax_data_available_flag),
@@ -908,6 +915,227 @@ def build_county_coverage_qa(
     return pd.DataFrame.from_records(issue_rows)
 
 
+def _diagnostic_identifier_series(frame: pd.DataFrame) -> pd.Series:
+    for column in [
+        "source_parcel_id_normalized",
+        "source_parcel_id_normalized_master",
+        "parcel_id_normalized",
+        "source_parcel_number",
+        "source_parcel_id_raw",
+        "parcel_id_raw",
+        "source_ppin",
+        "account_id",
+        "parcel_row_id",
+    ]:
+        if column in frame.columns:
+            series = frame[column].astype("string")
+            if column not in {"source_parcel_id_normalized", "parcel_id_normalized", "parcel_row_id"}:
+                series = normalize_identifier(series)
+            if series.dropna().empty:
+                continue
+            return series
+    return pd.Series(pd.NA, index=frame.index, dtype="string")
+
+
+def _load_source_frame_for_diagnostics(
+    cache: dict[str, pd.DataFrame],
+    source_path: Path,
+    ingest_mode: str | None,
+    source_type: str | None,
+) -> pd.DataFrame:
+    cache_key = source_path.as_posix()
+    if cache_key not in cache:
+        cache[cache_key] = load_source_frame("parquet" if str(ingest_mode or "").strip().lower() == "linked_parquet" else str(source_type or ""), source_path)
+    return cache[cache_key]
+
+
+def build_county_linkage_diagnostics(
+    county_names: list[str],
+    registry: dict[str, object],
+    coverage_matrix: pd.DataFrame,
+    progress: pd.DataFrame,
+    coverage_qa: pd.DataFrame,
+) -> pd.DataFrame:
+    county_entries = registry.get("counties", {}) if isinstance(registry.get("counties"), dict) else {}
+    pending_entries = registry.get("pending", {}) if isinstance(registry.get("pending"), dict) else {}
+    coverage_lookup = coverage_matrix.set_index("county_name")
+    qa_focus = set(coverage_qa.loc[coverage_qa["issue_type"].isin(["zero_match_count", "suspiciously_low_match_count", "coverage_status_inconsistent"]), "county_name"].astype("string"))
+    source_cache: dict[str, pd.DataFrame] = {}
+    records: list[dict[str, object]] = []
+
+    for county_name in county_names:
+        coverage_record = coverage_lookup.loc[county_name].to_dict() if county_name in coverage_lookup.index else {}
+        entry = county_entries.get(county_name)
+        pending_entry = pending_entries.get(county_name)
+        selected = entry or pending_entry or {}
+        source_path_raw = selected.get("source_path")
+        source_path = resolve_path(str(source_path_raw)) if source_path_raw else None
+        ingest_mode = selected.get("ingest_mode")
+        source_type = selected.get("source_type")
+        source_county_field = selected.get("source_county_field")
+        source_county_value = str(selected.get("source_county_value") or county_name).strip().lower()
+
+        total_source_rows = pd.NA
+        filtered_county_rows = pd.NA
+        distinct_identifier_count = pd.NA
+        normalized_identifier_count = pd.NA
+        unmatched_row_count = pd.NA
+        ambiguous_row_count = pd.NA
+        unmatched_rate = pd.NA
+        top_mismatch_patterns = pd.NA
+
+        if source_path and source_path.exists():
+            try:
+                source_frame = _load_source_frame_for_diagnostics(source_cache, source_path, ingest_mode, source_type)
+                total_source_rows = int(len(source_frame))
+                county_frame = source_frame
+                if source_county_field and source_county_field in source_frame.columns:
+                    county_frame = source_frame.loc[
+                        source_frame[source_county_field].astype("string").str.strip().str.lower().eq(source_county_value)
+                    ].copy()
+                filtered_county_rows = int(len(county_frame))
+                identifier_series = _diagnostic_identifier_series(county_frame)
+                distinct_identifier_count = int(identifier_series.nunique(dropna=True)) if not county_frame.empty else 0
+                normalized_identifier_count = int(identifier_series.dropna().nunique()) if not county_frame.empty else 0
+                matched_row_count = int(coverage_record.get("matched_row_count") or 0)
+                if filtered_county_rows and pd.notna(filtered_county_rows):
+                    unmatched_rate = round(max(0.0, 1.0 - (matched_row_count / max(int(filtered_county_rows), 1))), 4)
+            except Exception as exc:
+                top_mismatch_patterns = f"diagnostic_load_error::{exc}"
+
+        unmatched_path = BASE_DIR / "data" / "tax_linked" / "ms" / county_name / f"{county_name}_unmatched_tax_records.parquet"
+        if unmatched_path.exists():
+            unmatched_frame = pd.read_parquet(unmatched_path)
+            unmatched_row_count = int(len(unmatched_frame))
+            if "unmatched_reason" in unmatched_frame.columns and not unmatched_frame.empty:
+                top_mismatch_patterns = " | ".join(
+                    f"{reason}:{count}"
+                    for reason, count in unmatched_frame["unmatched_reason"].astype("string").fillna("unknown").value_counts().head(3).items()
+                )
+
+        ambiguous_path = BASE_DIR / "data" / "tax_linked" / "ms" / county_name / f"{county_name}_ambiguous_tax_links.parquet"
+        if ambiguous_path.exists():
+            ambiguous_row_count = int(len(pd.read_parquet(ambiguous_path)))
+
+        records.append(
+            {
+                "county_name": county_name,
+                "coverage_status": coverage_record.get("coverage_status"),
+                "coverage_scope": coverage_record.get("coverage_scope"),
+                "quality_flag": coverage_record.get("quality_flag"),
+                "discovery_status": coverage_record.get("discovery_status"),
+                "source_name": coverage_record.get("source_name"),
+                "source_type": coverage_record.get("source_type"),
+                "source_path": source_path.relative_to(BASE_DIR).as_posix() if source_path and source_path.exists() else pd.NA,
+                "county_focus_flag": bool(county_name in qa_focus or str(coverage_record.get("coverage_status") or "") in {"pending", "partial", "stale"}),
+                "parcel_count": int(coverage_record.get("parcel_count") or 0),
+                "parcel_match_count": int(coverage_record.get("parcel_match_count") or 0),
+                "matched_row_count": int(coverage_record.get("matched_row_count") or 0),
+                "total_source_rows": total_source_rows,
+                "filtered_county_rows": filtered_county_rows,
+                "distinct_identifier_count": distinct_identifier_count,
+                "normalized_identifier_count": normalized_identifier_count,
+                "unmatched_row_count": unmatched_row_count,
+                "ambiguous_row_count": ambiguous_row_count,
+                "unmatched_rate": unmatched_rate,
+                "top_mismatch_patterns": top_mismatch_patterns,
+                "blocker_reason": coverage_record.get("blocker_reason"),
+            }
+        )
+    return pd.DataFrame.from_records(records).sort_values(["county_focus_flag", "county_name"], ascending=[False, True]).reset_index(drop=True)
+
+
+def build_county_remediation_work_queue(
+    coverage_matrix: pd.DataFrame,
+    coverage_qa: pd.DataFrame,
+    diagnostics: pd.DataFrame,
+) -> pd.DataFrame:
+    qa_map = (
+        coverage_qa.groupby("county_name")["issue_type"]
+        .agg(lambda values: sorted(set(str(value) for value in values)))
+        .to_dict()
+        if not coverage_qa.empty
+        else {}
+    )
+    rows: list[dict[str, object]] = []
+    for record in coverage_matrix.to_dict(orient="records"):
+        county_name = str(record["county_name"])
+        quality_flag = str(record.get("quality_flag") or "")
+        coverage_status = str(record.get("coverage_status") or "")
+        coverage_scope = str(record.get("coverage_scope") or "")
+        discovery_status = str(record.get("discovery_status") or "")
+        parcel_count = int(record.get("parcel_count") or 0)
+        parcel_match_count = int(record.get("parcel_match_count") or 0)
+        issue_types = qa_map.get(county_name, [])
+
+        priority_score = 0.0
+        recommended_action = "monitor"
+        raw_reason = record.get("blocker_reason")
+        reason = "" if pd.isna(raw_reason) else str(raw_reason)
+
+        if quality_flag == "zero_match_review":
+            priority_score += 120.0 + min(parcel_count / 2500.0, 40.0)
+            recommended_action = "repair_linking"
+            reason = reason or "County source loaded, but no linked parcel matches are landing."
+        elif coverage_status == "stale" and coverage_scope == "full":
+            priority_score += 95.0 + min(parcel_match_count / 100.0, 35.0)
+            recommended_action = "refresh_county_source"
+            reason = reason or "County-specific source has good linkage volume, but freshness is stale."
+        elif "suspiciously_low_match_count" in issue_types:
+            priority_score += 85.0 + min(parcel_count / 5000.0, 25.0)
+            recommended_action = "inspect_linking"
+            reason = reason or "County source is loaded but match volume is suspiciously low."
+        elif discovery_status == "pending_parser_needed":
+            priority_score += 75.0 + min(parcel_count / 5000.0, 20.0)
+            recommended_action = "build_parser"
+            reason = reason or "County source looks reachable, but parser/linker work is still needed."
+        elif discovery_status == "pending_subscription_gated":
+            priority_score += 35.0 + min(parcel_count / 10000.0, 15.0)
+            recommended_action = "obtain_access"
+            reason = reason or "County source exists, but access is subscription-gated."
+        elif coverage_status == "stale":
+            priority_score += 55.0 + min(parcel_match_count / 150.0, 20.0)
+            recommended_action = "refresh_partial_source"
+            reason = reason or "Partial county coverage exists but is stale."
+        elif coverage_status == "partial":
+            priority_score += 40.0 + min(parcel_count / 7500.0, 10.0)
+            recommended_action = "diagnose_partial_coverage"
+            reason = reason or "County coverage is only partial."
+
+        if quality_flag == "duplicate_match_review":
+            priority_score += 20.0
+            if recommended_action == "monitor":
+                recommended_action = "deduplicate_matches"
+
+        if priority_score <= 0:
+            continue
+
+        rows.append(
+            {
+                "county_name": county_name,
+                "priority_score": round(priority_score, 2),
+                "recommended_action": recommended_action,
+                "priority_reason": reason,
+                "coverage_status": coverage_status,
+                "coverage_scope": coverage_scope,
+                "quality_flag": quality_flag,
+                "discovery_status": discovery_status or pd.NA,
+                "parcel_count": parcel_count,
+                "parcel_match_count": parcel_match_count,
+                "matched_row_count": int(record.get("matched_row_count") or 0),
+                "source_name": record.get("source_name"),
+                "source_type": record.get("source_type"),
+                "source_url": record.get("source_url"),
+            }
+        )
+
+    work_queue = pd.DataFrame.from_records(rows).sort_values(["priority_score", "parcel_match_count", "parcel_count"], ascending=[False, False, False]).reset_index(drop=True)
+    if not work_queue.empty:
+        work_queue.insert(0, "priority_rank", pd.Series(range(1, len(work_queue) + 1), dtype="Int64"))
+    diagnostics_fields = diagnostics[["county_name", "total_source_rows", "filtered_county_rows", "unmatched_row_count", "ambiguous_row_count", "top_mismatch_patterns"]] if not diagnostics.empty else pd.DataFrame(columns=["county_name"])
+    return work_queue.merge(diagnostics_fields, on="county_name", how="left")
+
+
 def build_summary(final_frame: gpd.GeoDataFrame, progress: pd.DataFrame, runtime_seconds: float) -> pd.DataFrame:
     total_rows = len(final_frame)
     matched_rows = int(final_frame["tax_data_available_flag"].fillna(False).sum())
@@ -991,6 +1219,8 @@ def main() -> None:
     coverage_matrix_csv = resolve_path(args.coverage_matrix_csv)
     coverage_qa_csv = resolve_path(args.coverage_qa_csv)
     coverage_qa_summary_json = resolve_path(args.coverage_qa_summary_json)
+    county_diagnostics_csv = resolve_path(args.county_diagnostics_csv)
+    county_work_queue_csv = resolve_path(args.county_work_queue_csv)
     county_parts_dir = resolve_path(args.county_parts_dir)
     normalized_parts_dir = resolve_path(args.normalized_parts_dir)
 
@@ -1094,6 +1324,8 @@ def main() -> None:
     coverage_matrix = build_county_coverage_matrix(county_names, registry, progress, final_frame)
     final_frame = apply_county_coverage_matrix(final_frame, coverage_matrix)
     coverage_qa = build_county_coverage_qa(coverage_matrix, progress, final_frame, normalized_parts_dir)
+    county_diagnostics = build_county_linkage_diagnostics(county_names, registry, coverage_matrix, progress, coverage_qa)
+    county_work_queue = build_county_remediation_work_queue(coverage_matrix, coverage_qa, county_diagnostics)
 
     output_parquet.parent.mkdir(parents=True, exist_ok=True)
     final_frame.to_parquet(output_parquet, index=False)
@@ -1102,6 +1334,8 @@ def main() -> None:
     coverage_matrix.to_parquet(coverage_matrix_parquet, index=False)
     coverage_matrix.to_csv(coverage_matrix_csv, index=False)
     coverage_qa.to_csv(coverage_qa_csv, index=False)
+    county_diagnostics.to_csv(county_diagnostics_csv, index=False)
+    county_work_queue.to_csv(county_work_queue_csv, index=False)
     coverage_summary = {
         "county_count": int(len(coverage_matrix)),
         "coverage_status_counts": {str(key): int(value) for key, value in coverage_matrix["coverage_status"].fillna("unknown").value_counts().items()},

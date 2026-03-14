@@ -23,7 +23,7 @@ greene,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delin
 grenada,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
 hancock,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
 harrison,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
-hinds,zero_match_count,warning,0.0,"County source loaded, but no linked parcel matches were produced."
+hinds,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
 holmes,suspiciously_low_match_count,warning,3.0,"County source loaded, but matched parcel count is unusually low for county size."
 holmes,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
 humphreys,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.

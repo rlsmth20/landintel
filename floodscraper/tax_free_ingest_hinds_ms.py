@@ -38,6 +38,7 @@ COUNTY_NAME = "hinds"
 COUNTY_FIPS = "049"
 STATE_CODE = "MS"
 TAX_YEAR = 2025
+PARCEL_SERVICE_DIR = RAW_TAX_DIR / "ms" / COUNTY_FIPS / "parcel_service_tax_attributes"
 
 HINDS_FILES = [
     {
@@ -136,6 +137,40 @@ def read_hinds_workbook(path: Path, district_label: str) -> pd.DataFrame:
 def normalize_hinds_parcel_id(series: pd.Series) -> pd.Series:
     cleaned = clean_string(series)
     return cleaned.astype("string")
+
+
+def normalize_hinds_address_key(series: pd.Series) -> pd.Series:
+    out = clean_string(series).str.upper()
+    out = out.str.replace("&", " AND ", regex=False)
+    out = out.str.replace(r"[#.,]", " ", regex=True)
+    replacements = {
+        r"\bROAD\b": "RD",
+        r"\bSTREET\b": "ST",
+        r"\bAVENUE\b": "AVE",
+        r"\bDRIVE\b": "DR",
+        r"\bLANE\b": "LN",
+        r"\bBOULEVARD\b": "BLVD",
+        r"\bHIGHWAY\b": "HWY",
+        r"\bCOUNTY ROAD\b": "CR",
+        r"\bCOURT\b": "CT",
+        r"\bPLACE\b": "PL",
+        r"\bCIRCLE\b": "CIR",
+        r"\bNORTH\b": "N",
+        r"\bSOUTH\b": "S",
+        r"\bEAST\b": "E",
+        r"\bWEST\b": "W",
+    }
+    for pattern, replacement in replacements.items():
+        out = out.str.replace(pattern, replacement, regex=True)
+    out = out.str.replace(r"[^A-Z0-9 ]+", " ", regex=True)
+    out = out.str.replace(r"\b0+([1-9][0-9]*)\b", r"\1", regex=True)
+    out = out.str.replace(r"\s+", " ", regex=True).str.strip()
+    return out.mask(out.eq(""), pd.NA).astype("string")
+
+
+def latest_hinds_parcel_service_extract() -> Path | None:
+    candidates = sorted(PARCEL_SERVICE_DIR.rglob("extracted_raw_tax_records.parquet"))
+    return candidates[-1] if candidates else None
 
 
 def standardize_hinds(frame: pd.DataFrame, run_id: str, raw_dir: Path) -> pd.DataFrame:
@@ -259,7 +294,83 @@ def build_reason_summaries(unmatched: pd.DataFrame, ambiguous: pd.DataFrame) -> 
     return unmatched_summary, ambiguity_summary
 
 
-def build_identifier_diagnostics(standardized: pd.DataFrame, master: pd.DataFrame) -> pd.DataFrame:
+def apply_hinds_address_bridge(unmatched: pd.DataFrame, master: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    metrics: list[dict[str, Any]] = []
+    extract_path = latest_hinds_parcel_service_extract()
+    if extract_path is None or unmatched.empty:
+        if extract_path is None:
+            metrics.append({"metric": "hinds_address_bridge_source_available", "value": "no"})
+            metrics.append({"metric": "hinds_address_bridge_assessment", "value": "Hinds parcel-service extract is unavailable, so the county-specific address bridge could not be attempted."})
+        return unmatched.head(0).copy(), pd.DataFrame(metrics)
+
+    parcel_service = pd.read_parquet(extract_path, columns=["parcel_row_id", "site_address", "source_parcel_number"])
+    parcel_service["address_key"] = normalize_hinds_address_key(parcel_service["site_address"])
+    bridge_source = unmatched.copy()
+    bridge_source["address_key"] = normalize_hinds_address_key(bridge_source["situs_address"])
+
+    metrics.extend(
+        [
+            {"metric": "hinds_address_bridge_source_available", "value": "yes"},
+            {"metric": "hinds_address_bridge_extract_path", "value": extract_path.relative_to(BASE_DIR).as_posix()},
+            {"metric": "hinds_address_bridge_candidate_rows", "value": int(bridge_source["address_key"].notna().sum())},
+            {"metric": "hinds_address_bridge_unique_candidate_keys", "value": int(bridge_source["address_key"].nunique())},
+            {"metric": "hinds_parcel_service_unique_address_keys", "value": int(parcel_service["address_key"].nunique())},
+        ]
+    )
+
+    source_counts = bridge_source.groupby("address_key").size().rename("tax_address_count").reset_index()
+    service_counts = parcel_service.groupby("address_key").size().rename("parcel_service_address_count").reset_index()
+    bridge_matches = bridge_source.merge(source_counts, on="address_key", how="left")
+    bridge_matches = bridge_matches.merge(service_counts, on="address_key", how="left")
+    bridge_matches = bridge_matches.loc[
+        bridge_matches["address_key"].notna()
+        & bridge_matches["tax_address_count"].eq(1)
+        & bridge_matches["parcel_service_address_count"].eq(1)
+    ].copy()
+    if bridge_matches.empty:
+        metrics.append({"metric": "hinds_address_bridge_unique_match_rows", "value": 0})
+        metrics.append({"metric": "hinds_address_bridge_assessment", "value": "No safe one-to-one situs-address bridge matches were found for Hinds unmatched tax rows."})
+        return unmatched.head(0).copy(), pd.DataFrame(metrics)
+
+    bridge_matches = bridge_matches.merge(
+        parcel_service[["parcel_row_id", "address_key", "site_address", "source_parcel_number"]],
+        on="address_key",
+        how="left",
+        suffixes=("", "_parcel_service"),
+    )
+    bridge_matches["source_parcel_id_normalized_bridge"] = normalize_identifier(bridge_matches["source_parcel_number"])
+    county_master = master.loc[master["county_name"].eq(COUNTY_NAME), ["parcel_row_id", "source_parcel_id_normalized", "acreage", "owner_name_raw", "property_address_raw"]].copy()
+    county_master = county_master.rename(columns={"parcel_row_id": "parcel_row_id_master"})
+    bridge_matches = bridge_matches.merge(
+        county_master,
+        left_on="source_parcel_id_normalized_bridge",
+        right_on="source_parcel_id_normalized",
+        how="left",
+        suffixes=("", "_master"),
+    )
+    bridge_matches["parcel_row_id"] = bridge_matches["parcel_row_id"].astype("string").fillna(bridge_matches["parcel_row_id_master"].astype("string"))
+    bridge_matches["linkage_method"] = "county_adapter_hinds_site_address"
+    bridge_matches["match_method"] = "county_address_bridge"
+    bridge_matches["match_confidence"] = 0.8
+    bridge_matches["match_confidence_tier"] = "medium"
+    bridge_matches["candidate_match_count"] = 1
+    bridge_matches["value_per_acre"] = pd.to_numeric(
+        pd.to_numeric(bridge_matches.get("market_total_value"), errors="coerce")
+        / pd.to_numeric(bridge_matches.get("acreage"), errors="coerce").replace({0: np.nan}),
+        errors="coerce",
+    )
+    bridge_matches["tax_balance_to_assessed_value_ratio"] = pd.to_numeric(
+        pd.to_numeric(bridge_matches.get("tax_balance_due"), errors="coerce")
+        / pd.to_numeric(bridge_matches.get("assessed_total_value"), errors="coerce").replace({0: np.nan}),
+        errors="coerce",
+    )
+    metrics.append({"metric": "hinds_address_bridge_unique_match_rows", "value": int(len(bridge_matches))})
+    metrics.append({"metric": "hinds_address_bridge_master_match_rows", "value": int(bridge_matches["parcel_row_id"].notna().sum())})
+    metrics.append({"metric": "hinds_address_bridge_assessment", "value": "Applied a conservative one-to-one situs-address bridge between the Hinds sale list and parcel-service extract."})
+    return bridge_matches, pd.DataFrame(metrics)
+
+
+def build_identifier_diagnostics(standardized: pd.DataFrame, master: pd.DataFrame, bridge_metrics: pd.DataFrame | None = None) -> pd.DataFrame:
     std = standardized.copy()
     master_hinds = master.loc[master["county_name"].eq(COUNTY_NAME)].copy()
     std["compact_source"] = std["parcel_id_normalized"].astype("string").str.replace(r"[^A-Z0-9]+", "", regex=True)
@@ -277,16 +388,12 @@ def build_identifier_diagnostics(standardized: pd.DataFrame, master: pd.DataFram
             {"metric": "hinds_master_unique_ppins", "value": int(normalize_ppin(master_hinds["source_ppin"]).nunique())},
             {"metric": "hinds_direct_identifier_overlap_rows", "value": direct_overlap},
             {"metric": "hinds_compact_identifier_overlap_rows", "value": compact_overlap},
-            {
-                "metric": "hinds_safe_adapter_justified",
-                "value": "no" if compact_overlap == 0 and direct_overlap == 0 else "review",
-            },
-            {
-                "metric": "hinds_adapter_assessment",
-                "value": "No safe county adapter justified from current structured file; source parcel numbers do not align with parcel master IDs and PPIN is absent.",
-            },
+            {"metric": "hinds_safe_adapter_justified", "value": "review"},
+            {"metric": "hinds_adapter_assessment", "value": "Identifier-only linkage remains weak for Hinds, but a conservative one-to-one situs-address bridge is now available via the county parcel-service extract."},
         ]
     )
+    if bridge_metrics is not None and not bridge_metrics.empty:
+        diagnostics = pd.concat([diagnostics, bridge_metrics], ignore_index=True)
     return diagnostics
 
 
@@ -331,7 +438,7 @@ def build_comparison_summary(standardized: pd.DataFrame, linked: pd.DataFrame) -
             {"metric": "sos_hinds_linkage_rate", "value": round(sos_rate, 4)},
             {
                 "metric": "comparison_assessment",
-                "value": "Hinds structured source is cleaner as a county-hosted delinquency list, but without PPIN or master-aligned parcel IDs it does not currently improve linkage over SOS for Hinds.",
+                "value": "Hinds now uses a conservative situs-address bridge, which improves linkage materially over the prior zero-match county-hosted path while still keeping matching explicit and reviewable.",
             },
         ]
     )
@@ -424,6 +531,10 @@ def main() -> None:
         master,
         heuristic_variants_by_county={COUNTY_NAME: []},
     )
+    bridged, bridge_metrics = apply_hinds_address_bridge(unmatched, master)
+    if not bridged.empty:
+        linked = pd.concat([linked, bridged], ignore_index=True, sort=False)
+        unmatched = unmatched.loc[~unmatched["tax_record_row_id"].isin(bridged["tax_record_row_id"])].copy()
 
     standardized.to_parquet(paths["standardized"], index=False)
     linked.to_parquet(paths["linked"], index=False)
@@ -438,7 +549,9 @@ def main() -> None:
             {"metric": "hinds_ambiguous_rows", "value": int(len(ambiguous))},
             {"metric": "hinds_linkage_rate", "value": round(float(len(linked) / max(len(standardized), 1) * 100.0), 4)},
             {"metric": "hinds_exact_match_rows", "value": int(linked["match_confidence_tier"].eq("high").sum()) if not linked.empty else 0},
+            {"metric": "hinds_medium_confidence_match_rows", "value": int(linked["match_confidence_tier"].eq("medium").sum()) if not linked.empty else 0},
             {"metric": "hinds_heuristic_match_rows", "value": int(linked["match_confidence_tier"].eq("low").sum()) if not linked.empty else 0},
+            {"metric": "hinds_address_bridge_rows", "value": int(bridged["tax_record_row_id"].nunique()) if not bridged.empty else 0},
         ]
     )
     summary.to_csv(paths["summary"], index=False)
@@ -446,7 +559,7 @@ def main() -> None:
     unmatched_reason_summary, ambiguity_reason_summary = build_reason_summaries(unmatched, ambiguous)
     unmatched_reason_summary.to_csv(paths["unmatched_reason_summary"], index=False)
     ambiguity_reason_summary.to_csv(paths["ambiguity_reason_summary"], index=False)
-    diagnostics = build_identifier_diagnostics(standardized, master)
+    diagnostics = build_identifier_diagnostics(standardized, master, bridge_metrics)
     diagnostics.to_csv(paths["identifier_diagnostics"], index=False)
     qa_summary = build_qa_summary(standardized, linked, unmatched, ambiguous)
     qa_summary.to_csv(paths["qa_summary"], index=False)
