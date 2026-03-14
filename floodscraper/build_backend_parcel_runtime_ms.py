@@ -320,19 +320,22 @@ def apply_county_tax_coverage_fields(frame: pd.DataFrame) -> pd.DataFrame:
     frame["county_tax_source_configured_flag"] = frame["county_tax_source_configured_flag"].fillna(frame.get("county_tax_source_configured_flag_county"))
     frame["county_tax_source_loaded_flag"] = frame["county_tax_source_loaded_flag"].fillna(frame.get("county_tax_source_loaded_flag_county"))
     frame["tax_data_available_flag"] = frame["tax_data_available_flag"].fillna(frame.get("tax_data_available_flag_county"))
-    frame["county_tax_coverage_status"] = normalize_string(frame.get("county_tax_coverage_status"), index=frame.index)
-    frame["county_tax_coverage_note"] = normalize_string(frame.get("county_tax_coverage_note"), index=frame.index).fillna(
-        normalize_string(frame.get("county_tax_coverage_reason"), index=frame.index)
-    )
-    frame["county_tax_coverage_reason"] = normalize_string(frame.get("county_tax_coverage_reason"), index=frame.index).fillna(
-        frame["county_tax_coverage_note"]
-    )
-    frame["county_tax_coverage_reason"] = normalize_string(frame.get("county_tax_coverage_reason"), index=frame.index)
-    frame["parcel_tax_status"] = pd.Series("county coverage missing", index=frame.index, dtype="string")
-    frame.loc[frame["county_tax_coverage_status"].eq("stale"), "parcel_tax_status"] = "county data stale"
-    frame.loc[frame["county_tax_coverage_status"].eq("partial"), "parcel_tax_status"] = "county coverage partial"
-    frame.loc[frame["county_tax_coverage_status"].eq("available"), "parcel_tax_status"] = "not delinquent"
-    frame.loc[frame["delinquent_flag"].fillna(False), "parcel_tax_status"] = "delinquent"
+    computed_status = pd.Series("missing", index=frame.index, dtype="string")
+    computed_status = computed_status.mask(frame.get("county_tax_coverage_status_county", pd.Series(pd.NA, index=frame.index)).notna(), normalize_string(frame.get("county_tax_coverage_status_county"), index=frame.index))
+    existing_status = normalize_string(frame.get("county_tax_coverage_status"), index=frame.index)
+    frame["county_tax_coverage_status"] = existing_status.fillna(computed_status)
+    computed_reason = normalize_string(frame.get("county_tax_coverage_reason_county"), index=frame.index)
+    existing_note = normalize_string(frame.get("county_tax_coverage_note"), index=frame.index)
+    existing_reason = normalize_string(frame.get("county_tax_coverage_reason"), index=frame.index)
+    frame["county_tax_coverage_note"] = existing_note.fillna(existing_reason).fillna(computed_reason)
+    frame["county_tax_coverage_reason"] = existing_reason.fillna(frame["county_tax_coverage_note"]).fillna(computed_reason)
+    existing_parcel_status = normalize_string(frame.get("parcel_tax_status"), index=frame.index)
+    computed_parcel_status = pd.Series("county coverage missing", index=frame.index, dtype="string")
+    computed_parcel_status.loc[frame["county_tax_coverage_status"].eq("stale")] = "county data stale"
+    computed_parcel_status.loc[frame["county_tax_coverage_status"].eq("partial")] = "county coverage partial"
+    computed_parcel_status.loc[frame["county_tax_coverage_status"].eq("available")] = "not delinquent"
+    computed_parcel_status.loc[frame["delinquent_flag"].fillna(False)] = "delinquent"
+    frame["parcel_tax_status"] = existing_parcel_status.fillna(computed_parcel_status)
     return frame.drop(
         columns=[
             "county_tax_source_configured_flag_county",
@@ -341,6 +344,8 @@ def apply_county_tax_coverage_fields(frame: pd.DataFrame) -> pd.DataFrame:
             "observed_delinquency_records",
             "latest_tax_data_upload_date",
             "latest_tax_data_year",
+            "county_tax_coverage_status_county",
+            "county_tax_coverage_reason_county",
         ],
         errors="ignore",
     )

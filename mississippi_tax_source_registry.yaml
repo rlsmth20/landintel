@@ -43,3 +43,580 @@ counties:
     source_type: direct_download_page
     source_path: data/tax_linked/ms/warren/warren_linked_tax_records.parquet
     source_name: warren_delinquent_taxes
+  adams:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: adams
+    coverage_scope: partial
+  alcorn:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: alcorn
+    coverage_scope: partial
+  attala:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: attala
+    coverage_scope: partial
+  benton:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: benton
+    coverage_scope: partial
+  bolivar:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: bolivar
+    coverage_scope: partial
+  chickasaw:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: chickasaw
+    coverage_scope: partial
+  claiborne:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: claiborne
+    coverage_scope: partial
+  clarke:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: clarke
+    coverage_scope: partial
+  clay:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: clay
+    coverage_scope: partial
+  coahoma:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: coahoma
+    coverage_scope: partial
+  copiah:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: copiah
+    coverage_scope: partial
+  covington:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: covington
+    coverage_scope: partial
+  desoto:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: desoto
+    coverage_scope: partial
+  forrest:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: forrest
+    coverage_scope: partial
+  franklin:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: franklin
+    coverage_scope: partial
+  george:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: george
+    coverage_scope: partial
+  greene:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: greene
+    coverage_scope: partial
+  grenada:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: grenada
+    coverage_scope: partial
+  hancock:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: hancock
+    coverage_scope: partial
+  harrison:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: harrison
+    coverage_scope: partial
+  holmes:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: holmes
+    coverage_scope: partial
+  humphreys:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: humphreys
+    coverage_scope: partial
+  itawamba:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: itawamba
+    coverage_scope: partial
+  jefferson:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: jefferson
+    coverage_scope: partial
+  jefferson_davis:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: jefferson_davis
+    coverage_scope: partial
+  jones:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: jones
+    coverage_scope: partial
+  lafayette:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: lafayette
+    coverage_scope: partial
+  lamar:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: lamar
+    coverage_scope: partial
+  lauderdale:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: lauderdale
+    coverage_scope: partial
+  lawrence:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: lawrence
+    coverage_scope: partial
+  leake:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: leake
+    coverage_scope: partial
+  lee:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: lee
+    coverage_scope: partial
+  leflore:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: leflore
+    coverage_scope: partial
+  lincoln:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: lincoln
+    coverage_scope: partial
+  lowndes:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: lowndes
+    coverage_scope: partial
+  marion:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: marion
+    coverage_scope: partial
+  marshall:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: marshall
+    coverage_scope: partial
+  monroe:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: monroe
+    coverage_scope: partial
+  neshoba:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: neshoba
+    coverage_scope: partial
+  newton:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: newton
+    coverage_scope: partial
+  oktibbeha:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: oktibbeha
+    coverage_scope: partial
+  panola:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: panola
+    coverage_scope: partial
+  pearl_river:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: pearl_river
+    coverage_scope: partial
+  perry:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: perry
+    coverage_scope: partial
+  pontotoc:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: pontotoc
+    coverage_scope: partial
+  prentiss:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: prentiss
+    coverage_scope: partial
+  quitman:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: quitman
+    coverage_scope: partial
+  rankin:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: rankin
+    coverage_scope: partial
+  scott:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: scott
+    coverage_scope: partial
+  simpson:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: simpson
+    coverage_scope: partial
+  smith:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: smith
+    coverage_scope: partial
+  stone:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: stone
+    coverage_scope: partial
+  sunflower:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: sunflower
+    coverage_scope: partial
+  tallahatchie:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: tallahatchie
+    coverage_scope: partial
+  tate:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: tate
+    coverage_scope: partial
+  tippah:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: tippah
+    coverage_scope: partial
+  tunica:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: tunica
+    coverage_scope: partial
+  union:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: union
+    coverage_scope: partial
+  washington:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: washington
+    coverage_scope: partial
+  walthall:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: walthall
+    coverage_scope: partial
+  wayne:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: wayne
+    coverage_scope: partial
+  webster:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: webster
+    coverage_scope: partial
+  wilkinson:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: wilkinson
+    coverage_scope: partial
+  winston:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: winston
+    coverage_scope: partial
+  yazoo:
+    ingest_mode: linked_parquet
+    source_type: statewide_public_inventory
+    source_path: data/tax_linked/ms/statewide/sos_forfeited_linked_tax_records.parquet
+    source_name: sos_tax_forfeited_lands_gis
+    source_county_field: county_name
+    source_county_value: yazoo
+    coverage_scope: partial
+
+pending:
+  amite:
+    discovery_status: pending_non_ingestable
+    source_type: subscription_bulk_download
+    source_url: https://www.deltacomputersystems.com/taxsale.html
+    note: County source is discovered, but currently requires subscription access and is not yet wired into the local ingest pipeline.
+  calhoun:
+    discovery_status: pending_non_ingestable
+    source_type: direct_download_page
+    source_url: https://cs.datasysmgt.com/tax?state=MS&county=7
+    note: Public redemption source is discovered, but county-specific parsing and parcel linking are not yet implemented safely enough to enable in production.
+  carroll:
+    discovery_status: pending_non_ingestable
+    source_type: subscription_portal
+    source_url: https://www.deltacomputersystems.com/MS/MS08/INDEX.HTML
+    note: County source is discovered, but current access path is subscription-gated and not yet usable in the automated ingest pipeline.
+  choctaw:
+    discovery_status: pending_non_ingestable
+    source_type: subscription_portal
+    source_url: https://www.deltacomputersystems.com/MS/MS10/INDEX.HTML
+    note: County source is discovered, but current access path is subscription-gated and not yet usable in the automated ingest pipeline.
+  issaquena:
+    discovery_status: pending_non_ingestable
+    source_type: subscription_bulk_download
+    source_url: https://www.deltacomputersystems.com/taxsale.html
+    note: County source is discovered, but currently requires subscription access and is not yet wired into the local ingest pipeline.
+  kemper:
+    discovery_status: pending_non_ingestable
+    source_type: subscription_bulk_download
+    source_url: https://www.deltacomputersystems.com/taxsale.html
+    note: County source is discovered, but currently requires subscription access and is not yet wired into the local ingest pipeline.
+  montgomery:
+    discovery_status: pending_non_ingestable
+    source_type: subscription_portal
+    source_url: https://www.deltacomputersystems.com/MS/MS49/INDEX.HTML
+    note: County source is discovered, but current access path is subscription-gated and not yet usable in the automated ingest pipeline.
+  noxubee:
+    discovery_status: pending_non_ingestable
+    source_type: subscription_bulk_download
+    source_url: https://www.deltacomputersystems.com/taxsale.html
+    note: County source is discovered, but currently requires subscription access and is not yet wired into the local ingest pipeline.
+  sharkey:
+    discovery_status: pending_non_ingestable
+    source_type: subscription_bulk_download
+    source_url: https://www.deltacomputersystems.com/taxsale.html
+    note: County source is discovered, but currently requires subscription access and is not yet wired into the local ingest pipeline.
+  tishomingo:
+    discovery_status: pending_non_ingestable
+    source_type: subscription_bulk_download
+    source_url: https://www.deltacomputersystems.com/taxsale.html
+    note: County source is discovered, but currently requires subscription access and is not yet wired into the local ingest pipeline.
+  yalobusha:
+    discovery_status: pending_non_ingestable
+    source_type: subscription_portal
+    source_url: https://www.deltacomputersystems.com/MS/MS81/INDEX.HTML
+    note: County source is discovered, but current access path is subscription-gated and not yet usable in the automated ingest pipeline.

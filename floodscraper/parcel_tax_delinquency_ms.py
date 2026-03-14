@@ -274,6 +274,12 @@ def build_linked_tax_frame(
     entry: dict[str, object],
     source_path: Path,
 ) -> pd.DataFrame:
+    county_field = str(entry.get("source_county_field", "") or "").strip()
+    county_value = str(entry.get("source_county_value", county_name) or county_name).strip().lower()
+    if county_field and county_field in linked_frame.columns:
+        linked_frame = linked_frame.loc[
+            linked_frame[county_field].astype("string").str.strip().str.lower().eq(county_value)
+        ].copy()
     parcel_row_id = pd.Series(pd.NA, index=linked_frame.index, dtype="string")
     for column in ["parcel_row_id", "parcel_row_id_master", "parcel_row_id_tax"]:
         if column in linked_frame.columns:
@@ -513,6 +519,7 @@ def prepare_county_output(
     out["tax_data_upload_date"] = normalize_timestamp(out["tax_data_upload_date"])
     out["tax_data_source"] = out["tax_data_source"].astype("string").fillna(out["tax_source_name"])
     out["delinquency_last_verified"] = normalize_timestamp(out["delinquency_last_verified"]).fillna(out["tax_data_upload_date"])
+    coverage_scope = str(entry.get("coverage_scope", "full")).strip().lower() if entry else "missing"
     county_has_data = bool(out["tax_data_available_flag"].fillna(False).any())
     county_latest_upload = pd.to_datetime(out["tax_data_upload_date"], errors="coerce", utc=True).max()
     county_latest_year = pd.to_numeric(out["tax_data_year"], errors="coerce").max()
@@ -526,10 +533,17 @@ def prepare_county_output(
         coverage_note = "County tax source is configured but has not been loaded yet."
     elif source_loaded and not county_has_data:
         coverage_status = "partial"
-        coverage_note = "County tax source loaded, but no linked delinquency records were produced yet."
+        if coverage_scope == "partial":
+            coverage_note = "Partial source loaded, but no county-linked delinquency or tax-sale records were produced yet."
+        else:
+            coverage_note = "County tax source loaded, but no linked delinquency records were produced yet."
     elif county_has_data:
-        coverage_status = "stale" if stale else "available"
-        coverage_note = "County tax delinquency coverage exists but appears stale." if stale else "County tax delinquency coverage is available."
+        if coverage_scope == "partial":
+            coverage_status = "stale" if stale else "partial"
+            coverage_note = "Partial county tax or tax-sale coverage exists but appears stale." if stale else "Partial county tax or tax-sale coverage is available."
+        else:
+            coverage_status = "stale" if stale else "available"
+            coverage_note = "County tax delinquency coverage exists but appears stale." if stale else "County tax delinquency coverage is available."
     out["county_tax_coverage_status"] = pd.Series(coverage_status, index=out.index, dtype="string")
     out["county_tax_coverage_note"] = pd.Series(coverage_note, index=out.index, dtype="string")
     out["county_tax_coverage_reason"] = out["county_tax_coverage_note"].copy()

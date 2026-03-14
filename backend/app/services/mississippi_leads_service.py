@@ -617,13 +617,17 @@ def _apply_county_tax_coverage_fields(frame: pd.DataFrame) -> pd.DataFrame:
     parcel_tax_status = parcel_tax_status.mask(status.eq("partial"), "county coverage partial")
     parcel_tax_status = parcel_tax_status.mask(status.eq("available"), "not delinquent")
     parcel_tax_status = parcel_tax_status.mask(delinquent, "delinquent")
+    existing_status = _normalize_string(frame.get("county_tax_coverage_status"), index=frame.index)
+    existing_note = _normalize_string(frame.get("county_tax_coverage_note"), index=frame.index)
+    existing_reason = _normalize_string(frame.get("county_tax_coverage_reason"), index=frame.index)
+    existing_parcel_status = _normalize_string(frame.get("parcel_tax_status"), index=frame.index)
     frame["county_tax_source_configured_flag"] = configured
     frame["county_tax_source_loaded_flag"] = loaded
     frame["tax_data_available_flag"] = available
-    frame["county_tax_coverage_status"] = status
-    frame["county_tax_coverage_note"] = reason
-    frame["county_tax_coverage_reason"] = reason
-    frame["parcel_tax_status"] = parcel_tax_status
+    frame["county_tax_coverage_status"] = existing_status.fillna(status)
+    frame["county_tax_coverage_note"] = existing_note.fillna(existing_reason).fillna(reason)
+    frame["county_tax_coverage_reason"] = existing_reason.fillna(frame["county_tax_coverage_note"]).fillna(reason)
+    frame["parcel_tax_status"] = existing_parcel_status.fillna(parcel_tax_status)
     return frame
 
 
