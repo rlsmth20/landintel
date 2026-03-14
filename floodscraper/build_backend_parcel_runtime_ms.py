@@ -245,6 +245,73 @@ def apply_tax_freshness_fields(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+def build_county_tax_coverage(frame: pd.DataFrame) -> pd.DataFrame:
+    county_frame = frame.loc[:, [
+        "county_name",
+        "county_tax_source_configured_flag",
+        "county_tax_source_loaded_flag",
+        "tax_data_available_flag",
+        "tax_data_upload_date",
+        "tax_data_year",
+        "delinquent_flag",
+    ]].copy()
+    county_frame["county_tax_source_configured_flag"] = county_frame["county_tax_source_configured_flag"].fillna(False)
+    county_frame["county_tax_source_loaded_flag"] = county_frame["county_tax_source_loaded_flag"].fillna(False)
+    county_frame["tax_data_available_flag"] = county_frame["tax_data_available_flag"].fillna(False)
+    county_frame["delinquent_flag"] = county_frame["delinquent_flag"].fillna(False)
+    grouped = county_frame.groupby("county_name", dropna=False).agg(
+        county_tax_source_configured_flag=("county_tax_source_configured_flag", "max"),
+        county_tax_source_loaded_flag=("county_tax_source_loaded_flag", "max"),
+        tax_data_available_flag=("tax_data_available_flag", "max"),
+        observed_delinquency_records=("delinquent_flag", "sum"),
+        latest_tax_data_upload_date=("tax_data_upload_date", "max"),
+        latest_tax_data_year=("tax_data_year", "max"),
+    ).reset_index()
+    uploaded = pd.to_datetime(grouped["latest_tax_data_upload_date"], errors="coerce", utc=True)
+    current_year = pd.Timestamp.utcnow().year
+    stale_mask = (
+        uploaded.lt(pd.Timestamp.utcnow() - pd.Timedelta(days=365))
+        | pd.to_numeric(grouped["latest_tax_data_year"], errors="coerce").lt(current_year - 1).fillna(False)
+    )
+    has_full_county_data = grouped["county_tax_source_loaded_flag"].fillna(False) & grouped["tax_data_available_flag"].fillna(False)
+    has_partial_data = grouped["observed_delinquency_records"].gt(0)
+    grouped["county_tax_coverage_status"] = "missing"
+    grouped.loc[has_partial_data, "county_tax_coverage_status"] = "partial"
+    grouped.loc[has_full_county_data, "county_tax_coverage_status"] = "available"
+    grouped.loc[(has_full_county_data | has_partial_data) & stale_mask, "county_tax_coverage_status"] = "stale"
+    grouped["county_tax_coverage_reason"] = pd.Series("No county tax delinquency dataset is available yet.", index=grouped.index, dtype="string")
+    grouped.loc[grouped["county_tax_coverage_status"].eq("partial"), "county_tax_coverage_reason"] = "Only partial county tax delinquency coverage is currently available."
+    grouped.loc[grouped["county_tax_coverage_status"].eq("available"), "county_tax_coverage_reason"] = "County tax delinquency coverage is available."
+    grouped.loc[grouped["county_tax_coverage_status"].eq("stale"), "county_tax_coverage_reason"] = "County tax delinquency coverage exists but appears stale."
+    return grouped
+
+
+def apply_county_tax_coverage_fields(frame: pd.DataFrame) -> pd.DataFrame:
+    county_coverage = build_county_tax_coverage(frame)
+    frame = frame.merge(county_coverage, on="county_name", how="left", suffixes=("", "_county"))
+    frame["county_tax_source_configured_flag"] = frame["county_tax_source_configured_flag"].fillna(frame.get("county_tax_source_configured_flag_county"))
+    frame["county_tax_source_loaded_flag"] = frame["county_tax_source_loaded_flag"].fillna(frame.get("county_tax_source_loaded_flag_county"))
+    frame["tax_data_available_flag"] = frame["tax_data_available_flag"].fillna(frame.get("tax_data_available_flag_county"))
+    frame["county_tax_coverage_status"] = normalize_string(frame.get("county_tax_coverage_status"), index=frame.index)
+    frame["county_tax_coverage_reason"] = normalize_string(frame.get("county_tax_coverage_reason"), index=frame.index)
+    frame["parcel_tax_status"] = pd.Series("county coverage missing", index=frame.index, dtype="string")
+    frame.loc[frame["county_tax_coverage_status"].eq("stale"), "parcel_tax_status"] = "county data stale"
+    frame.loc[frame["county_tax_coverage_status"].eq("partial"), "parcel_tax_status"] = "county coverage partial"
+    frame.loc[frame["county_tax_coverage_status"].eq("available"), "parcel_tax_status"] = "not delinquent"
+    frame.loc[frame["delinquent_flag"].fillna(False), "parcel_tax_status"] = "delinquent"
+    return frame.drop(
+        columns=[
+            "county_tax_source_configured_flag_county",
+            "county_tax_source_loaded_flag_county",
+            "tax_data_available_flag_county",
+            "observed_delinquency_records",
+            "latest_tax_data_upload_date",
+            "latest_tax_data_year",
+        ],
+        errors="ignore",
+    )
+
+
 def vacancy_confidence(frame: pd.DataFrame) -> pd.Series:
     building_count = pd.to_numeric(frame.get("building_count"), errors="coerce").fillna(0)
     building_area_total = pd.to_numeric(frame.get("building_area_total"), errors="coerce").fillna(0)
@@ -287,6 +354,12 @@ def derive_shape_metrics(frame: pd.DataFrame) -> pd.DataFrame:
 def build_detail_metrics_runtime(frame: pd.DataFrame) -> pd.DataFrame:
     detail_columns = [
         "parcel_row_id",
+        "county_tax_source_configured_flag",
+        "county_tax_source_loaded_flag",
+        "tax_data_available_flag",
+        "county_tax_coverage_status",
+        "county_tax_coverage_reason",
+        "parcel_tax_status",
         "delinquent_year",
         "tax_data_upload_date",
         "tax_data_year",
@@ -403,6 +476,7 @@ def build_runtime_frame() -> pd.DataFrame:
         vacancy_confidence_series = pd.Series(np.nan, index=frame.index, dtype="float64")
     frame["vacancy_confidence_score"] = vacancy_confidence_series.fillna(vacancy_confidence(frame))
     frame = apply_tax_freshness_fields(frame)
+    frame = apply_county_tax_coverage_fields(frame)
 
     return frame
 

@@ -59,6 +59,12 @@ export function LeadDetail({ lead }: { lead: LeadRecord }) {
 
       <DetailSection title="Motivation Signals">
         <DetailRow label="Raw vacant flag" value={formatBoolean(lead.parcel_vacant_flag)} />
+        <DetailRow label="Parcel tax status" value={lead.parcel_tax_status} />
+        <DetailRow label="County tax coverage status" value={lead.county_tax_coverage_status} />
+        <DetailRow label="County tax coverage note" value={lead.county_tax_coverage_reason} />
+        <DetailRow label="County tax source configured" value={formatBoolean(lead.county_tax_source_configured_flag)} />
+        <DetailRow label="County tax source loaded" value={formatBoolean(lead.county_tax_source_loaded_flag)} />
+        <DetailRow label="Tax data available" value={formatBoolean(lead.tax_data_available_flag)} />
         <DetailRow label="Delinquent amount" value={formatCurrency(lead.delinquent_amount)} />
         <DetailRow label="Delinquent year" value={formatNumber(lead.delinquent_year)} />
         <DetailRow label="Delinquent amount bucket" value={lead.delinquent_amount_bucket} />

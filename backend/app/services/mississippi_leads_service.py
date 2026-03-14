@@ -318,6 +318,7 @@ def _ensure_intelligence_fields(frame: pd.DataFrame) -> pd.DataFrame:
     frame["county_vacant_flag"] = county_vacant
     frame["ai_building_present_flag"] = ai_building_present
     frame["vacancy_confidence_score"] = _to_float_series(frame, "vacancy_confidence_score").fillna(_vacancy_confidence_series(frame))
+    frame = _apply_county_tax_coverage_fields(frame)
     return frame
 
 
@@ -467,6 +468,81 @@ def _apply_tax_detail_defaults(payload: dict[str, Any]) -> None:
     payload["tax_data_upload_date"] = upload_date
     payload["tax_data_source"] = _serialize_scalar(tax_data_source)
     payload["delinquency_last_verified"] = _serialize_scalar(payload.get("delinquency_last_verified") or upload_date)
+    coverage_status = payload.get("county_tax_coverage_status")
+    if coverage_status is None:
+        county_loaded = bool(payload.get("county_tax_source_loaded_flag"))
+        tax_available = bool(payload.get("tax_data_available_flag"))
+        has_partial = payload.get("latest_delinquent_year") is not None
+        stale = False
+        if upload_date:
+            parsed_upload = pd.to_datetime(upload_date, errors="coerce", utc=True)
+            if pd.notna(parsed_upload):
+                stale = bool(parsed_upload < (pd.Timestamp.utcnow() - pd.Timedelta(days=365)))
+        if not stale and payload.get("tax_data_year") is not None:
+            stale = bool(pd.to_numeric(pd.Series([payload.get("tax_data_year")]), errors="coerce").iloc[0] < pd.Timestamp.utcnow().year - 1)
+        if county_loaded and tax_available:
+            coverage_status = "stale" if stale else "available"
+        elif has_partial:
+            coverage_status = "stale" if stale else "partial"
+        else:
+            coverage_status = "missing"
+    coverage_reason = payload.get("county_tax_coverage_reason")
+    if coverage_reason is None:
+        coverage_reason = {
+            "available": "County tax delinquency coverage is available.",
+            "partial": "Only partial county tax delinquency coverage is currently available.",
+            "stale": "County tax delinquency coverage exists but appears stale.",
+            "missing": "No county tax delinquency dataset is available yet.",
+        }.get(str(coverage_status), "No county tax delinquency dataset is available yet.")
+    parcel_tax_status = payload.get("parcel_tax_status")
+    if parcel_tax_status is None:
+        if bool(payload.get("delinquent_flag")):
+            parcel_tax_status = "delinquent"
+        else:
+            parcel_tax_status = {
+                "available": "not delinquent",
+                "partial": "county coverage partial",
+                "stale": "county data stale",
+                "missing": "county coverage missing",
+            }.get(str(coverage_status), "county coverage missing")
+    payload["county_tax_coverage_status"] = _serialize_scalar(coverage_status)
+    payload["county_tax_coverage_reason"] = _serialize_scalar(coverage_reason)
+    payload["parcel_tax_status"] = _serialize_scalar(parcel_tax_status)
+
+
+def _apply_county_tax_coverage_fields(frame: pd.DataFrame) -> pd.DataFrame:
+    configured = frame.get("county_tax_source_configured_flag", pd.Series(False, index=frame.index)).fillna(False).astype(bool)
+    loaded = frame.get("county_tax_source_loaded_flag", pd.Series(False, index=frame.index)).fillna(False).astype(bool)
+    available = frame.get("tax_data_available_flag", pd.Series(False, index=frame.index)).fillna(False).astype(bool)
+    delinquent = frame.get("delinquent_flag", pd.Series(False, index=frame.index)).fillna(False).astype(bool)
+    upload_dates = pd.to_datetime(frame.get("tax_data_upload_date", pd.Series(pd.NA, index=frame.index)), errors="coerce", utc=True)
+    tax_years = _to_float_series(frame, "tax_data_year")
+    stale = (
+        upload_dates.lt(pd.Timestamp.utcnow() - pd.Timedelta(days=365)).fillna(False)
+        | tax_years.lt(pd.Timestamp.utcnow().year - 1).fillna(False)
+    )
+    has_full_county_data = loaded & available
+    has_partial_data = delinquent | frame.get("latest_delinquent_year", pd.Series(pd.NA, index=frame.index)).notna()
+    status = pd.Series("missing", index=frame.index, dtype="string")
+    status = status.mask(has_partial_data, "partial")
+    status = status.mask(has_full_county_data, "available")
+    status = status.mask((has_full_county_data | has_partial_data) & stale, "stale")
+    reason = pd.Series("No county tax delinquency dataset is available yet.", index=frame.index, dtype="string")
+    reason = reason.mask(status.eq("partial"), "Only partial county tax delinquency coverage is currently available.")
+    reason = reason.mask(status.eq("available"), "County tax delinquency coverage is available.")
+    reason = reason.mask(status.eq("stale"), "County tax delinquency coverage exists but appears stale.")
+    parcel_tax_status = pd.Series("county coverage missing", index=frame.index, dtype="string")
+    parcel_tax_status = parcel_tax_status.mask(status.eq("stale"), "county data stale")
+    parcel_tax_status = parcel_tax_status.mask(status.eq("partial"), "county coverage partial")
+    parcel_tax_status = parcel_tax_status.mask(status.eq("available"), "not delinquent")
+    parcel_tax_status = parcel_tax_status.mask(delinquent, "delinquent")
+    frame["county_tax_source_configured_flag"] = configured
+    frame["county_tax_source_loaded_flag"] = loaded
+    frame["tax_data_available_flag"] = available
+    frame["county_tax_coverage_status"] = status
+    frame["county_tax_coverage_reason"] = reason
+    frame["parcel_tax_status"] = parcel_tax_status
+    return frame
 
 
 @lru_cache(maxsize=1)

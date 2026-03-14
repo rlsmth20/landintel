@@ -96,6 +96,12 @@ export type LeadRecord = {
   delinquent_amount_bucket: string | null;
   delinquent_flag: boolean | null;
   delinquent_year: number | null;
+  county_tax_source_configured_flag: boolean | null;
+  county_tax_source_loaded_flag: boolean | null;
+  tax_data_available_flag: boolean | null;
+  county_tax_coverage_status: string | null;
+  county_tax_coverage_reason: string | null;
+  parcel_tax_status: string | null;
   tax_data_upload_date: string | null;
   tax_data_year: number | null;
   tax_data_source: string | null;
