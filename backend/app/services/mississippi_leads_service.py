@@ -85,6 +85,11 @@ SUMMARY_FIELDS = [
     "parcel_tax_status_confidence",
     "parcel_tax_actionability",
     "parcel_tax_data_warning",
+    "parcel_tax_freshness_bucket",
+    "parcel_tax_years_stale",
+    "parcel_tax_is_actionable_current",
+    "parcel_tax_is_historical_only",
+    "parcel_tax_freshness_reason",
     "recommended_sort_reason",
     "county_hosted_flag",
     "high_confidence_link_flag",
@@ -98,6 +103,12 @@ TAX_INTERPRETATION_FIELDS = [
     "parcel_tax_status_reason",
     "parcel_tax_actionability",
     "parcel_tax_data_warning",
+    "parcel_tax_freshness_bucket",
+    "parcel_tax_years_stale",
+    "parcel_tax_is_actionable_current",
+    "parcel_tax_is_historical_only",
+    "parcel_tax_freshness_reason",
+    "parcel_tax_recency_penalty",
     "parcel_tax_score_adjustment",
     "lead_score_total_effective",
 ]
@@ -352,6 +363,7 @@ def _ensure_intelligence_fields(frame: pd.DataFrame) -> pd.DataFrame:
     frame["building_presence_reason"] = _normalize_string(frame.get("building_presence_reason"), index=frame.index)
     frame["vacancy_confidence_score"] = _to_float_series(frame, "vacancy_confidence_score").fillna(_vacancy_confidence_series(frame))
     frame = _apply_county_tax_coverage_fields(frame)
+    frame = _apply_tax_recency_fields(frame)
     return frame
 
 
@@ -556,9 +568,9 @@ def _apply_tax_detail_defaults(payload: dict[str, Any]) -> None:
         if upload_date:
             parsed_upload = pd.to_datetime(upload_date, errors="coerce", utc=True)
             if pd.notna(parsed_upload):
-                stale = bool(parsed_upload < (pd.Timestamp.utcnow() - pd.Timedelta(days=365)))
+                stale = bool(parsed_upload < (pd.Timestamp.now("UTC") - pd.Timedelta(days=365)))
         if not stale and payload.get("tax_data_year") is not None:
-            stale = bool(pd.to_numeric(pd.Series([payload.get("tax_data_year")]), errors="coerce").iloc[0] < pd.Timestamp.utcnow().year - 1)
+            stale = bool(pd.to_numeric(pd.Series([payload.get("tax_data_year")]), errors="coerce").iloc[0] < pd.Timestamp.now("UTC").year - 1)
         if county_loaded and tax_available:
             coverage_status = "stale" if stale else "available"
         elif has_partial:
@@ -635,9 +647,10 @@ def _apply_county_tax_coverage_fields(frame: pd.DataFrame) -> pd.DataFrame:
     delinquent = frame.get("delinquent_flag", pd.Series(False, index=frame.index)).fillna(False).astype(bool)
     upload_dates = pd.to_datetime(frame.get("tax_data_upload_date", pd.Series(pd.NA, index=frame.index)), errors="coerce", utc=True)
     tax_years = _to_float_series(frame, "tax_data_year")
+    current_timestamp = pd.Timestamp.now("UTC")
     stale = (
-        upload_dates.lt(pd.Timestamp.utcnow() - pd.Timedelta(days=365)).fillna(False)
-        | tax_years.lt(pd.Timestamp.utcnow().year - 1).fillna(False)
+        upload_dates.lt(current_timestamp - pd.Timedelta(days=365)).fillna(False)
+        | tax_years.lt(current_timestamp.year - 1).fillna(False)
     )
     has_full_county_data = loaded & available
     has_partial_data = delinquent | frame.get("latest_delinquent_year", pd.Series(pd.NA, index=frame.index)).notna()
@@ -659,13 +672,59 @@ def _apply_county_tax_coverage_fields(frame: pd.DataFrame) -> pd.DataFrame:
     existing_note = _normalize_string(frame.get("county_tax_coverage_note"), index=frame.index)
     existing_reason = _normalize_string(frame.get("county_tax_coverage_reason"), index=frame.index)
     existing_parcel_status = _normalize_string(frame.get("parcel_tax_status"), index=frame.index)
+    county_tax_year = _to_float_series(frame, "latest_tax_data_year").astype("Int64")
+    existing_tax_year = _to_float_series(frame, "tax_data_year").astype("Int64")
+    county_upload_date = _normalize_timestamp_string(frame.get("latest_tax_data_upload_date"), index=frame.index)
+    existing_upload_date = _normalize_timestamp_string(frame.get("tax_data_upload_date"), index=frame.index)
+    existing_verified = _normalize_timestamp_string(frame.get("delinquency_last_verified"), index=frame.index)
     frame["county_tax_source_configured_flag"] = configured
     frame["county_tax_source_loaded_flag"] = loaded
     frame["tax_data_available_flag"] = available
+    frame["tax_data_year"] = existing_tax_year.fillna(county_tax_year)
+    frame["tax_data_upload_date"] = existing_upload_date.fillna(county_upload_date)
+    frame["delinquency_last_verified"] = existing_verified.fillna(frame["tax_data_upload_date"])
     frame["county_tax_coverage_status"] = existing_status.fillna(status)
     frame["county_tax_coverage_note"] = existing_note.fillna(existing_reason).fillna(reason)
     frame["county_tax_coverage_reason"] = existing_reason.fillna(frame["county_tax_coverage_note"]).fillna(reason)
     frame["parcel_tax_status"] = existing_parcel_status.fillna(parcel_tax_status)
+    return frame
+
+
+def _apply_tax_recency_fields(frame: pd.DataFrame) -> pd.DataFrame:
+    current_year = pd.Timestamp.now("UTC").year
+    tax_year = _to_float_series(frame, "tax_data_year")
+    years_stale = pd.Series(np.nan, index=frame.index, dtype="float64")
+    years_stale.loc[tax_year.notna()] = np.maximum(current_year - tax_year.loc[tax_year.notna()], 0)
+
+    bucket = pd.Series("unknown", index=frame.index, dtype="string")
+    bucket.loc[tax_year.ge(current_year).fillna(False)] = "current"
+    bucket.loc[tax_year.eq(current_year - 1).fillna(False)] = "actionable_recent"
+    bucket.loc[tax_year.eq(current_year - 2).fillna(False)] = "stale_caution"
+    bucket.loc[tax_year.eq(current_year - 3).fillna(False)] = "historical_only"
+    bucket.loc[tax_year.le(current_year - 4).fillna(False)] = "non_actionable_historical"
+
+    reason = pd.Series("No tax data year is available for this parcel.", index=frame.index, dtype="string")
+    reason.loc[bucket.eq("current")] = f"Tax data year {current_year} is current."
+    reason.loc[bucket.eq("actionable_recent")] = f"Tax data year {current_year - 1} is recent enough for actionable use."
+    reason.loc[bucket.eq("stale_caution")] = f"Tax data year {current_year - 2} is stale and should be treated with caution."
+    reason.loc[bucket.eq("historical_only")] = f"Tax data year {current_year - 3} is historical only and should not drive current tax-distress decisions."
+    reason.loc[bucket.eq("non_actionable_historical")] = f"Tax data year {current_year - 4} or older is non-actionable historical tax data."
+
+    actionable_current = bucket.isin(["current", "actionable_recent"])
+    historical_only = bucket.isin(["historical_only", "non_actionable_historical"])
+    recency_penalty = pd.Series(-4.0, index=frame.index, dtype="float64")
+    recency_penalty.loc[bucket.eq("current")] = 0.0
+    recency_penalty.loc[bucket.eq("actionable_recent")] = -0.5
+    recency_penalty.loc[bucket.eq("stale_caution")] = -3.0
+    recency_penalty.loc[bucket.eq("historical_only")] = -6.0
+    recency_penalty.loc[bucket.eq("non_actionable_historical")] = -8.0
+
+    frame["parcel_tax_freshness_bucket"] = bucket
+    frame["parcel_tax_years_stale"] = years_stale.round(1)
+    frame["parcel_tax_is_actionable_current"] = actionable_current.astype("boolean")
+    frame["parcel_tax_is_historical_only"] = historical_only.astype("boolean")
+    frame["parcel_tax_freshness_reason"] = reason
+    frame["parcel_tax_recency_penalty"] = recency_penalty
     return frame
 
 
@@ -766,6 +825,26 @@ def _apply_tax_interpretation_fields(frame: pd.DataFrame) -> pd.DataFrame:
     warning.loc[zero_match_review] = "County source loaded but produced zero parcel matches; do not treat unmatched parcels as current."
     score_adjustment.loc[zero_match_review] = -6.0
 
+    freshness_bucket = _normalize_string(frame.get("parcel_tax_freshness_bucket"), index=frame.index).fillna("unknown")
+    freshness_reason = _normalize_string(frame.get("parcel_tax_freshness_reason"), index=frame.index)
+    historical_only = frame.get("parcel_tax_is_historical_only", pd.Series(False, index=frame.index)).fillna(False).astype(bool)
+    recency_penalty = _to_float_series(frame, "parcel_tax_recency_penalty").fillna(0.0)
+
+    stale_caution = freshness_bucket.eq("stale_caution")
+    warning.loc[stale_caution] = warning.loc[stale_caution].fillna("Tax data is from 2024 and should be treated as stale caution only.")
+    reason.loc[stale_caution] = reason.loc[stale_caution].fillna(freshness_reason.loc[stale_caution])
+
+    historical_mask = pd.Series(historical_only, index=frame.index)
+    label.loc[historical_mask & delinquent] = "Historical delinquent tax signal only"
+    label.loc[historical_mask & ~delinquent] = "Historical county tax coverage only"
+    confidence.loc[historical_mask] = "low"
+    actionability.loc[historical_mask] = "not_actionable"
+    reason.loc[historical_mask] = freshness_reason.loc[historical_mask].fillna("Tax data is historical only and should not drive current tax-distress decisions.")
+    warning.loc[historical_mask] = "Tax data is historical only and should not be used as a current tax-distress signal."
+
+    reason = reason.fillna(freshness_reason)
+    score_adjustment = score_adjustment + recency_penalty
+
     frame["parcel_tax_status_label"] = label
     frame["parcel_tax_status_category"] = category
     frame["parcel_tax_status_confidence"] = confidence
@@ -780,6 +859,7 @@ def _apply_tax_interpretation_fields(frame: pd.DataFrame) -> pd.DataFrame:
 
 def _apply_tax_interpretation_payload(payload: dict[str, Any]) -> None:
     frame = pd.DataFrame([payload])
+    frame = _apply_tax_recency_fields(frame)
     frame = _apply_tax_interpretation_fields(frame)
     row = frame.iloc[0]
     for field in TAX_INTERPRETATION_FIELDS:
@@ -803,11 +883,16 @@ def _resolve_sort_by(sort_by: str, columns: pd.Index | list[str] | tuple[str, ..
 def _tax_summary_section(frame: pd.DataFrame) -> list[dict[str, str]]:
     category = _normalize_string(frame.get("parcel_tax_status_category"), index=frame.index)
     actionable = _normalize_string(frame.get("parcel_tax_actionability"), index=frame.index)
+    freshness = _normalize_string(frame.get("parcel_tax_freshness_bucket"), index=frame.index)
     return [
         {"section": "tax_status", "metric": "actionable_tax_distress_count", "value": str(int(actionable.eq("actionable").sum()))},
         {"section": "tax_status", "metric": "cautionary_tax_signal_count", "value": str(int(actionable.eq("caution").sum()))},
         {"section": "tax_status", "metric": "unknown_tax_coverage_count", "value": str(int(actionable.eq("unknown").sum()))},
         {"section": "tax_status", "metric": "covered_not_flagged_tax_count", "value": str(int(category.eq("tax_current_or_not_flagged").sum()))},
+        {"section": "tax_status", "metric": "current_tax_year_count", "value": str(int(freshness.eq("current").sum()))},
+        {"section": "tax_status", "metric": "recent_tax_year_count", "value": str(int(freshness.eq("actionable_recent").sum()))},
+        {"section": "tax_status", "metric": "stale_tax_year_count", "value": str(int(freshness.eq("stale_caution").sum()))},
+        {"section": "tax_status", "metric": "historical_tax_year_count", "value": str(int(freshness.isin(['historical_only', 'non_actionable_historical']).sum()))},
     ]
 
 

@@ -1,0 +1,62 @@
+[
+  {
+    "county_name": "warren",
+    "current_configured_source_url": "https://www.co.warren.ms.us/elected-officials/chancery-clerk/delinquent-taxes/",
+    "current_tax_data_year": 2023,
+    "freshness_bucket": "historical_only",
+    "parcel_match_count": 993,
+    "newer_public_source_found_flag": false,
+    "newer_public_source_url": null,
+    "refresh_status": "still_historical",
+    "recommended_action": "keep_historical_only",
+    "audit_note": "Current Warren page still explicitly references fiscal year 2023."
+  },
+  {
+    "county_name": "pike",
+    "current_configured_source_url": "https://www.co.pike.ms.us/download-tax-sale-list/",
+    "current_tax_data_year": 2022,
+    "freshness_bucket": "non_actionable_historical",
+    "parcel_match_count": 2239,
+    "newer_public_source_found_flag": false,
+    "newer_public_source_url": null,
+    "refresh_status": "still_historical",
+    "recommended_action": "keep_historical_only",
+    "audit_note": "Current Pike page links LANDSALE years: 2023."
+  },
+  {
+    "county_name": "jackson",
+    "current_configured_source_url": "https://co.jackson.ms.us/DocumentCenter/View/1450/Tax-Sale-Ad-for-2024-Real-Property-Taxes---Preliminary-List",
+    "current_tax_data_year": 2024,
+    "freshness_bucket": "stale_caution",
+    "parcel_match_count": 6840,
+    "newer_public_source_found_flag": false,
+    "newer_public_source_url": null,
+    "refresh_status": "no_newer_public_source_found",
+    "recommended_action": "keep_stale_caution",
+    "audit_note": "Current source still describes fiscal year 2024 taxes. Sale cycle text references AUGUST 2025."
+  },
+  {
+    "county_name": "madison",
+    "current_configured_source_url": "https://www.madison-co.com/sites/default/files/2024_tax_year_as_of_august_11_0.xlsx",
+    "current_tax_data_year": 2024,
+    "freshness_bucket": "stale_caution",
+    "parcel_match_count": 2528,
+    "newer_public_source_found_flag": false,
+    "newer_public_source_url": null,
+    "refresh_status": "no_newer_public_source_found",
+    "recommended_action": "keep_stale_caution",
+    "audit_note": "Current public Madison workbook remains the 2024 tax-year file; 2025/2026 replacement workbook URLs were not publicly reachable."
+  },
+  {
+    "county_name": "jasper",
+    "current_configured_source_url": "https://co.jasper.ms.us/delinquent-taxes/",
+    "current_tax_data_year": 2024,
+    "freshness_bucket": "stale_caution",
+    "parcel_match_count": 1320,
+    "newer_public_source_found_flag": false,
+    "newer_public_source_url": null,
+    "refresh_status": "no_newer_public_source_found",
+    "recommended_action": "keep_stale_caution",
+    "audit_note": "Current Jasper page exposes tax-year PDFs: 2023, 2024."
+  }
+]

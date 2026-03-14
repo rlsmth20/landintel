@@ -685,6 +685,7 @@ def build_county_coverage_matrix(
             source_url = entry.get("source_url")
             source_county_field = entry.get("source_county_field")
             source_county_value = entry.get("source_county_value")
+            entry_note = entry.get("note")
             if source_loaded:
                 last_successful_ingest_timestamp = progress_row.get("processed_at_utc") if progress_row is not None else None
                 if stale and (parcel_match_count > 0 or str(coverage_scope).lower() == "partial"):
@@ -701,6 +702,7 @@ def build_county_coverage_matrix(
                     quality_flag = "shared_partial_loaded"
                 if coverage_status == "stale":
                     quality_flag = "stale_source_review"
+                    blocker_reason = blocker_reason or entry_note
                 elif parcel_match_count == 0:
                     quality_flag = "zero_match_review"
             else:

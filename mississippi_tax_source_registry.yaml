@@ -25,30 +25,35 @@ counties:
     source_path: data/tax_linked/ms/jackson/jackson_linked_tax_records.parquet
     source_name: jackson_tax_sale_files
     source_url: https://co.jackson.ms.us/DocumentCenter/View/1450/Tax-Sale-Ad-for-2024-Real-Property-Taxes---Preliminary-List
+    note: Current public Jackson source lists fiscal year 2024 taxes sold in August 2025; no newer public 2025 or 2026 tax-year list was found as of 2026-03-14.
   jasper:
     ingest_mode: linked_parquet
     source_type: direct_download_page
     source_path: data/tax_linked/ms/jasper/jasper_linked_tax_records.parquet
     source_name: jasper_delinquent_tax_pdfs
     source_url: https://co.jasper.ms.us/delinquent-taxes/
+    note: Jasper public delinquent-tax page currently exposes 2023 and 2024 PDFs updated in 2025; no newer public 2025 or 2026 tax-year file was found as of 2026-03-14.
   madison:
     ingest_mode: linked_parquet
     source_type: direct_download_page
     source_path: data/tax_linked/ms/madison/madison_linked_tax_records.parquet
     source_name: madison_tax_sale_parcel_information
     source_url: https://www.madison-co.com/sites/default/files/2024_tax_year_as_of_august_11_0.xlsx
+    note: Madison's current public workbook is still the 2024 tax-year file and no public 2025 replacement workbook was found as of 2026-03-14.
   pike:
     ingest_mode: linked_parquet
     source_type: free_direct_download
     source_path: data/tax_linked/ms/pike/free_linked_tax_records.parquet
     source_name: pike_tax_sale_list
     source_url: https://www.co.pike.ms.us/download-tax-sale-list/
+    note: Pike's public tax-sale page still links only the 2023 LANDSALE files; no public 2024, 2025, or 2026 replacement file was found as of 2026-03-14.
   warren:
     ingest_mode: linked_parquet
     source_type: direct_download_page
     source_path: data/tax_linked/ms/warren/warren_linked_tax_records.parquet
     source_name: warren_delinquent_taxes
     source_url: https://www.co.warren.ms.us/elected-officials/chancery-clerk/delinquent-taxes/
+    note: Warren's public delinquent-tax page was updated in 2026, but the published list still explicitly covers fiscal year 2023; no newer public tax-year list was found as of 2026-03-14.
   adams:
     ingest_mode: linked_parquet
     source_type: statewide_public_inventory
