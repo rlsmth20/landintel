@@ -71,6 +71,7 @@ SUMMARY_FIELDS = [
     "acreage",
     "owner_name",
     "lead_score_total",
+    "lead_score_total_effective",
     "lead_score_tier",
     "parcel_vacant_flag",
     "road_access_tier",
@@ -79,11 +80,28 @@ SUMMARY_FIELDS = [
     "source_confidence_tier",
     "delinquent_amount",
     "amount_trust_tier",
+    "parcel_tax_status_label",
+    "parcel_tax_status_category",
+    "parcel_tax_status_confidence",
+    "parcel_tax_actionability",
+    "parcel_tax_data_warning",
     "recommended_sort_reason",
     "county_hosted_flag",
     "high_confidence_link_flag",
     "recommended_view_bucket",
 ]
+
+TAX_INTERPRETATION_FIELDS = [
+    "parcel_tax_status_label",
+    "parcel_tax_status_category",
+    "parcel_tax_status_confidence",
+    "parcel_tax_status_reason",
+    "parcel_tax_actionability",
+    "parcel_tax_data_warning",
+    "parcel_tax_score_adjustment",
+    "lead_score_total_effective",
+]
+DEFAULT_LEAD_SORT_FIELD = "lead_score_total_effective"
 
 PRESET_DEFINITIONS = {
     "safest_early_investor_use": {
@@ -651,6 +669,148 @@ def _apply_county_tax_coverage_fields(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+def _apply_tax_interpretation_fields(frame: pd.DataFrame) -> pd.DataFrame:
+    coverage_status = _normalize_string(frame.get("county_tax_coverage_status"), index=frame.index).fillna("unavailable")
+    coverage_note = _normalize_string(frame.get("county_tax_coverage_note"), index=frame.index)
+    coverage_reason = _normalize_string(frame.get("county_tax_coverage_reason"), index=frame.index)
+    blocker_reason = _normalize_string(frame.get("county_tax_blocker_reason"), index=frame.index)
+    quality_flag = _normalize_string(frame.get("county_tax_quality_flag"), index=frame.index)
+    configured = frame.get("county_tax_source_configured_flag", pd.Series(False, index=frame.index)).fillna(False).astype(bool)
+    delinquent = frame.get("delinquent_flag", pd.Series(False, index=frame.index)).fillna(False).astype(bool)
+
+    reason = coverage_note.fillna(coverage_reason).fillna(blocker_reason)
+    category = pd.Series("review_needed", index=frame.index, dtype="string")
+    label = pd.Series("Tax status needs review", index=frame.index, dtype="string")
+    confidence = pd.Series("low", index=frame.index, dtype="string")
+    actionability = pd.Series("caution", index=frame.index, dtype="string")
+    warning = pd.Series(pd.NA, index=frame.index, dtype="string")
+    score_adjustment = pd.Series(-2.0, index=frame.index, dtype="float64")
+
+    available_clean = coverage_status.eq("available") & ~delinquent
+    category.loc[available_clean] = "tax_current_or_not_flagged"
+    label.loc[available_clean] = "Not flagged delinquent under county coverage"
+    confidence.loc[available_clean] = "high"
+    actionability.loc[available_clean] = "not_actionable"
+    reason.loc[available_clean] = reason.loc[available_clean].fillna("County tax coverage exists and this parcel is not currently flagged delinquent.")
+    score_adjustment.loc[available_clean] = 0.0
+
+    confirmed_delinquent = coverage_status.eq("available") & delinquent
+    category.loc[confirmed_delinquent] = "delinquent_confirmed"
+    label.loc[confirmed_delinquent] = "Confirmed delinquent tax signal"
+    confidence.loc[confirmed_delinquent] = "high"
+    actionability.loc[confirmed_delinquent] = "actionable"
+    reason.loc[confirmed_delinquent] = reason.loc[confirmed_delinquent].fillna("Parcel is flagged delinquent under active county tax coverage.")
+    score_adjustment.loc[confirmed_delinquent] = 6.0
+
+    partial_clean = coverage_status.eq("partial") & ~delinquent
+    category.loc[partial_clean] = "county_coverage_partial"
+    label.loc[partial_clean] = "Partial county tax coverage"
+    confidence.loc[partial_clean] = "low"
+    actionability.loc[partial_clean] = "caution"
+    reason.loc[partial_clean] = reason.loc[partial_clean].fillna("Only partial county tax coverage exists, so an unflagged parcel is not confirmed current.")
+    warning.loc[partial_clean] = "Only partial county tax coverage exists; unmatched parcels are not confirmed current."
+    score_adjustment.loc[partial_clean] = -4.0
+
+    partial_delinquent = coverage_status.eq("partial") & delinquent
+    category.loc[partial_delinquent] = "delinquent_possible_partial"
+    label.loc[partial_delinquent] = "Delinquent match under partial county coverage"
+    confidence.loc[partial_delinquent] = "medium"
+    actionability.loc[partial_delinquent] = "caution"
+    reason.loc[partial_delinquent] = reason.loc[partial_delinquent].fillna("Parcel is flagged delinquent, but county coverage is only partial.")
+    warning.loc[partial_delinquent] = "County tax coverage is partial; confirm delinquency before relying on it."
+    score_adjustment.loc[partial_delinquent] = 3.0
+
+    stale_any = coverage_status.eq("stale")
+    category.loc[stale_any] = "county_data_stale"
+    label.loc[stale_any] = np.where(delinquent.loc[stale_any], "Delinquent signal from stale county data", "County tax data appears stale")
+    confidence.loc[stale_any] = np.where(delinquent.loc[stale_any], "medium", "low")
+    actionability.loc[stale_any] = "caution"
+    reason.loc[stale_any] = reason.loc[stale_any].fillna("County tax data exists but is stale and should not be treated as current.")
+    warning.loc[stale_any] = "County tax data appears stale and should not be used as a clean-tax signal."
+    score_adjustment.loc[stale_any] = np.where(delinquent.loc[stale_any], 1.5, -3.0)
+
+    pending_mask = coverage_status.eq("pending")
+    category.loc[pending_mask] = "county_source_pending"
+    label.loc[pending_mask] = "County tax source pending"
+    confidence.loc[pending_mask] = "unknown"
+    actionability.loc[pending_mask] = "unknown"
+    reason.loc[pending_mask] = reason.loc[pending_mask].fillna("County tax source has been discovered but is pending ingest implementation.")
+    warning.loc[pending_mask] = "County tax source is pending; tax status is unknown."
+    score_adjustment.loc[pending_mask] = -5.0
+
+    unavailable_mask = coverage_status.eq("unavailable")
+    no_coverage_mask = unavailable_mask & configured
+    category.loc[no_coverage_mask] = "no_county_coverage"
+    label.loc[no_coverage_mask] = "No county tax coverage"
+    confidence.loc[no_coverage_mask] = "unknown"
+    actionability.loc[no_coverage_mask] = "unknown"
+    reason.loc[no_coverage_mask] = reason.loc[no_coverage_mask].fillna("County tax source is configured, but no usable parcel-level coverage is available yet.")
+    warning.loc[no_coverage_mask] = "County tax coverage is not yet usable for this parcel."
+    score_adjustment.loc[no_coverage_mask] = -5.0
+
+    unavailable_source_mask = unavailable_mask & ~configured
+    category.loc[unavailable_source_mask] = "county_source_unavailable"
+    label.loc[unavailable_source_mask] = "County tax source unavailable"
+    confidence.loc[unavailable_source_mask] = "unknown"
+    actionability.loc[unavailable_source_mask] = "unknown"
+    reason.loc[unavailable_source_mask] = reason.loc[unavailable_source_mask].fillna("No usable county tax source is currently available.")
+    warning.loc[unavailable_source_mask] = "No usable county tax source is currently available for this county."
+    score_adjustment.loc[unavailable_source_mask] = -6.0
+
+    zero_match_review = quality_flag.eq("zero_match_review")
+    category.loc[zero_match_review] = "review_needed"
+    label.loc[zero_match_review] = "Tax source needs manual review"
+    confidence.loc[zero_match_review] = "low"
+    actionability.loc[zero_match_review] = "caution"
+    reason.loc[zero_match_review] = "County tax source loaded but produced zero parcel matches; treat tax status as unresolved."
+    warning.loc[zero_match_review] = "County source loaded but produced zero parcel matches; do not treat unmatched parcels as current."
+    score_adjustment.loc[zero_match_review] = -6.0
+
+    frame["parcel_tax_status_label"] = label
+    frame["parcel_tax_status_category"] = category
+    frame["parcel_tax_status_confidence"] = confidence
+    frame["parcel_tax_status_reason"] = reason
+    frame["parcel_tax_actionability"] = actionability
+    frame["parcel_tax_data_warning"] = warning
+    frame["parcel_tax_score_adjustment"] = score_adjustment
+    base_score = _to_float_series(frame, "lead_score_total")
+    frame["lead_score_total_effective"] = (base_score.fillna(0) + score_adjustment).round(2)
+    return frame
+
+
+def _apply_tax_interpretation_payload(payload: dict[str, Any]) -> None:
+    frame = pd.DataFrame([payload])
+    frame = _apply_tax_interpretation_fields(frame)
+    row = frame.iloc[0]
+    for field in TAX_INTERPRETATION_FIELDS:
+        payload[field] = _serialize_scalar(row.get(field))
+
+
+def _lead_sort_field(columns: pd.Index | list[str] | tuple[str, ...]) -> str:
+    available = set(columns)
+    if DEFAULT_LEAD_SORT_FIELD in available:
+        return DEFAULT_LEAD_SORT_FIELD
+    return "lead_score_total"
+
+
+def _resolve_sort_by(sort_by: str, columns: pd.Index | list[str] | tuple[str, ...]) -> str:
+    requested = sort_by or "lead_score_total"
+    if requested == "lead_score_total":
+        return _lead_sort_field(columns)
+    return requested if requested in set(columns) else _lead_sort_field(columns)
+
+
+def _tax_summary_section(frame: pd.DataFrame) -> list[dict[str, str]]:
+    category = _normalize_string(frame.get("parcel_tax_status_category"), index=frame.index)
+    actionable = _normalize_string(frame.get("parcel_tax_actionability"), index=frame.index)
+    return [
+        {"section": "tax_status", "metric": "actionable_tax_distress_count", "value": str(int(actionable.eq("actionable").sum()))},
+        {"section": "tax_status", "metric": "cautionary_tax_signal_count", "value": str(int(actionable.eq("caution").sum()))},
+        {"section": "tax_status", "metric": "unknown_tax_coverage_count", "value": str(int(actionable.eq("unknown").sum()))},
+        {"section": "tax_status", "metric": "covered_not_flagged_tax_count", "value": str(int(category.eq("tax_current_or_not_flagged").sum()))},
+    ]
+
+
 @lru_cache(maxsize=1)
 def _ai_model_params() -> dict[str, Any] | None:
     if not AI_MODEL_PARAMS_PATH.exists():
@@ -1091,6 +1251,7 @@ def _embedded_filter_expression(
     bounds: tuple[float, float, float, float] | None = None,
 ) -> ds.Expression | None:
     expression: ds.Expression | None = None
+    score_field = _lead_sort_field(_embedded_parcel_dataset().schema.names)
 
     def combine(next_expression: ds.Expression | None) -> None:
         nonlocal expression
@@ -1103,7 +1264,7 @@ def _embedded_filter_expression(
     if lead_score_tier:
         combine(ds.field("lead_score_tier").isin(lead_score_tier))
     if min_lead_score_total is not None:
-        combine(ds.field("lead_score_total") >= min_lead_score_total)
+        combine(ds.field(score_field) >= min_lead_score_total)
     if acreage_min is not None:
         combine(ds.field("acreage") >= acreage_min)
     if acreage_max is not None:
@@ -1352,6 +1513,7 @@ def load_base_frame() -> pd.DataFrame:
         frame["electric_provider_name"] = _normalize_string(frame.get("electric_provider_name"), index=frame.index)
         frame = _merge_ai_predictions(frame)
         frame = _ensure_intelligence_fields(frame)
+        frame = _apply_tax_interpretation_fields(frame)
         return frame
 
     if not _full_runtime_available():
@@ -1389,6 +1551,7 @@ def load_base_frame() -> pd.DataFrame:
         frame["latitude"] = latitudes
         frame = _merge_ai_predictions(frame)
         frame = _ensure_intelligence_fields(frame)
+        frame = _apply_tax_interpretation_fields(frame)
         return frame
 
     parcel_columns = [
@@ -1529,6 +1692,7 @@ def load_base_frame() -> pd.DataFrame:
     frame["parcel_id"] = _normalize_string(frame.get("parcel_id"), index=frame.index)
     frame = _merge_ai_predictions(frame)
     frame = _ensure_intelligence_fields(frame)
+    frame = _apply_tax_interpretation_fields(frame)
 
     acreage = _to_float_series(frame, "acreage").fillna(0)
     computed_size_score = pd.Series(35.0, index=frame.index)
@@ -1584,7 +1748,11 @@ def load_base_frame() -> pd.DataFrame:
         + frame["growth_pressure_component"] * 0.05
     ).round(2)
     frame["lead_score_total"] = pd.to_numeric(frame.get("lead_score_total"), errors="coerce").fillna(base_total)
-    frame["lead_score_tier"] = _normalize_string(frame.get("lead_score_tier"), index=frame.index).fillna(_score_tier(frame["lead_score_total"]))
+    frame["lead_score_total_effective"] = (
+        pd.to_numeric(frame["lead_score_total"], errors="coerce").fillna(base_total)
+        + pd.to_numeric(frame.get("parcel_tax_score_adjustment"), errors="coerce").fillna(0)
+    ).round(2)
+    frame["lead_score_tier"] = _normalize_string(frame.get("lead_score_tier"), index=frame.index).fillna(_score_tier(frame["lead_score_total_effective"]))
 
     component_columns = [
         "buildability_component",
@@ -1690,7 +1858,8 @@ def _apply_filters(
     if lead_score_tier:
         filtered = filtered.loc[_normalize_string(filtered["lead_score_tier"]).isin(lead_score_tier)].copy()
     if min_lead_score_total is not None:
-        filtered = filtered.loc[pd.to_numeric(filtered["lead_score_total"], errors="coerce").ge(min_lead_score_total).fillna(False)].copy()
+        score_field = _lead_sort_field(filtered.columns)
+        filtered = filtered.loc[pd.to_numeric(filtered[score_field], errors="coerce").ge(min_lead_score_total).fillna(False)].copy()
     if acreage_min is not None:
         filtered = filtered.loc[pd.to_numeric(filtered["acreage"], errors="coerce").ge(acreage_min).fillna(False)].copy()
     if acreage_max is not None:
@@ -1900,6 +2069,7 @@ def get_leads(
     offset: int = 0,
 ) -> dict[str, Any]:
     if _using_embedded_runtime():
+        resolved_sort_by = _resolve_sort_by(sort_by, _embedded_parcel_dataset().schema.names)
         if (
             _is_default_filter_state(
                 county_name=county_name,
@@ -1954,13 +2124,11 @@ def get_leads(
             road_distance_ft_max=road_distance_ft_max,
         )
         total_count = _embedded_count_rows(expression)
-        if sort_by not in SUMMARY_FIELDS:
-            sort_by = "lead_score_total"
         ascending = sort_direction.lower() == "asc"
         filtered = _bounded_sorted_batches(
             columns=SUMMARY_FIELDS,
             expression=expression,
-            sort_by=sort_by,
+            sort_by=resolved_sort_by,
             ascending=ascending,
             keep_rows=safe_limit + safe_offset,
         )
@@ -1990,8 +2158,7 @@ def get_leads(
         road_distance_ft_max=road_distance_ft_max,
     )
     total_count = len(filtered)
-    if sort_by not in filtered.columns:
-        sort_by = "lead_score_total"
+    sort_by = _resolve_sort_by(sort_by, filtered.columns)
     ascending = sort_direction.lower() == "asc"
     filtered = filtered.sort_values(sort_by, ascending=ascending, na_position="last")
     safe_limit = _clamp_limit(limit, default=LEADS_DEFAULT_LIMIT, max_limit=LEADS_MAX_LIMIT)
@@ -2014,6 +2181,7 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
         payload["geometry"] = _detail_geometry(parcel_row_id)
         _maybe_apply_on_demand_ai(payload, row)
         _apply_tax_detail_defaults(payload)
+        _apply_tax_interpretation_payload(payload)
         _apply_vacancy_assessment(payload)
         _stabilize_detail_payload(payload)
         return payload
@@ -2028,6 +2196,7 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
     payload["geometry"] = _detail_geometry(parcel_row_id)
     _maybe_apply_on_demand_ai(payload, row)
     _apply_tax_detail_defaults(payload)
+    _apply_tax_interpretation_payload(payload)
     _apply_vacancy_assessment(payload)
     _stabilize_detail_payload(payload)
     return payload
@@ -2233,6 +2402,7 @@ def get_geometry(
             "latitude",
             "longitude",
             "lead_score_total",
+            "lead_score_total_effective",
             "lead_score_tier",
             "parcel_vacant_flag",
             "wetland_flag",
@@ -2291,7 +2461,7 @@ def get_geometry(
             filtered = _bounded_sorted_batches(
                 columns=geometry_columns,
                 expression=expression,
-                sort_by="lead_score_total",
+                sort_by=_lead_sort_field(geometry_columns),
                 ascending=False,
                 keep_rows=safe_limit,
             )
@@ -2439,7 +2609,7 @@ def get_geometry(
     if not parcel_row_ids and (bounds is not None or selected_parcel_id):
         filtered = filtered.head(safe_limit)
     else:
-        filtered = filtered.sort_values("lead_score_total", ascending=False, na_position="last").head(safe_limit)
+        filtered = filtered.sort_values(_lead_sort_field(filtered.columns), ascending=False, na_position="last").head(safe_limit)
     features: list[dict[str, Any]] = []
 
     if render_mode in {"points", "centroids"}:
@@ -2571,12 +2741,13 @@ def get_presets() -> list[dict[str, Any]]:
             row_count = _embedded_count_rows(expression)
             score_sum = 0.0
             score_count = 0
-            scanner = _embedded_parcel_dataset().scanner(columns=["lead_score_total"], filter=expression, batch_size=50000)
+            scanner = _embedded_parcel_dataset().scanner(columns=[_lead_sort_field(_embedded_parcel_dataset().schema.names)], filter=expression, batch_size=50000)
             for batch in scanner.to_batches():
                 frame = batch.to_pandas()
                 if frame.empty:
                     continue
-                scores = pd.to_numeric(frame["lead_score_total"], errors="coerce")
+                score_field = _lead_sort_field(frame.columns)
+                scores = pd.to_numeric(frame[score_field], errors="coerce")
                 score_sum += float(scores.fillna(0).sum())
                 score_count += int(scores.notna().sum())
             mean_score = (score_sum / score_count) if score_count else 0
@@ -2595,7 +2766,7 @@ def get_presets() -> list[dict[str, Any]]:
     presets: list[dict[str, Any]] = []
     for view_name, definition in PRESET_DEFINITIONS.items():
         filtered = _apply_filters(frame, **definition["filters"])
-        mean_score = pd.to_numeric(filtered["lead_score_total"], errors="coerce").mean() if len(filtered) else 0
+        mean_score = pd.to_numeric(filtered[_lead_sort_field(filtered.columns)], errors="coerce").mean() if len(filtered) else 0
         presets.append(
             {
                 "view_name": view_name,
@@ -2611,9 +2782,17 @@ def get_presets() -> list[dict[str, Any]]:
 def get_summary() -> dict[str, Any]:
     if _using_embedded_runtime():
         cached = _load_embedded_json(EMBEDDED_SUMMARY_PATH)
-        if cached is not None:
+        if cached is not None and isinstance(cached, dict) and "tax_status" in cached.get("sections", {}):
             return cached
-        summary_columns = ["county_name", "recommended_view_bucket", "lead_score_total", "parcel_vacant_flag", "county_hosted_flag"]
+        summary_columns = [
+            "county_name",
+            "recommended_view_bucket",
+            _lead_sort_field(_embedded_parcel_dataset().schema.names),
+            "parcel_vacant_flag",
+            "county_hosted_flag",
+            "parcel_tax_status_category",
+            "parcel_tax_actionability",
+        ]
         total_rows = 0
         vacant_rows = 0
         county_hosted_rows = 0
@@ -2621,6 +2800,8 @@ def get_summary() -> dict[str, Any]:
         score_count = 0
         county_counts: Counter[str] = Counter()
         recommended_counts: Counter[str] = Counter()
+        tax_actionability_counts: Counter[str] = Counter()
+        tax_category_counts: Counter[str] = Counter()
         scanner = _embedded_parcel_dataset().scanner(columns=summary_columns, batch_size=50000)
         for batch in scanner.to_batches():
             frame = batch.to_pandas()
@@ -2629,11 +2810,14 @@ def get_summary() -> dict[str, Any]:
             total_rows += len(frame)
             vacant_rows += int(frame["parcel_vacant_flag"].fillna(False).sum())
             county_hosted_rows += int(frame["county_hosted_flag"].fillna(False).sum())
-            scores = pd.to_numeric(frame["lead_score_total"], errors="coerce")
+            score_field = _lead_sort_field(frame.columns)
+            scores = pd.to_numeric(frame[score_field], errors="coerce")
             score_sum += float(scores.fillna(0).sum())
             score_count += int(scores.notna().sum())
             county_counts.update(frame["county_name"].dropna().astype(str).tolist())
             recommended_counts.update(frame["recommended_view_bucket"].dropna().astype(str).tolist())
+            tax_actionability_counts.update(_normalize_string(frame.get("parcel_tax_actionability"), index=frame.index).dropna().astype(str).tolist())
+            tax_category_counts.update(_normalize_string(frame.get("parcel_tax_status_category"), index=frame.index).dropna().astype(str).tolist())
         top_counties = county_counts.most_common(20)
         average_score = (score_sum / score_count) if score_count else 0.0
         return {
@@ -2656,13 +2840,19 @@ def get_summary() -> dict[str, Any]:
                     {"section": "recommended_view_bucket", "key": bucket, "metric": "parcel_count", "value": str(int(count))}
                     for bucket, count in recommended_counts.most_common()
                 ],
+                "tax_status": [
+                    {"section": "tax_status", "metric": "actionable_tax_distress_count", "value": str(int(tax_actionability_counts.get("actionable", 0)))},
+                    {"section": "tax_status", "metric": "cautionary_tax_signal_count", "value": str(int(tax_actionability_counts.get("caution", 0)))},
+                    {"section": "tax_status", "metric": "unknown_tax_coverage_count", "value": str(int(tax_actionability_counts.get("unknown", 0)))},
+                    {"section": "tax_status", "metric": "covered_not_flagged_tax_count", "value": str(int(tax_category_counts.get("tax_current_or_not_flagged", 0)))},
+                ],
             },
         }
 
     frame = load_base_frame()
     county_counts = frame.groupby("county_name", dropna=True).size().sort_values(ascending=False).head(20)
     recommended_counts = frame.groupby("recommended_view_bucket", dropna=True).size().sort_values(ascending=False)
-    average_score = pd.to_numeric(frame["lead_score_total"], errors="coerce").mean()
+    average_score = pd.to_numeric(frame[_lead_sort_field(frame.columns)], errors="coerce").mean()
     source_label = (
         "mississippi_parcels_master + owner leads + building metrics + motivation signals"
         if _full_runtime_available()
@@ -2692,5 +2882,6 @@ def get_summary() -> dict[str, Any]:
                 {"section": "recommended_view_bucket", "key": bucket, "metric": "parcel_count", "value": str(int(count))}
                 for bucket, count in recommended_counts.items()
             ],
+            "tax_status": _tax_summary_section(frame),
         },
     }

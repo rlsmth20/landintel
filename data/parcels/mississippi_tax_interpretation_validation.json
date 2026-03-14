@@ -1,0 +1,94 @@
+{
+  "passed": true,
+  "scenario_count": 8,
+  "results": [
+    {
+      "scenario": "covered_delinquent_flagged",
+      "expected_category": "delinquent_confirmed",
+      "actual_category": "delinquent_confirmed",
+      "expected_actionability": "actionable",
+      "actual_actionability": "actionable",
+      "actual_confidence": "high",
+      "actual_label": "Confirmed delinquent tax signal",
+      "actual_reason": "Parcel is flagged delinquent under active county tax coverage.",
+      "passed": true
+    },
+    {
+      "scenario": "covered_not_flagged",
+      "expected_category": "tax_current_or_not_flagged",
+      "actual_category": "tax_current_or_not_flagged",
+      "expected_actionability": "not_actionable",
+      "actual_actionability": "not_actionable",
+      "actual_confidence": "high",
+      "actual_label": "Not flagged delinquent under county coverage",
+      "actual_reason": "County tax coverage exists and this parcel is not currently flagged delinquent.",
+      "passed": true
+    },
+    {
+      "scenario": "partial_matched_delinquent",
+      "expected_category": "delinquent_possible_partial",
+      "actual_category": "delinquent_possible_partial",
+      "expected_actionability": "caution",
+      "actual_actionability": "caution",
+      "actual_confidence": "medium",
+      "actual_label": "Delinquent match under partial county coverage",
+      "actual_reason": "Parcel is flagged delinquent, but county coverage is only partial.",
+      "passed": true
+    },
+    {
+      "scenario": "partial_no_match",
+      "expected_category": "county_coverage_partial",
+      "actual_category": "county_coverage_partial",
+      "expected_actionability": "caution",
+      "actual_actionability": "caution",
+      "actual_confidence": "low",
+      "actual_label": "Partial county tax coverage",
+      "actual_reason": "Only partial county tax coverage exists, so an unflagged parcel is not confirmed current.",
+      "passed": true
+    },
+    {
+      "scenario": "pending_county",
+      "expected_category": "county_source_pending",
+      "actual_category": "county_source_pending",
+      "expected_actionability": "unknown",
+      "actual_actionability": "unknown",
+      "actual_confidence": "unknown",
+      "actual_label": "County tax source pending",
+      "actual_reason": "County tax source has been discovered but is pending ingest implementation.",
+      "passed": true
+    },
+    {
+      "scenario": "unavailable_county",
+      "expected_category": "county_source_unavailable",
+      "actual_category": "county_source_unavailable",
+      "expected_actionability": "unknown",
+      "actual_actionability": "unknown",
+      "actual_confidence": "unknown",
+      "actual_label": "County tax source unavailable",
+      "actual_reason": "No usable county tax source is currently available.",
+      "passed": true
+    },
+    {
+      "scenario": "stale_county",
+      "expected_category": "county_data_stale",
+      "actual_category": "county_data_stale",
+      "expected_actionability": "caution",
+      "actual_actionability": "caution",
+      "actual_confidence": "low",
+      "actual_label": "County tax data appears stale",
+      "actual_reason": "County tax data exists but is stale and should not be treated as current.",
+      "passed": true
+    },
+    {
+      "scenario": "zero_match_review_county",
+      "expected_category": "review_needed",
+      "actual_category": "review_needed",
+      "expected_actionability": "caution",
+      "actual_actionability": "caution",
+      "actual_confidence": "low",
+      "actual_label": "Tax source needs manual review",
+      "actual_reason": "County tax source loaded but produced zero parcel matches; treat tax status as unresolved.",
+      "passed": true
+    }
+  ]
+}
