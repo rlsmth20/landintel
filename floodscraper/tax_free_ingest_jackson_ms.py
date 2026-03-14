@@ -172,6 +172,7 @@ def coerce_amount(series: pd.Series) -> pd.Series:
 def standardize_jackson(frame: pd.DataFrame, run_id: str, raw_dir: Path) -> pd.DataFrame:
     owner_name = clean_string(frame["owner_name"])
     parcel_id_raw = clean_string(frame["parcel_id_raw"])
+    source_ppin = parcel_id_raw.copy()
     delinquent_amount = coerce_amount(frame["delinquent_amount_raw"])
     acreage = coerce_amount(frame["acres_raw"])
 
@@ -195,7 +196,7 @@ def standardize_jackson(frame: pd.DataFrame, run_id: str, raw_dir: Path) -> pd.D
             "source_type": pd.Series("direct_download_page", index=frame.index, dtype="string"),
             "source_dataset_path": pd.Series(raw_dir.relative_to(BASE_DIR).as_posix(), index=frame.index, dtype="string"),
             "source_record_id": frame["source_record_id"].astype("string"),
-            "source_ppin": pd.Series(pd.NA, index=frame.index, dtype="string"),
+            "source_ppin": source_ppin,
             "ingestion_run_id": pd.Series(run_id, index=frame.index, dtype="string"),
             "source_file_version": pd.Series(str(TAX_YEAR), index=frame.index, dtype="string"),
             "loaded_at": pd.Series(pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%SZ"), index=frame.index, dtype="string"),
@@ -295,6 +296,10 @@ def build_identifier_diagnostics(standardized: pd.DataFrame, master: pd.DataFram
             {"metric": "jackson_direct_identifier_overlap_rows", "value": direct_overlap},
             {"metric": "jackson_compact_identifier_overlap_rows", "value": compact_overlap},
             {"metric": "jackson_ppin_overlap_rows", "value": ppin_overlap},
+            {
+                "metric": "jackson_identifier_assessment",
+                "value": "Jackson preliminary list parcel numbers align to county PPIN values, so PPIN linkage is the authoritative join path for this county source.",
+            },
         ]
     )
 

@@ -18,31 +18,37 @@ counties:
     source_type: direct_download_page
     source_path: data/tax_linked/ms/hinds/hinds_linked_tax_records.parquet
     source_name: hinds_tax_sale_files
+    source_url: https://www.co.hinds.ms.us/download/RPTS12-PRINT1-2025-dist1.xlsx
   jackson:
     ingest_mode: linked_parquet
     source_type: direct_download_page
     source_path: data/tax_linked/ms/jackson/jackson_linked_tax_records.parquet
     source_name: jackson_tax_sale_files
+    source_url: https://co.jackson.ms.us/DocumentCenter/View/1450/Tax-Sale-Ad-for-2024-Real-Property-Taxes---Preliminary-List
   jasper:
     ingest_mode: linked_parquet
     source_type: direct_download_page
     source_path: data/tax_linked/ms/jasper/jasper_linked_tax_records.parquet
     source_name: jasper_delinquent_tax_pdfs
+    source_url: https://co.jasper.ms.us/delinquent-taxes/
   madison:
     ingest_mode: linked_parquet
     source_type: direct_download_page
     source_path: data/tax_linked/ms/madison/madison_linked_tax_records.parquet
     source_name: madison_tax_sale_parcel_information
+    source_url: https://www.madison-co.com/sites/default/files/2024_tax_year_as_of_august_11_0.xlsx
   pike:
     ingest_mode: linked_parquet
     source_type: free_direct_download
     source_path: data/tax_linked/ms/pike/free_linked_tax_records.parquet
     source_name: pike_tax_sale_list
+    source_url: https://www.co.pike.ms.us/download-tax-sale-list/
   warren:
     ingest_mode: linked_parquet
     source_type: direct_download_page
     source_path: data/tax_linked/ms/warren/warren_linked_tax_records.parquet
     source_name: warren_delinquent_taxes
+    source_url: https://www.co.warren.ms.us/elected-officials/chancery-clerk/delinquent-taxes/
   adams:
     ingest_mode: linked_parquet
     source_type: statewide_public_inventory

@@ -937,6 +937,29 @@ def _diagnostic_identifier_series(frame: pd.DataFrame) -> pd.Series:
     return pd.Series(pd.NA, index=frame.index, dtype="string")
 
 
+def _diagnostic_identifier_preview(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    for column in [
+        "source_parcel_id_raw",
+        "parcel_id_raw",
+        "source_ppin",
+        "account_id",
+        "source_parcel_id_normalized",
+        "source_parcel_id_normalized_master",
+        "parcel_id_normalized",
+        "source_parcel_number",
+        "parcel_row_id",
+    ]:
+        if column not in frame.columns:
+            continue
+        raw = frame[column].astype("string")
+        if raw.dropna().empty:
+            continue
+        normalized = raw if column in {"source_parcel_id_normalized", "source_parcel_id_normalized_master", "parcel_id_normalized", "parcel_row_id"} else normalize_identifier(raw)
+        return raw, normalized
+    empty = pd.Series(pd.NA, index=frame.index, dtype="string")
+    return empty, empty
+
+
 def _load_source_frame_for_diagnostics(
     cache: dict[str, pd.DataFrame],
     source_path: Path,
@@ -983,6 +1006,8 @@ def build_county_linkage_diagnostics(
         ambiguous_row_count = pd.NA
         unmatched_rate = pd.NA
         top_mismatch_patterns = pd.NA
+        raw_identifier_samples = pd.NA
+        normalized_identifier_samples = pd.NA
 
         if source_path and source_path.exists():
             try:
@@ -995,8 +1020,12 @@ def build_county_linkage_diagnostics(
                     ].copy()
                 filtered_county_rows = int(len(county_frame))
                 identifier_series = _diagnostic_identifier_series(county_frame)
+                raw_identifier_series, normalized_identifier_series = _diagnostic_identifier_preview(county_frame)
                 distinct_identifier_count = int(identifier_series.nunique(dropna=True)) if not county_frame.empty else 0
                 normalized_identifier_count = int(identifier_series.dropna().nunique()) if not county_frame.empty else 0
+                if not county_frame.empty:
+                    raw_identifier_samples = " | ".join(raw_identifier_series.dropna().astype("string").head(5).tolist()) or pd.NA
+                    normalized_identifier_samples = " | ".join(normalized_identifier_series.dropna().astype("string").head(5).tolist()) or pd.NA
                 matched_row_count = int(coverage_record.get("matched_row_count") or 0)
                 if filtered_county_rows and pd.notna(filtered_county_rows):
                     unmatched_rate = round(max(0.0, 1.0 - (matched_row_count / max(int(filtered_county_rows), 1))), 4)
@@ -1026,7 +1055,11 @@ def build_county_linkage_diagnostics(
                 "discovery_status": coverage_record.get("discovery_status"),
                 "source_name": coverage_record.get("source_name"),
                 "source_type": coverage_record.get("source_type"),
+                "source_url": coverage_record.get("source_url"),
                 "source_path": source_path.relative_to(BASE_DIR).as_posix() if source_path and source_path.exists() else pd.NA,
+                "source_county_field": source_county_field or pd.NA,
+                "source_county_value": source_county_value if source_county_field else pd.NA,
+                "county_filter_note": f"{source_county_field}={source_county_value}" if source_county_field else "county_specific_source",
                 "county_focus_flag": bool(county_name in qa_focus or str(coverage_record.get("coverage_status") or "") in {"pending", "partial", "stale"}),
                 "parcel_count": int(coverage_record.get("parcel_count") or 0),
                 "parcel_match_count": int(coverage_record.get("parcel_match_count") or 0),
@@ -1035,6 +1068,8 @@ def build_county_linkage_diagnostics(
                 "filtered_county_rows": filtered_county_rows,
                 "distinct_identifier_count": distinct_identifier_count,
                 "normalized_identifier_count": normalized_identifier_count,
+                "raw_identifier_samples": raw_identifier_samples,
+                "normalized_identifier_samples": normalized_identifier_samples,
                 "unmatched_row_count": unmatched_row_count,
                 "ambiguous_row_count": ambiguous_row_count,
                 "unmatched_rate": unmatched_rate,
@@ -1132,7 +1167,7 @@ def build_county_remediation_work_queue(
     work_queue = pd.DataFrame.from_records(rows).sort_values(["priority_score", "parcel_match_count", "parcel_count"], ascending=[False, False, False]).reset_index(drop=True)
     if not work_queue.empty:
         work_queue.insert(0, "priority_rank", pd.Series(range(1, len(work_queue) + 1), dtype="Int64"))
-    diagnostics_fields = diagnostics[["county_name", "total_source_rows", "filtered_county_rows", "unmatched_row_count", "ambiguous_row_count", "top_mismatch_patterns"]] if not diagnostics.empty else pd.DataFrame(columns=["county_name"])
+    diagnostics_fields = diagnostics[["county_name", "total_source_rows", "filtered_county_rows", "unmatched_row_count", "ambiguous_row_count", "top_mismatch_patterns", "county_filter_note"]] if not diagnostics.empty else pd.DataFrame(columns=["county_name"])
     return work_queue.merge(diagnostics_fields, on="county_name", how="left")
 
 

@@ -28,7 +28,7 @@ holmes,suspiciously_low_match_count,warning,3.0,"County source loaded, but match
 holmes,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
 humphreys,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
 itawamba,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
-jackson,zero_match_count,warning,0.0,"County source loaded, but no linked parcel matches were produced."
+jackson,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
 jasper,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
 jefferson,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
 jefferson_davis,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
