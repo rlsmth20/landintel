@@ -2255,7 +2255,11 @@ def get_leads(
 
 def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
     if _using_embedded_runtime():
-        columns = [column for column in _embedded_parcel_dataset().schema.names if not column.startswith("__")]
+        columns = [
+            column
+            for column in _embedded_parcel_dataset().schema.names
+            if not column.startswith("__") and column != "geometry"
+        ]
         frame = _embedded_to_pandas(columns, ds.field("parcel_row_id") == parcel_row_id)
         if frame.empty:
             return None
