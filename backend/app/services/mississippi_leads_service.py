@@ -553,7 +553,10 @@ def _embedded_detail_metrics_dataset() -> ds.Dataset:
 def _lookup_embedded_detail_metrics(parcel_row_id: str) -> dict[str, Any]:
     if not _embedded_detail_metrics_runtime_available():
         return {}
-    table = _embedded_detail_metrics_dataset().to_table(filter=ds.field("parcel_row_id") == parcel_row_id)
+    try:
+        table = _embedded_detail_metrics_dataset().to_table(filter=ds.field("parcel_row_id") == parcel_row_id)
+    except Exception:
+        return {}
     if table.num_rows == 0:
         return {}
     row = table.to_pandas().iloc[0]
