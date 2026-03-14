@@ -316,6 +316,36 @@ def _predict_ai_building_presence(
     }
 
 
+def _apply_vacancy_assessment(payload: dict[str, Any]) -> None:
+    parcel_vacant_flag = payload.get("parcel_vacant_flag")
+    ai_building_present_flag = payload.get("ai_building_present_flag")
+    current_confidence = payload.get("vacancy_confidence_score")
+    confidence_value = float(current_confidence) if current_confidence is not None and pd.notna(current_confidence) else None
+
+    if parcel_vacant_flag is True and ai_building_present_flag is True:
+        payload["overall_vacancy_assessment"] = "Likely improved - conflicting signals"
+        payload["vacancy_confidence_score"] = min(confidence_value if confidence_value is not None else 35.0, 35.0)
+        payload["vacant_reason"] = "Footprint logic marked the parcel vacant, but imagery detected a building. Treat as likely improved until reviewed."
+        return
+    if parcel_vacant_flag is True and ai_building_present_flag is False:
+        payload["overall_vacancy_assessment"] = "Likely vacant"
+        payload["vacant_reason"] = payload.get("vacant_reason") or "No mapped building footprints or imagery building signal detected."
+        return
+    if parcel_vacant_flag is False and ai_building_present_flag is True:
+        payload["overall_vacancy_assessment"] = "Likely improved"
+        payload["vacancy_confidence_score"] = min(confidence_value if confidence_value is not None else 20.0, 25.0)
+        payload["vacant_reason"] = "Parcel data and imagery both indicate building presence."
+        return
+    if parcel_vacant_flag is False and ai_building_present_flag is False:
+        payload["overall_vacancy_assessment"] = "Review manually"
+        payload["vacant_reason"] = "Parcel data shows improvement, but imagery did not confirm building presence."
+        return
+
+    payload["overall_vacancy_assessment"] = "Footprint-only signal"
+    if payload.get("vacant_reason") is None:
+        payload["vacant_reason"] = "Vacancy status is currently based on parcel/building-footprint data only."
+
+
 def _coalesce_numeric(frame: pd.DataFrame, columns: list[str]) -> pd.Series:
     result = pd.Series(np.nan, index=frame.index, dtype="float64")
     for column in columns:
@@ -1342,6 +1372,7 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
                     ai_payload = None
                 if ai_payload:
                     payload.update(ai_payload)
+        _apply_vacancy_assessment(payload)
         return payload
 
     frame = load_base_frame()
@@ -1367,6 +1398,7 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
                 ai_payload = None
             if ai_payload:
                 payload.update(ai_payload)
+    _apply_vacancy_assessment(payload)
     return payload
 
 

@@ -55,6 +55,7 @@ export type LeadRecord = {
   county_vacant_flag: boolean | null;
   ai_building_present_flag: boolean | null;
   vacancy_confidence_score: number | null;
+  overall_vacancy_assessment: string | null;
   building_count: number | null;
   building_area_total: number | null;
   nearby_building_count_1km: number | null;
