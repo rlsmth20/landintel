@@ -390,7 +390,13 @@ def _merge_tax_freshness_sources(frame: pd.DataFrame) -> pd.DataFrame:
             "county_tax_source_configured_flag",
             "county_tax_source_loaded_flag",
             "county_tax_source_type",
+            "county_tax_source_name",
+            "county_tax_source_url",
             "county_tax_source_path",
+            "county_tax_coverage_scope",
+            "county_tax_quality_flag",
+            "county_tax_blocker_reason",
+            "county_tax_last_successful_ingest_timestamp",
             "tax_data_available_flag",
             "delinquent_flag",
             "delinquent_amount",
@@ -445,7 +451,13 @@ def _lookup_tax_freshness_detail(parcel_row_id: str) -> dict[str, Any]:
             "county_tax_source_configured_flag",
             "county_tax_source_loaded_flag",
             "county_tax_source_type",
+            "county_tax_source_name",
+            "county_tax_source_url",
             "county_tax_source_path",
+            "county_tax_coverage_scope",
+            "county_tax_quality_flag",
+            "county_tax_blocker_reason",
+            "county_tax_last_successful_ingest_timestamp",
             "tax_data_available_flag",
             "delinquent_flag",
             "delinquent_amount",
@@ -497,11 +509,17 @@ def _apply_tax_detail_defaults(payload: dict[str, Any]) -> None:
         or payload.get("tax_data_available_flag")
         or payload.get("county_tax_source_loaded_flag")
     )
-    upload_date = payload.get("tax_data_upload_date") or payload.get("latest_loaded_at") or (_default_tax_upload_date() if has_tax_data else None)
+    upload_date = (
+        payload.get("tax_data_upload_date")
+        or payload.get("latest_loaded_at")
+        or payload.get("county_tax_last_successful_ingest_timestamp")
+        or (_default_tax_upload_date() if has_tax_data else None)
+    )
     if upload_date is not None:
         upload_date = _serialize_scalar(_normalize_timestamp_string(pd.Series([upload_date])).iloc[0])
     tax_data_source = (
         payload.get("tax_data_source")
+        or payload.get("county_tax_source_name")
         or payload.get("tax_source_name")
         or (payload.get("best_source_name") if has_tax_data else None)
         or (payload.get("county_tax_source_type") if has_tax_data else None)
@@ -528,15 +546,16 @@ def _apply_tax_detail_defaults(payload: dict[str, Any]) -> None:
         elif has_partial:
             coverage_status = "stale" if stale else "partial"
         else:
-            coverage_status = "missing"
-    coverage_reason = payload.get("county_tax_coverage_reason")
+            coverage_status = "unavailable"
+    coverage_reason = payload.get("county_tax_coverage_reason") or payload.get("county_tax_blocker_reason")
     if coverage_reason is None:
         coverage_reason = {
             "available": "County tax delinquency coverage is available.",
             "partial": "Only partial county tax delinquency coverage is currently available.",
             "stale": "County tax delinquency coverage exists but appears stale.",
-            "missing": "No county tax delinquency dataset is available yet.",
-        }.get(str(coverage_status), "No county tax delinquency dataset is available yet.")
+            "pending": "County tax source has been discovered but is pending ingest implementation.",
+            "unavailable": "No usable county tax source is currently available.",
+        }.get(str(coverage_status), "No usable county tax source is currently available.")
     parcel_tax_status = payload.get("parcel_tax_status")
     if parcel_tax_status is None:
         if bool(payload.get("delinquent_flag")):
@@ -546,8 +565,9 @@ def _apply_tax_detail_defaults(payload: dict[str, Any]) -> None:
                 "available": "not delinquent",
                 "partial": "county coverage partial",
                 "stale": "county data stale",
-                "missing": "county coverage missing",
-            }.get(str(coverage_status), "county coverage missing")
+                "pending": "county source pending",
+                "unavailable": "county coverage unavailable",
+            }.get(str(coverage_status), "county coverage unavailable")
     payload["county_tax_coverage_status"] = _serialize_scalar(coverage_status)
     payload["county_tax_coverage_note"] = _serialize_scalar(payload.get("county_tax_coverage_note") or coverage_reason)
     payload["county_tax_coverage_reason"] = _serialize_scalar(coverage_reason)
@@ -603,16 +623,16 @@ def _apply_county_tax_coverage_fields(frame: pd.DataFrame) -> pd.DataFrame:
     )
     has_full_county_data = loaded & available
     has_partial_data = delinquent | frame.get("latest_delinquent_year", pd.Series(pd.NA, index=frame.index)).notna()
-    status = pd.Series("missing", index=frame.index, dtype="string")
+    status = pd.Series("unavailable", index=frame.index, dtype="string")
     status = status.mask(has_partial_data, "partial")
     status = status.mask(has_full_county_data, "available")
     status = status.mask((has_full_county_data | has_partial_data) & stale, "stale")
-    reason = pd.Series("No county tax delinquency dataset is available yet.", index=frame.index, dtype="string")
+    reason = pd.Series("No usable county tax source is currently available.", index=frame.index, dtype="string")
     reason = reason.mask(loaded & ~available, "County tax source loaded, but no linked delinquency records were produced yet.")
     reason = reason.mask(status.eq("partial"), "Only partial county tax delinquency coverage is currently available.")
     reason = reason.mask(status.eq("available"), "County tax delinquency coverage is available.")
     reason = reason.mask(status.eq("stale"), "County tax delinquency coverage exists but appears stale.")
-    parcel_tax_status = pd.Series("county coverage missing", index=frame.index, dtype="string")
+    parcel_tax_status = pd.Series("county coverage unavailable", index=frame.index, dtype="string")
     parcel_tax_status = parcel_tax_status.mask(status.eq("stale"), "county data stale")
     parcel_tax_status = parcel_tax_status.mask(status.eq("partial"), "county coverage partial")
     parcel_tax_status = parcel_tax_status.mask(status.eq("available"), "not delinquent")

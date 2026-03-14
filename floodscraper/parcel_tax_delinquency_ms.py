@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import time
 from pathlib import Path
 
@@ -35,6 +36,10 @@ OUTPUT_PARQUET = PARCELS_DIR / "mississippi_parcels_tax_distress.parquet"
 OUTPUT_GPKG = PARCELS_DIR / "mississippi_parcels_tax_distress.gpkg"
 SUMMARY_CSV = PARCELS_DIR / "mississippi_tax_distress_summary.csv"
 PROGRESS_CSV = PARCELS_DIR / "mississippi_tax_distress_progress.csv"
+COUNTY_COVERAGE_MATRIX_PARQUET = PARCELS_DIR / "mississippi_tax_coverage_matrix.parquet"
+COUNTY_COVERAGE_MATRIX_CSV = PARCELS_DIR / "mississippi_tax_coverage_matrix.csv"
+COUNTY_COVERAGE_QA_CSV = PARCELS_DIR / "mississippi_tax_coverage_qa.csv"
+COUNTY_COVERAGE_QA_SUMMARY_JSON = PARCELS_DIR / "mississippi_tax_coverage_qa_summary.json"
 COUNTY_PARTS_DIR = PARCELS_DIR / "ms_parcels_tax_parts"
 NORMALIZED_PARTS_DIR = TAX_PROCESSED_DIR / "ms_tax_normalized_parts"
 
@@ -53,7 +58,10 @@ FINAL_COLUMNS = [
     "owner_group_id", "absentee_owner_flag", "out_of_state_owner_flag",
     "corporate_owner_flag", "owner_parcel_count", "owner_total_acres",
     "county_tax_source_configured_flag", "county_tax_source_loaded_flag",
-    "county_tax_source_type", "county_tax_source_path", "tax_data_available_flag",
+    "county_tax_source_type", "county_tax_source_name", "county_tax_source_url",
+    "county_tax_source_path", "county_tax_coverage_scope", "county_tax_quality_flag",
+    "county_tax_blocker_reason", "county_tax_last_successful_ingest_timestamp",
+    "tax_data_available_flag",
     "delinquent_flag", "delinquent_amount", "delinquent_amount_bucket",
     "delinquent_year", "tax_sale_date", "parcel_tax_status",
     "county_tax_coverage_status", "county_tax_coverage_note",
@@ -76,6 +84,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-gpkg", type=str, default=str(OUTPUT_GPKG))
     parser.add_argument("--summary-csv", type=str, default=str(SUMMARY_CSV))
     parser.add_argument("--progress-csv", type=str, default=str(PROGRESS_CSV))
+    parser.add_argument("--coverage-matrix-parquet", type=str, default=str(COUNTY_COVERAGE_MATRIX_PARQUET))
+    parser.add_argument("--coverage-matrix-csv", type=str, default=str(COUNTY_COVERAGE_MATRIX_CSV))
+    parser.add_argument("--coverage-qa-csv", type=str, default=str(COUNTY_COVERAGE_QA_CSV))
+    parser.add_argument("--coverage-qa-summary-json", type=str, default=str(COUNTY_COVERAGE_QA_SUMMARY_JSON))
     parser.add_argument("--county-parts-dir", type=str, default=str(COUNTY_PARTS_DIR))
     parser.add_argument("--normalized-parts-dir", type=str, default=str(NORMALIZED_PARTS_DIR))
     parser.add_argument("--distressed-threshold", type=float, default=5.0)
@@ -98,11 +110,11 @@ def normalize_identifier(series: pd.Series) -> pd.Series:
 
 
 def parse_registry(path: Path) -> dict[str, object]:
-    registry: dict[str, object] = {"state": None, "counties": {}}
+    registry: dict[str, object] = {"state": None, "counties": {}, "pending": {}}
     if not path.exists():
         return registry
     current_county: str | None = None
-    in_counties = False
+    current_section: str | None = None
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.split("#", 1)[0].rstrip()
         if not line.strip():
@@ -113,17 +125,17 @@ def parse_registry(path: Path) -> dict[str, object]:
             current_county = None
             if token.startswith("state:"):
                 registry["state"] = token.split(":", 1)[1].strip()
-            in_counties = token == "counties:"
+            current_section = token[:-1] if token in {"counties:", "pending:"} else None
             continue
-        if not in_counties:
+        if current_section not in {"counties", "pending"}:
             continue
         if indent == 2 and token.endswith(":"):
             current_county = token[:-1].strip().lower()
-            registry["counties"][current_county] = {}
+            registry[current_section][current_county] = {}
             continue
         if indent >= 4 and current_county and ":" in token:
             key, value = token.split(":", 1)
-            registry["counties"][current_county][key.strip()] = value.strip().strip("'\"") or None
+            registry[current_section][current_county][key.strip()] = value.strip().strip("'\"") or None
     return registry
 
 
@@ -276,6 +288,8 @@ def build_linked_tax_frame(
 ) -> pd.DataFrame:
     county_field = str(entry.get("source_county_field", "") or "").strip()
     county_value = str(entry.get("source_county_value", county_name) or county_name).strip().lower()
+    if county_field and county_field not in linked_frame.columns:
+        raise KeyError(f"Missing county filter field in linked source: {county_field}")
     if county_field and county_field in linked_frame.columns:
         linked_frame = linked_frame.loc[
             linked_frame[county_field].astype("string").str.strip().str.lower().eq(county_value)
@@ -472,7 +486,13 @@ def prepare_county_output(
     out["county_tax_source_configured_flag"] = pd.Series(entry is not None, index=out.index, dtype="boolean")
     out["county_tax_source_loaded_flag"] = pd.Series(source_loaded, index=out.index, dtype="boolean")
     out["county_tax_source_type"] = pd.Series(entry.get("source_type") if entry else pd.NA, index=out.index, dtype="string")
+    out["county_tax_source_name"] = pd.Series(entry.get("source_name") if entry else pd.NA, index=out.index, dtype="string")
+    out["county_tax_source_url"] = pd.Series(entry.get("source_url") if entry else pd.NA, index=out.index, dtype="string")
     out["county_tax_source_path"] = pd.Series(source_path.relative_to(BASE_DIR).as_posix() if source_path else pd.NA, index=out.index, dtype="string")
+    out["county_tax_coverage_scope"] = pd.Series(entry.get("coverage_scope", "full") if entry else pd.NA, index=out.index, dtype="string")
+    out["county_tax_quality_flag"] = pd.Series(pd.NA, index=out.index, dtype="string")
+    out["county_tax_blocker_reason"] = pd.Series(pd.NA, index=out.index, dtype="string")
+    out["county_tax_last_successful_ingest_timestamp"] = pd.Series(pd.NA, index=out.index, dtype="string")
     if aggregated is not None and not aggregated.empty:
         if "parcel_row_id" in aggregated.columns:
             out = out.merge(aggregated, on=["parcel_row_id", "state_code", "county_name"], how="left")
@@ -560,6 +580,334 @@ def prepare_county_output(
     return out.loc[:, FINAL_COLUMNS].copy()
 
 
+def build_county_coverage_matrix(
+    county_names: list[str],
+    registry: dict[str, object],
+    progress: pd.DataFrame,
+    final_frame: pd.DataFrame,
+) -> pd.DataFrame:
+    county_entries = registry.get("counties", {}) if isinstance(registry.get("counties"), dict) else {}
+    pending_entries = registry.get("pending", {}) if isinstance(registry.get("pending"), dict) else {}
+    county_stats = (
+        final_frame.groupby("county_name", dropna=False)
+        .agg(
+            parcel_count=("parcel_row_id", "size"),
+            parcel_match_count=("tax_data_available_flag", lambda x: int(pd.Series(x).fillna(False).astype(bool).sum())),
+            matched_row_count=("tax_record_count", lambda x: int(pd.to_numeric(x, errors="coerce").fillna(0).sum())),
+            tax_data_available_flag=("tax_data_available_flag", lambda x: bool(pd.Series(x).fillna(False).astype(bool).any())),
+            tax_data_year=("tax_data_year", "max"),
+            tax_data_upload_date=("tax_data_upload_date", "max"),
+            delinquency_last_verified=("delinquency_last_verified", "max"),
+        )
+        .reset_index()
+    )
+    latest_progress = (
+        progress.sort_values(["county_name", "processed_at_utc"])
+        .drop_duplicates(subset=["county_name"], keep="last")
+        .set_index("county_name")
+        if not progress.empty
+        else pd.DataFrame().set_index(pd.Index([], name="county_name"))
+    )
+
+    records: list[dict[str, object]] = []
+    now = pd.Timestamp.now("UTC")
+    for county_name in county_names:
+        entry = county_entries.get(county_name)
+        pending_entry = pending_entries.get(county_name)
+        progress_row = latest_progress.loc[county_name] if county_name in latest_progress.index else None
+        stat_row = county_stats.loc[county_stats["county_name"].eq(county_name)]
+        if stat_row.empty:
+            parcel_count = 0
+            parcel_match_count = 0
+            matched_row_count = 0
+            tax_data_available_flag = False
+            tax_data_year = pd.NA
+            tax_data_upload_date = pd.NA
+            delinquency_last_verified = pd.NA
+        else:
+            record = stat_row.iloc[0]
+            parcel_count = int(record["parcel_count"])
+            parcel_match_count = int(record["parcel_match_count"])
+            matched_row_count = int(record["matched_row_count"])
+            tax_data_available_flag = bool(record["tax_data_available_flag"])
+            tax_data_year = record["tax_data_year"]
+            tax_data_upload_date = record["tax_data_upload_date"]
+            delinquency_last_verified = record["delinquency_last_verified"]
+
+        progress_status = str(progress_row["status"]) if progress_row is not None and "status" in progress_row else ""
+        source_loaded = progress_status == "processed"
+        latest_upload_ts = pd.to_datetime(pd.Series([tax_data_upload_date]), errors="coerce", utc=True).iloc[0]
+        latest_year_num = pd.to_numeric(pd.Series([tax_data_year]), errors="coerce").iloc[0]
+        stale = False
+        if pd.notna(latest_upload_ts):
+            stale = bool(latest_upload_ts < (now - pd.Timedelta(days=365)))
+        if (not stale) and pd.notna(latest_year_num):
+            stale = bool(float(latest_year_num) < (now.year - 1))
+
+        coverage_scope = None
+        ingest_mode = None
+        source_type = None
+        source_name = None
+        source_url = None
+        source_county_field = None
+        source_county_value = None
+        blocker_reason = None
+        quality_flag = None
+        last_successful_ingest_timestamp = None
+
+        if pending_entry:
+            coverage_status = "pending"
+            coverage_scope = pending_entry.get("coverage_scope") or "pending"
+            ingest_mode = pending_entry.get("ingest_mode")
+            source_type = pending_entry.get("source_type")
+            source_name = pending_entry.get("source_name")
+            source_url = pending_entry.get("source_url")
+            source_county_field = pending_entry.get("source_county_field")
+            source_county_value = pending_entry.get("source_county_value")
+            blocker_reason = pending_entry.get("note") or "County tax source has been discovered but is not yet ingestable."
+            quality_flag = "pending_source"
+        elif entry is None:
+            coverage_status = "unavailable"
+            coverage_scope = "unavailable"
+            blocker_reason = "No county tax source is currently configured."
+            quality_flag = "unavailable_no_source"
+        else:
+            coverage_scope = entry.get("coverage_scope") or "full"
+            ingest_mode = entry.get("ingest_mode")
+            source_type = entry.get("source_type")
+            source_name = entry.get("source_name")
+            source_url = entry.get("source_url")
+            source_county_field = entry.get("source_county_field")
+            source_county_value = entry.get("source_county_value")
+            if source_loaded:
+                last_successful_ingest_timestamp = progress_row.get("processed_at_utc") if progress_row is not None else None
+                if stale and (parcel_match_count > 0 or str(coverage_scope).lower() == "partial"):
+                    coverage_status = "stale"
+                elif str(coverage_scope).lower() == "partial":
+                    coverage_status = "partial"
+                elif parcel_match_count > 0:
+                    coverage_status = "covered"
+                else:
+                    coverage_status = "partial"
+                    blocker_reason = "County tax source loaded, but no linked parcel matches were produced."
+                quality_flag = "county_specific_loaded"
+                if str(coverage_scope).lower() == "partial":
+                    quality_flag = "shared_partial_loaded"
+                if coverage_status == "stale":
+                    quality_flag = "stale_source_review"
+                elif parcel_match_count == 0:
+                    quality_flag = "zero_match_review"
+            else:
+                coverage_status = "unavailable"
+                blocker_reason = (
+                    progress_row.get("notes")
+                    if progress_row is not None and "notes" in progress_row
+                    else "County tax source is configured but not currently ingestable."
+                )
+                quality_flag = "unavailable_source_not_loaded"
+
+        if quality_flag == "county_specific_loaded" and matched_row_count > parcel_match_count and parcel_match_count > 0:
+            quality_flag = "duplicate_match_review"
+
+        records.append(
+            {
+                "county_name": county_name,
+                "county_slug": county_name,
+                "coverage_status": coverage_status,
+                "coverage_scope": coverage_scope,
+                "ingest_mode": ingest_mode,
+                "source_type": source_type,
+                "source_name": source_name,
+                "source_url": source_url,
+                "source_county_field": source_county_field,
+                "source_county_value": source_county_value,
+                "county_tax_source_configured_flag": bool(entry is not None),
+                "county_tax_source_loaded_flag": bool(source_loaded),
+                "tax_data_available_flag": bool(tax_data_available_flag),
+                "delinquency_last_verified": delinquency_last_verified,
+                "tax_data_upload_date": tax_data_upload_date,
+                "tax_data_year": tax_data_year,
+                "last_successful_ingest_timestamp": last_successful_ingest_timestamp,
+                "parcel_count": parcel_count,
+                "parcel_match_count": parcel_match_count,
+                "matched_row_count": matched_row_count,
+                "quality_flag": quality_flag,
+                "blocker_reason": blocker_reason,
+            }
+        )
+    return pd.DataFrame.from_records(records).sort_values("county_name").reset_index(drop=True)
+
+
+def apply_county_coverage_matrix(final_frame: gpd.GeoDataFrame, coverage_matrix: pd.DataFrame) -> gpd.GeoDataFrame:
+    matrix = coverage_matrix.rename(
+        columns={
+            "coverage_scope": "county_tax_coverage_scope",
+            "source_name": "county_tax_source_name",
+            "source_url": "county_tax_source_url",
+            "quality_flag": "county_tax_quality_flag",
+            "blocker_reason": "county_tax_blocker_reason",
+            "last_successful_ingest_timestamp": "county_tax_last_successful_ingest_timestamp",
+        }
+    )
+    merged = final_frame.merge(
+        matrix[
+            [
+                "county_name",
+                "coverage_status",
+                "county_tax_coverage_scope",
+                "county_tax_source_configured_flag",
+                "county_tax_source_loaded_flag",
+                "county_tax_source_name",
+                "county_tax_source_url",
+                "county_tax_quality_flag",
+                "county_tax_blocker_reason",
+                "county_tax_last_successful_ingest_timestamp",
+                "tax_data_upload_date",
+                "tax_data_year",
+                "delinquency_last_verified",
+            ]
+        ],
+        on="county_name",
+        how="left",
+        suffixes=("", "_matrix"),
+    )
+    matrix_status = merged["coverage_status"].astype("string")
+    row_status = matrix_status.replace({"covered": "available"}).astype("string")
+    row_note = pd.Series("No county tax delinquency dataset is available yet.", index=merged.index, dtype="string")
+    row_note.loc[matrix_status.eq("covered")] = "County tax delinquency coverage is available."
+    row_note.loc[matrix_status.eq("partial")] = "Only partial county tax delinquency coverage is currently available."
+    row_note.loc[matrix_status.eq("stale")] = "County tax delinquency coverage exists but appears stale."
+    row_note.loc[matrix_status.eq("pending")] = "County tax source has been discovered but is pending ingest implementation."
+    row_note.loc[matrix_status.eq("unavailable")] = "No usable county tax source is currently available."
+    row_note = row_note.where(merged["county_tax_blocker_reason"].isna(), merged["county_tax_blocker_reason"].astype("string"))
+
+    parcel_tax_status = pd.Series("county coverage unavailable", index=merged.index, dtype="string")
+    parcel_tax_status.loc[matrix_status.eq("stale")] = "county data stale"
+    parcel_tax_status.loc[matrix_status.eq("partial")] = "county coverage partial"
+    parcel_tax_status.loc[matrix_status.eq("pending")] = "county source pending"
+    parcel_tax_status.loc[matrix_status.eq("covered")] = "not delinquent"
+    parcel_tax_status.loc[merged["delinquent_flag"].fillna(False)] = "delinquent"
+
+    merged["county_tax_source_configured_flag"] = (
+        merged["county_tax_source_configured_flag_matrix"].fillna(merged["county_tax_source_configured_flag"]).fillna(False).astype("boolean")
+    )
+    merged["county_tax_source_loaded_flag"] = (
+        merged["county_tax_source_loaded_flag_matrix"].fillna(merged["county_tax_source_loaded_flag"]).fillna(False).astype("boolean")
+    )
+    merged["county_tax_source_name"] = merged["county_tax_source_name"].astype("string").fillna(merged["county_tax_source_name_matrix"].astype("string"))
+    merged["county_tax_source_url"] = merged["county_tax_source_url"].astype("string").fillna(merged["county_tax_source_url_matrix"].astype("string"))
+    merged["county_tax_coverage_scope"] = merged["county_tax_coverage_scope"].astype("string").fillna(merged["county_tax_coverage_scope_matrix"].astype("string"))
+    merged["county_tax_quality_flag"] = merged["county_tax_quality_flag"].astype("string").fillna(merged["county_tax_quality_flag_matrix"].astype("string"))
+    merged["county_tax_blocker_reason"] = merged["county_tax_blocker_reason"].astype("string").fillna(merged["county_tax_blocker_reason_matrix"].astype("string"))
+    merged["county_tax_last_successful_ingest_timestamp"] = normalize_timestamp(merged["county_tax_last_successful_ingest_timestamp"]).fillna(
+        normalize_timestamp(merged["county_tax_last_successful_ingest_timestamp_matrix"])
+    )
+    merged["county_tax_coverage_status"] = row_status
+    merged["county_tax_coverage_note"] = row_note
+    merged["county_tax_coverage_reason"] = row_note
+    merged["parcel_tax_status"] = parcel_tax_status
+    merged["tax_data_upload_date"] = normalize_timestamp(merged["tax_data_upload_date"]).fillna(normalize_timestamp(merged["tax_data_upload_date_matrix"]))
+    merged["tax_data_year"] = pd.to_numeric(merged["tax_data_year"], errors="coerce").astype("Int64").fillna(
+        pd.to_numeric(merged["tax_data_year_matrix"], errors="coerce").astype("Int64")
+    )
+    merged["delinquency_last_verified"] = normalize_timestamp(merged["delinquency_last_verified"]).fillna(
+        normalize_timestamp(merged["delinquency_last_verified_matrix"])
+    ).fillna(merged["county_tax_last_successful_ingest_timestamp"])
+    merged["tax_data_source"] = merged["tax_data_source"].astype("string").fillna(merged["county_tax_source_name"])
+    return gpd.GeoDataFrame(
+        merged.drop(
+            columns=[
+                "coverage_status",
+                "county_tax_source_configured_flag_matrix",
+                "county_tax_source_loaded_flag_matrix",
+                "county_tax_source_name_matrix",
+                "county_tax_source_url_matrix",
+                "county_tax_coverage_scope_matrix",
+                "county_tax_quality_flag_matrix",
+                "county_tax_blocker_reason_matrix",
+                "county_tax_last_successful_ingest_timestamp_matrix",
+                "tax_data_upload_date_matrix",
+                "tax_data_year_matrix",
+                "delinquency_last_verified_matrix",
+            ],
+            errors="ignore",
+        ),
+        geometry="geometry",
+        crs=final_frame.crs,
+    )
+
+
+def build_county_coverage_qa(
+    coverage_matrix: pd.DataFrame,
+    progress: pd.DataFrame,
+    final_frame: pd.DataFrame,
+    normalized_parts_dir: Path,
+) -> pd.DataFrame:
+    issue_rows: list[dict[str, object]] = []
+    matched = final_frame.loc[final_frame["tax_data_available_flag"].fillna(False).astype(bool)].copy()
+    null_check_columns = [
+        "delinquent_amount",
+        "delinquent_year",
+        "tax_data_upload_date",
+        "tax_data_source",
+        "delinquency_last_verified",
+    ]
+    latest_progress = (
+        progress.sort_values(["county_name", "processed_at_utc"])
+        .drop_duplicates(subset=["county_name"], keep="last")
+        .set_index("county_name")
+        if not progress.empty
+        else pd.DataFrame().set_index(pd.Index([], name="county_name"))
+    )
+    for record in coverage_matrix.to_dict(orient="records"):
+        county = str(record["county_name"])
+        parcel_match_count = int(record.get("parcel_match_count") or 0)
+        matched_row_count = int(record.get("matched_row_count") or 0)
+        coverage_status = str(record.get("coverage_status") or "")
+        source_type = str(record.get("source_type") or "")
+        source_county_field = str(record.get("source_county_field") or "")
+
+        part_path = normalized_parts_dir / f"{county}.parquet"
+        duplicate_count = 0
+        if part_path.exists():
+            try:
+                part = pd.read_parquet(part_path, columns=["parcel_row_id"], engine="pyarrow")
+                duplicate_count = int(part["parcel_row_id"].dropna().duplicated().sum())
+            except Exception:
+                duplicate_count = 0
+        if duplicate_count > 0:
+            issue_rows.append({"county_name": county, "issue_type": "duplicate_parcel_matches", "severity": "warning", "observed_value": duplicate_count, "details": "Normalized tax records contain repeated parcel_row_id values."})
+
+        if bool(record.get("county_tax_source_loaded_flag")) and parcel_match_count == 0:
+            issue_rows.append({"county_name": county, "issue_type": "zero_match_count", "severity": "warning", "observed_value": parcel_match_count, "details": "County source loaded, but no linked parcel matches were produced."})
+        elif bool(record.get("county_tax_source_loaded_flag")) and parcel_match_count < 5 and int(record.get("parcel_count") or 0) > 10000:
+            issue_rows.append({"county_name": county, "issue_type": "suspiciously_low_match_count", "severity": "warning", "observed_value": parcel_match_count, "details": "County source loaded, but matched parcel count is unusually low for county size."})
+
+        if source_type == "statewide_public_inventory" and not source_county_field:
+            issue_rows.append({"county_name": county, "issue_type": "county_bleed_through_risk", "severity": "error", "observed_value": 1, "details": "Shared statewide source is missing a county filter field."})
+
+        county_matched = matched.loc[matched["county_name"].astype("string").str.lower().eq(county)]
+        if not county_matched.empty:
+            for column in null_check_columns:
+                null_rate = float(county_matched[column].isna().mean())
+                if null_rate > 0.0:
+                    issue_rows.append({"county_name": county, "issue_type": f"null_rate::{column}", "severity": "info" if null_rate < 0.2 else "warning", "observed_value": round(null_rate, 4), "details": f"Matched parcel null rate for {column}."})
+
+        inconsistent = (
+            (coverage_status == "covered" and parcel_match_count == 0)
+            or (coverage_status == "pending" and parcel_match_count > 0)
+            or (coverage_status == "unavailable" and parcel_match_count > 0)
+        )
+        if inconsistent:
+            issue_rows.append({"county_name": county, "issue_type": "coverage_status_inconsistent", "severity": "error", "observed_value": coverage_status, "details": "Coverage status does not agree with observed matched parcel counts."})
+
+        if county in latest_progress.index:
+            progress_status = str(latest_progress.loc[county, "status"])
+            if coverage_status in {"covered", "partial", "stale"} and progress_status != "processed":
+                issue_rows.append({"county_name": county, "issue_type": "progress_status_inconsistent", "severity": "error", "observed_value": progress_status, "details": "County coverage indicates ingest, but progress status is not processed."})
+    return pd.DataFrame.from_records(issue_rows)
+
+
 def build_summary(final_frame: gpd.GeoDataFrame, progress: pd.DataFrame, runtime_seconds: float) -> pd.DataFrame:
     total_rows = len(final_frame)
     matched_rows = int(final_frame["tax_data_available_flag"].fillna(False).sum())
@@ -639,6 +987,10 @@ def main() -> None:
     output_gpkg = resolve_path(args.output_gpkg)
     summary_csv = resolve_path(args.summary_csv)
     progress_csv = resolve_path(args.progress_csv)
+    coverage_matrix_parquet = resolve_path(args.coverage_matrix_parquet)
+    coverage_matrix_csv = resolve_path(args.coverage_matrix_csv)
+    coverage_qa_csv = resolve_path(args.coverage_qa_csv)
+    coverage_qa_summary_json = resolve_path(args.coverage_qa_summary_json)
     county_parts_dir = resolve_path(args.county_parts_dir)
     normalized_parts_dir = resolve_path(args.normalized_parts_dir)
 
@@ -739,10 +1091,23 @@ def main() -> None:
     final_frame = gpd.GeoDataFrame(pd.concat(final_parts, ignore_index=True), geometry="geometry", crs=master.crs)
     final_frame = final_frame.merge(master.loc[:, ["parcel_row_id", "master_row_order"]], on="parcel_row_id", how="left")
     final_frame = final_frame.sort_values("master_row_order").drop(columns=["master_row_order"]).reset_index(drop=True)
+    coverage_matrix = build_county_coverage_matrix(county_names, registry, progress, final_frame)
+    final_frame = apply_county_coverage_matrix(final_frame, coverage_matrix)
+    coverage_qa = build_county_coverage_qa(coverage_matrix, progress, final_frame, normalized_parts_dir)
 
     output_parquet.parent.mkdir(parents=True, exist_ok=True)
     final_frame.to_parquet(output_parquet, index=False)
     final_frame.to_file(output_gpkg, driver="GPKG", engine="pyogrio")
+    coverage_matrix_parquet.parent.mkdir(parents=True, exist_ok=True)
+    coverage_matrix.to_parquet(coverage_matrix_parquet, index=False)
+    coverage_matrix.to_csv(coverage_matrix_csv, index=False)
+    coverage_qa.to_csv(coverage_qa_csv, index=False)
+    coverage_summary = {
+        "county_count": int(len(coverage_matrix)),
+        "coverage_status_counts": {str(key): int(value) for key, value in coverage_matrix["coverage_status"].fillna("unknown").value_counts().items()},
+        "qa_issue_counts": {str(key): int(value) for key, value in coverage_qa["issue_type"].fillna("unknown").value_counts().items()} if not coverage_qa.empty else {},
+    }
+    coverage_qa_summary_json.write_text(json.dumps(coverage_summary, indent=2), encoding="utf-8")
     summary = build_summary(final_frame, progress, time.perf_counter() - start)
     summary.to_csv(summary_csv, index=False)
     refresh_owner_outputs(final_frame)

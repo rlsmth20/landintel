@@ -1,0 +1,88 @@
+county_name,issue_type,severity,observed_value,details
+adams,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+alcorn,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+attala,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+benton,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+bolivar,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+chickasaw,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+claiborne,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+clarke,suspiciously_low_match_count,warning,1.0,"County source loaded, but matched parcel count is unusually low for county size."
+clarke,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+clay,suspiciously_low_match_count,warning,4.0,"County source loaded, but matched parcel count is unusually low for county size."
+clay,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+coahoma,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+copiah,suspiciously_low_match_count,warning,2.0,"County source loaded, but matched parcel count is unusually low for county size."
+copiah,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+covington,suspiciously_low_match_count,warning,1.0,"County source loaded, but matched parcel count is unusually low for county size."
+covington,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+desoto,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+forrest,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+franklin,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+george,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+greene,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+grenada,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+hancock,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+harrison,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+hinds,zero_match_count,warning,0.0,"County source loaded, but no linked parcel matches were produced."
+holmes,suspiciously_low_match_count,warning,3.0,"County source loaded, but matched parcel count is unusually low for county size."
+holmes,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+humphreys,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+itawamba,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+jackson,zero_match_count,warning,0.0,"County source loaded, but no linked parcel matches were produced."
+jasper,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+jefferson,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+jefferson_davis,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+jones,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+lafayette,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+lamar,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+lauderdale,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+lawrence,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+leake,suspiciously_low_match_count,warning,3.0,"County source loaded, but matched parcel count is unusually low for county size."
+leake,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+lee,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+leflore,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+lincoln,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+lowndes,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+madison,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+marion,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+marshall,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+monroe,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+neshoba,suspiciously_low_match_count,warning,3.0,"County source loaded, but matched parcel count is unusually low for county size."
+neshoba,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+newton,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+oktibbeha,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+panola,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+pearl_river,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+perry,suspiciously_low_match_count,warning,2.0,"County source loaded, but matched parcel count is unusually low for county size."
+perry,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+pontotoc,suspiciously_low_match_count,warning,2.0,"County source loaded, but matched parcel count is unusually low for county size."
+pontotoc,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+prentiss,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+quitman,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+rankin,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+scott,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+simpson,suspiciously_low_match_count,warning,4.0,"County source loaded, but matched parcel count is unusually low for county size."
+simpson,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+smith,suspiciously_low_match_count,warning,1.0,"County source loaded, but matched parcel count is unusually low for county size."
+smith,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+stone,suspiciously_low_match_count,warning,1.0,"County source loaded, but matched parcel count is unusually low for county size."
+stone,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+sunflower,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+tallahatchie,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+tate,suspiciously_low_match_count,warning,3.0,"County source loaded, but matched parcel count is unusually low for county size."
+tate,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+tippah,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+tunica,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+union,suspiciously_low_match_count,warning,4.0,"County source loaded, but matched parcel count is unusually low for county size."
+union,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+walthall,suspiciously_low_match_count,warning,3.0,"County source loaded, but matched parcel count is unusually low for county size."
+walthall,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+warren,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+washington,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+wayne,suspiciously_low_match_count,warning,3.0,"County source loaded, but matched parcel count is unusually low for county size."
+wayne,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+webster,suspiciously_low_match_count,warning,4.0,"County source loaded, but matched parcel count is unusually low for county size."
+webster,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+wilkinson,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+winston,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.
+yazoo,null_rate::delinquent_year,warning,1.0,Matched parcel null rate for delinquent_year.

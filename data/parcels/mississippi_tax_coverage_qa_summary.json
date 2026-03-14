@@ -1,0 +1,13 @@
+{
+  "county_count": 82,
+  "coverage_status_counts": {
+    "stale": 69,
+    "pending": 11,
+    "partial": 2
+  },
+  "qa_issue_counts": {
+    "null_rate::delinquent_year": 68,
+    "suspiciously_low_match_count": 17,
+    "zero_match_count": 2
+  }
+}

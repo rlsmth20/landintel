@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import shutil
 
 import numpy as np
 import pandas as pd
@@ -18,10 +19,12 @@ AI_BUILDING_PREDICTIONS_PATH = ROOT / "data" / "buildings_processed" / "ai_build
 LEAD_SIGNALS_PATH = ROOT / "data" / "tax_published" / "ms" / "app_ready_mississippi_leads.parquet"
 DELINQUENT_LEADS_PATH = ROOT / "data" / "tax_published" / "ms" / "delinquent_leads_statewide.parquet"
 TAX_DISTRESS_PATH = ROOT / "data" / "parcels" / "mississippi_parcels_tax_distress.parquet"
+COUNTY_COVERAGE_MATRIX_PATH = ROOT / "data" / "parcels" / "mississippi_tax_coverage_matrix.parquet"
 OUTPUT_ROOT = ROOT / "backend" / "runtime" / "mississippi" / "parcel_index"
 RUNTIME_ROOT = ROOT / "backend" / "runtime" / "mississippi"
 GEOMETRY_OUTPUT_ROOT = RUNTIME_ROOT / "parcel_geometry_index"
 DETAIL_METRICS_OUTPUT_PATH = RUNTIME_ROOT / "parcel_detail_metrics.parquet"
+COUNTY_COVERAGE_MATRIX_RUNTIME_PATH = RUNTIME_ROOT / "tax_coverage_matrix.parquet"
 SQFT_PER_ACRE = 43560.0
 
 
@@ -134,7 +137,13 @@ TAX_DISTRESS_COLUMNS = [
     "county_tax_source_configured_flag",
     "county_tax_source_loaded_flag",
     "county_tax_source_type",
+    "county_tax_source_name",
+    "county_tax_source_url",
     "county_tax_source_path",
+    "county_tax_coverage_scope",
+    "county_tax_quality_flag",
+    "county_tax_blocker_reason",
+    "county_tax_last_successful_ingest_timestamp",
     "tax_data_available_flag",
     "delinquent_flag",
     "delinquent_amount",
@@ -301,11 +310,11 @@ def build_county_tax_coverage(frame: pd.DataFrame) -> pd.DataFrame:
     )
     has_full_county_data = grouped["county_tax_source_loaded_flag"].fillna(False) & grouped["tax_data_available_flag"].fillna(False)
     has_partial_data = grouped["observed_delinquency_records"].gt(0)
-    grouped["county_tax_coverage_status"] = "missing"
+    grouped["county_tax_coverage_status"] = "unavailable"
     grouped.loc[has_partial_data, "county_tax_coverage_status"] = "partial"
     grouped.loc[has_full_county_data, "county_tax_coverage_status"] = "available"
     grouped.loc[(has_full_county_data | has_partial_data) & stale_mask, "county_tax_coverage_status"] = "stale"
-    grouped["county_tax_coverage_reason"] = pd.Series("No county tax delinquency dataset is available yet.", index=grouped.index, dtype="string")
+    grouped["county_tax_coverage_reason"] = pd.Series("No usable county tax source is currently available.", index=grouped.index, dtype="string")
     grouped.loc[grouped["county_tax_source_loaded_flag"].fillna(False) & ~grouped["tax_data_available_flag"].fillna(False), "county_tax_coverage_reason"] = "County tax source loaded, but no linked delinquency records were produced yet."
     grouped.loc[grouped["county_tax_coverage_status"].eq("partial"), "county_tax_coverage_reason"] = "Only partial county tax delinquency coverage is currently available."
     grouped.loc[grouped["county_tax_coverage_status"].eq("available"), "county_tax_coverage_reason"] = "County tax delinquency coverage is available."
@@ -320,7 +329,7 @@ def apply_county_tax_coverage_fields(frame: pd.DataFrame) -> pd.DataFrame:
     frame["county_tax_source_configured_flag"] = frame["county_tax_source_configured_flag"].fillna(frame.get("county_tax_source_configured_flag_county"))
     frame["county_tax_source_loaded_flag"] = frame["county_tax_source_loaded_flag"].fillna(frame.get("county_tax_source_loaded_flag_county"))
     frame["tax_data_available_flag"] = frame["tax_data_available_flag"].fillna(frame.get("tax_data_available_flag_county"))
-    computed_status = pd.Series("missing", index=frame.index, dtype="string")
+    computed_status = pd.Series("unavailable", index=frame.index, dtype="string")
     computed_status = computed_status.mask(frame.get("county_tax_coverage_status_county", pd.Series(pd.NA, index=frame.index)).notna(), normalize_string(frame.get("county_tax_coverage_status_county"), index=frame.index))
     existing_status = normalize_string(frame.get("county_tax_coverage_status"), index=frame.index)
     frame["county_tax_coverage_status"] = existing_status.fillna(computed_status)
@@ -330,7 +339,7 @@ def apply_county_tax_coverage_fields(frame: pd.DataFrame) -> pd.DataFrame:
     frame["county_tax_coverage_note"] = existing_note.fillna(existing_reason).fillna(computed_reason)
     frame["county_tax_coverage_reason"] = existing_reason.fillna(frame["county_tax_coverage_note"]).fillna(computed_reason)
     existing_parcel_status = normalize_string(frame.get("parcel_tax_status"), index=frame.index)
-    computed_parcel_status = pd.Series("county coverage missing", index=frame.index, dtype="string")
+    computed_parcel_status = pd.Series("county coverage unavailable", index=frame.index, dtype="string")
     computed_parcel_status.loc[frame["county_tax_coverage_status"].eq("stale")] = "county data stale"
     computed_parcel_status.loc[frame["county_tax_coverage_status"].eq("partial")] = "county coverage partial"
     computed_parcel_status.loc[frame["county_tax_coverage_status"].eq("available")] = "not delinquent"
@@ -396,6 +405,12 @@ def build_detail_metrics_runtime(frame: pd.DataFrame) -> pd.DataFrame:
         "acreage_bucket",
         "county_tax_source_configured_flag",
         "county_tax_source_loaded_flag",
+        "county_tax_source_name",
+        "county_tax_source_url",
+        "county_tax_coverage_scope",
+        "county_tax_quality_flag",
+        "county_tax_blocker_reason",
+        "county_tax_last_successful_ingest_timestamp",
         "tax_data_available_flag",
         "county_tax_coverage_status",
         "county_tax_coverage_note",
@@ -724,6 +739,8 @@ def main() -> None:
     )
     detail_metrics = build_detail_metrics_runtime(frame)
     detail_metrics.to_parquet(DETAIL_METRICS_OUTPUT_PATH, index=False, engine="pyarrow")
+    if COUNTY_COVERAGE_MATRIX_PATH.exists():
+        shutil.copy2(COUNTY_COVERAGE_MATRIX_PATH, COUNTY_COVERAGE_MATRIX_RUNTIME_PATH)
     (RUNTIME_ROOT / "summary.json").write_text(json.dumps(build_summary_payload(frame)), encoding="utf-8")
     (RUNTIME_ROOT / "presets.json").write_text(json.dumps(build_presets_payload(frame)), encoding="utf-8")
     (RUNTIME_ROOT / "default_leads.json").write_text(json.dumps(build_default_leads_payload(frame)), encoding="utf-8")
