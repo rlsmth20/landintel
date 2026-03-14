@@ -19,6 +19,8 @@ LEAD_SIGNALS_PATH = ROOT / "data" / "tax_published" / "ms" / "app_ready_mississi
 OUTPUT_ROOT = ROOT / "backend" / "runtime" / "mississippi" / "parcel_index"
 RUNTIME_ROOT = ROOT / "backend" / "runtime" / "mississippi"
 GEOMETRY_OUTPUT_ROOT = RUNTIME_ROOT / "parcel_geometry_index"
+DETAIL_METRICS_OUTPUT_PATH = RUNTIME_ROOT / "parcel_detail_metrics.parquet"
+SQFT_PER_ACRE = 43560.0
 
 
 PARCEL_COLUMNS = [
@@ -38,11 +40,18 @@ PARCEL_COLUMNS = [
     "road_distance_ft",
     "road_access_tier",
     "wetland_flag",
+    "wetland_overlap_acres",
+    "wetland_overlap_pct",
     "flood_risk_score",
+    "flood_zone_primary",
+    "has_flood_overlap",
+    "sfha_overlap",
     "mean_slope_pct",
     "max_slope_pct",
     "slope_class",
     "slope_score",
+    "shape_length",
+    "shape_area",
     "buildability_score",
     "environment_score",
     "investment_score",
@@ -168,11 +177,60 @@ def vacancy_confidence(frame: pd.DataFrame) -> pd.Series:
     return confidence.clip(0, 100)
 
 
+def derive_shape_metrics(frame: pd.DataFrame) -> pd.DataFrame:
+    area_sqft = pd.to_numeric(frame.get("shape_area"), errors="coerce")
+    perimeter_ft = pd.to_numeric(frame.get("shape_length"), errors="coerce")
+    compactness = pd.Series(np.nan, index=frame.index, dtype="float64")
+    valid_shape = area_sqft.gt(0) & perimeter_ft.gt(0)
+    compactness.loc[valid_shape] = ((4.0 * np.pi * area_sqft.loc[valid_shape]) / np.square(perimeter_ft.loc[valid_shape])).clip(0.0, 1.0)
+
+    semi_perimeter = perimeter_ft / 2.0
+    discriminant = np.square(semi_perimeter) - (4.0 * area_sqft)
+    discriminant = discriminant.where(discriminant.ge(0))
+    sqrt_disc = np.sqrt(discriminant)
+    frontage = ((semi_perimeter + sqrt_disc) / 2.0).where(valid_shape)
+    width = ((semi_perimeter - sqrt_disc) / 2.0).where(valid_shape)
+    frame["shape_compactness"] = compactness
+    frame["parcel_frontage_ft_estimate"] = frontage.where(frontage.gt(0))
+    frame["parcel_width_ft_estimate"] = width.where(width.gt(0))
+    return frame
+
+
+def build_detail_metrics_runtime(frame: pd.DataFrame) -> pd.DataFrame:
+    detail_columns = [
+        "parcel_row_id",
+        "mean_slope_pct",
+        "max_slope_pct",
+        "slope_class",
+        "slope_score",
+        "elevation_mean_ft",
+        "shape_compactness",
+        "parcel_frontage_ft_estimate",
+        "parcel_width_ft_estimate",
+        "wetland_pct",
+        "wetland_area_sqft",
+        "flood_pct",
+        "flood_area_sqft",
+        "primary_fema_zone",
+        "wetland_flag",
+        "flood_risk_score",
+    ]
+    available = [column for column in detail_columns if column in frame.columns]
+    return frame.loc[:, available].copy()
+
+
 def build_runtime_frame() -> pd.DataFrame:
     parcels = pd.read_parquet(PARCEL_MASTER_PATH, columns=PARCEL_COLUMNS, engine="pyarrow")
     parcels["acreage"] = coalesce_numeric(parcels, ["total_acres", "parcel_area_acres", "gis_acres", "tax_acres"])
     parcels["land_use"] = parcels["land_use_raw"].astype("string").str.strip()
     parcels["assessed_total_value"] = pd.to_numeric(parcels["total_value"], errors="coerce")
+    parcels["wetland_pct"] = pd.to_numeric(parcels.get("wetland_overlap_pct"), errors="coerce")
+    parcels["wetland_area_sqft"] = pd.to_numeric(parcels.get("wetland_overlap_acres"), errors="coerce") * SQFT_PER_ACRE
+    parcels["flood_pct"] = pd.to_numeric(parcels.get("flood_overlap_pct"), errors="coerce")
+    parcels["flood_area_sqft"] = pd.to_numeric(parcels.get("flood_overlap_acres"), errors="coerce") * SQFT_PER_ACRE
+    parcels["primary_fema_zone"] = parcels.get("flood_zone_primary", pd.Series(pd.NA, index=parcels.index)).astype("string").str.strip()
+    parcels["elevation_mean_ft"] = pd.to_numeric(parcels.get("elevation_mean_ft"), errors="coerce")
+    parcels = derive_shape_metrics(parcels)
     parcels["geometry"] = parcels["geometry"].map(point_geometry_from_wkb)
     parcels = parcels.drop(
         columns=[
@@ -182,7 +240,13 @@ def build_runtime_frame() -> pd.DataFrame:
             "total_acres",
             "parcel_area_acres",
             "total_value",
-        ]
+            "wetland_overlap_acres",
+            "wetland_overlap_pct",
+            "flood_zone_primary",
+            "shape_length",
+            "shape_area",
+        ],
+        errors="ignore",
     )
 
     owners = pd.read_parquet(OWNER_LEADS_PATH, columns=OWNER_COLUMNS, engine="pyarrow")
@@ -226,7 +290,11 @@ def build_runtime_frame() -> pd.DataFrame:
         if "ai_building_present_flag" in frame.columns
         else pd.Series(pd.NA, index=frame.index, dtype="boolean")
     )
-    frame["vacancy_confidence_score"] = pd.to_numeric(frame.get("vacancy_confidence_score"), errors="coerce").fillna(vacancy_confidence(frame))
+    if "vacancy_confidence_score" in frame.columns:
+        vacancy_confidence_series = pd.to_numeric(frame["vacancy_confidence_score"], errors="coerce")
+    else:
+        vacancy_confidence_series = pd.Series(np.nan, index=frame.index, dtype="float64")
+    frame["vacancy_confidence_score"] = vacancy_confidence_series.fillna(vacancy_confidence(frame))
 
     return frame
 
@@ -426,6 +494,8 @@ def main() -> None:
         max_rows_per_group=10000,
         max_rows_per_file=50000,
     )
+    detail_metrics = build_detail_metrics_runtime(frame)
+    detail_metrics.to_parquet(DETAIL_METRICS_OUTPUT_PATH, index=False, engine="pyarrow")
     (RUNTIME_ROOT / "summary.json").write_text(json.dumps(build_summary_payload(frame)), encoding="utf-8")
     (RUNTIME_ROOT / "presets.json").write_text(json.dumps(build_presets_payload(frame)), encoding="utf-8")
     (RUNTIME_ROOT / "default_leads.json").write_text(json.dumps(build_default_leads_payload(frame)), encoding="utf-8")

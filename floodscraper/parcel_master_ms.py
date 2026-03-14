@@ -108,7 +108,7 @@ BASE_RENAMES = {
 }
 
 STAGE_NATIVE_FIELDS = {
-    "flood": ["flood_risk_score", "flood_zone_list", "has_flood_overlap", "sfha_overlap", "flood_zone_primary"],
+    "flood": ["flood_risk_score", "flood_zone_list", "has_flood_overlap", "sfha_overlap", "flood_zone_primary", "flood_overlap_acres", "flood_overlap_pct"],
     "roads": ["osm_id", "fclass", "name", "ref", "road_distance_m", "road_distance_ft"],
     "slope": ["mean_slope_pct", "max_slope_pct", "slope_class", "slope_score"],
     "wetlands": ["parcel_area_acres", "wetland_overlap_acres", "wetland_overlap_pct", "wetland_flag", "wetland_score"],
@@ -382,8 +382,14 @@ def build_flood_risk_tier(df: pd.DataFrame) -> pd.Series:
     zone = df["flood_zone_primary"].fillna("").astype(str).str.upper().str.strip()
     score = pd.to_numeric(df["flood_risk_score"], errors="coerce").fillna(0.0)
     sfha = df["sfha_overlap"].fillna(False).astype(bool)
+    coverage_pct = pd.to_numeric(df["flood_overlap_pct"], errors="coerce").fillna(0.0) if "flood_overlap_pct" in df.columns else pd.Series(0.0, index=df.index)
     tier = np.select(
-        [zone.str.startswith("VE") | score.ge(9.0), sfha | zone.isin(["A", "AE", "AH", "AO", "A99"]), zone.str.startswith("X_500") | score.ge(4.0), zone.str.startswith("X") | zone.isin(["B", "C"])],
+        [
+            zone.str.startswith("VE") | score.ge(9.0) | coverage_pct.ge(50.0),
+            sfha | zone.isin(["A", "AE", "AH", "AO", "A99"]) | coverage_pct.ge(15.0),
+            zone.str.startswith("X_500") | score.ge(4.0) | coverage_pct.gt(0.0),
+            zone.str.startswith("X") | zone.isin(["B", "C"]),
+        ],
         ["Severe", "High", "Moderate", "Minimal"],
         default="Unknown",
     )
@@ -391,7 +397,19 @@ def build_flood_risk_tier(df: pd.DataFrame) -> pd.Series:
 
 
 def build_constraint_summary(df: pd.DataFrame) -> pd.Series:
-    flood_phrase = df["flood_risk_tier"].map({"Minimal": "minimal flood risk", "Moderate": "moderate flood risk", "High": "high flood risk", "Severe": "severe flood risk", "Unknown": "unknown flood risk"}).fillna("unknown flood risk")
+    flood_pct = pd.to_numeric(df["flood_overlap_pct"], errors="coerce").fillna(0.0).round(1) if "flood_overlap_pct" in df.columns else pd.Series(0.0, index=df.index)
+    flood_phrase = pd.Series(
+        np.where(
+            flood_pct.gt(0),
+            df["flood_risk_tier"].map({"Minimal": "minimal flood risk", "Moderate": "moderate flood risk", "High": "high flood risk", "Severe": "severe flood risk", "Unknown": "unknown flood risk"}).fillna("unknown flood risk")
+            + " on "
+            + flood_pct.astype(str)
+            + "% of parcel",
+            "no mapped FEMA flood overlap",
+        ),
+        index=df.index,
+        dtype="string",
+    )
     slope = pd.to_numeric(df["mean_slope_pct"], errors="coerce")
     slope_phrase = pd.Series(np.select([slope <= 5, slope <= 15, slope.notna()], ["low slope", "moderate slope", "steep slope"], default="unknown slope"), index=df.index, dtype="string")
     wetland_pct = pd.to_numeric(df["wetland_overlap_pct"], errors="coerce").fillna(0.0).round(1)

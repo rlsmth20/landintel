@@ -103,7 +103,12 @@ export function LeadDetail({ lead }: { lead: LeadRecord }) {
 
       <DetailSection title="Flood / Wetlands">
         <DetailRow label="Wetland" value={formatBoolean(lead.wetland_flag)} />
+        <DetailRow label="Wetland coverage %" value={formatNumber(lead.wetland_pct, 1)} />
+        <DetailRow label="Wetland area sqft" value={formatNumber(lead.wetland_area_sqft, 0)} />
         <DetailRow label="Flood risk score" value={formatNumber(lead.flood_risk_score, 1)} />
+        <DetailRow label="Flood coverage %" value={formatNumber(lead.flood_pct, 1)} />
+        <DetailRow label="Flood area sqft" value={formatNumber(lead.flood_area_sqft, 0)} />
+        <DetailRow label="Primary FEMA zone" value={lead.primary_fema_zone} />
       </DetailSection>
 
       <DetailSection title="Market Context">

@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 from shapely.geometry import box
 
@@ -25,6 +26,8 @@ SUMMARY_CSV = PARCELS_DIR / "mississippi_parcels_with_flood_summary.csv"
 PARTS_DIR = PARCELS_DIR / "ms_parcels_flood_parts"
 CHECKPOINT_CSV = PARCELS_DIR / "mississippi_parcels_with_flood_progress.csv"
 TARGET_CRS = "EPSG:4326"
+AREA_CRS = "EPSG:5070"
+ACRES_PER_SQM = 0.0002471053814671653
 
 RISK_MAP = {
     "UNKNOWN": 0,
@@ -275,6 +278,8 @@ def process_chunk(
         out["flood_risk_score"] = 0
         out["has_flood_overlap"] = False
         out["sfha_overlap"] = False
+        out["flood_overlap_acres"] = 0.0
+        out["flood_overlap_pct"] = 0.0
         return out
 
     joined = gpd.sjoin(
@@ -286,6 +291,26 @@ def process_chunk(
     joined["flood_zone"] = joined["flood_zone"].fillna("UNKNOWN")
     joined["flood_risk_score"] = joined["flood_risk_score"].fillna(0).astype(int)
     joined["sfha_flag"] = joined["sfha_flag"].fillna(False).astype(bool)
+
+    parcel_area_acres = parcels_chunk[["parcel_row_id", "geometry"]].to_crs(AREA_CRS)
+    parcel_area_acres["parcel_area_acres"] = parcel_area_acres.geometry.area * ACRES_PER_SQM
+    flood_area = flood_subset[["flood_zone", "geometry"]].to_crs(AREA_CRS)
+    intersections = gpd.overlay(parcel_area_acres[["parcel_row_id", "geometry"]], flood_area, how="intersection", keep_geom_type=False)
+    if intersections.empty:
+        flood_coverage = parcel_area_acres[["parcel_row_id", "parcel_area_acres"]].copy()
+        flood_coverage["flood_overlap_acres"] = 0.0
+    else:
+        intersections["int_area_acres"] = intersections.geometry.area * ACRES_PER_SQM
+        flood_coverage = intersections.groupby("parcel_row_id", as_index=False).agg(flood_overlap_acres=("int_area_acres", "sum"))
+        flood_coverage = parcel_area_acres[["parcel_row_id", "parcel_area_acres"]].merge(flood_coverage, on="parcel_row_id", how="left")
+        flood_coverage["flood_overlap_acres"] = flood_coverage["flood_overlap_acres"].fillna(0.0).astype(float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        pct = np.where(
+            flood_coverage["parcel_area_acres"] > 0,
+            (flood_coverage["flood_overlap_acres"] / flood_coverage["parcel_area_acres"]) * 100.0,
+            0.0,
+        )
+    flood_coverage["flood_overlap_pct"] = np.clip(pct, 0.0, 100.0)
 
     grouped = (
         joined.groupby("parcel_row_id", as_index=False)
@@ -316,12 +341,18 @@ def process_chunk(
     best_zone = joined_sorted.drop_duplicates(subset=["parcel_row_id"])[["parcel_row_id", "flood_zone"]].copy()
     best_zone = best_zone.rename(columns={"flood_zone": "flood_zone_primary"})
 
-    out = out.merge(grouped, on="parcel_row_id", how="left").merge(best_zone, on="parcel_row_id", how="left")
+    out = out.merge(grouped, on="parcel_row_id", how="left").merge(best_zone, on="parcel_row_id", how="left").merge(
+        flood_coverage[["parcel_row_id", "flood_overlap_acres", "flood_overlap_pct"]],
+        on="parcel_row_id",
+        how="left",
+    )
     out["flood_zone_primary"] = out["flood_zone_primary"].fillna("UNKNOWN")
     out["flood_risk_score"] = out["flood_risk_score"].fillna(0).astype(int)
     out["flood_zone_list"] = out["flood_zone_list"].fillna("UNKNOWN")
     out["has_flood_overlap"] = out["has_flood_overlap"].fillna(False).astype(bool)
     out["sfha_overlap"] = out["sfha_overlap"].fillna(False).astype(bool)
+    out["flood_overlap_acres"] = out["flood_overlap_acres"].fillna(0.0).astype(float)
+    out["flood_overlap_pct"] = out["flood_overlap_pct"].fillna(0.0).astype(float)
     return out
 
 

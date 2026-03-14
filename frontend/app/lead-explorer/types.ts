@@ -65,6 +65,11 @@ export type LeadRecord = {
   road_access_tier: string | null;
   wetland_flag: boolean | null;
   flood_risk_score: number | null;
+  wetland_pct: number | null;
+  wetland_area_sqft: number | null;
+  flood_pct: number | null;
+  flood_area_sqft: number | null;
+  primary_fema_zone: string | null;
   mean_slope_pct: number | null;
   max_slope_pct: number | null;
   slope_class: string | null;

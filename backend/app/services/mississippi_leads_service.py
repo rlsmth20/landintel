@@ -53,6 +53,7 @@ EMBEDDED_SUMMARY_PATH = EMBEDDED_RUNTIME_DIR / "summary.json"
 EMBEDDED_PRESETS_PATH = EMBEDDED_RUNTIME_DIR / "presets.json"
 EMBEDDED_DEFAULT_LEADS_PATH = EMBEDDED_RUNTIME_DIR / "default_leads.json"
 EMBEDDED_DEFAULT_GEOMETRY_PATH = EMBEDDED_RUNTIME_DIR / "default_geometry.json"
+EMBEDDED_DETAIL_METRICS_PATH = EMBEDDED_RUNTIME_DIR / "parcel_detail_metrics.parquet"
 AI_MODEL_PARAMS_PATH = EMBEDDED_RUNTIME_DIR / "ai_building_presence_model_ms.json"
 PARCEL_MASTER_PATH = PROJECT_ROOT / "data" / "parcels" / "mississippi_parcels_master.parquet"
 OWNER_LEADS_PATH = PROJECT_ROOT / "data" / "parcels" / "mississippi_parcels_owner_leads.parquet"
@@ -131,6 +132,7 @@ PARCEL_TILE_MIN_ZOOM = 14
 MISSISSIPPI_TILE_BOUNDS = (-91.65, 30.15, -88.0, 35.1)
 tile_logger = logging.getLogger("parcel-tiles")
 DEFAULT_TILE_URL_TEMPLATE = "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+SQFT_PER_ACRE = 43560.0
 
 
 def _normalize_string(series: pd.Series | None, index: pd.Index | None = None) -> pd.Series:
@@ -160,6 +162,31 @@ def _to_float_series(frame: pd.DataFrame, column: str) -> pd.Series:
     return pd.to_numeric(frame[column], errors="coerce")
 
 
+def _coalesce_float_series(frame: pd.DataFrame, columns: list[str]) -> pd.Series:
+    result = pd.Series(np.nan, index=frame.index, dtype="float64")
+    for column in columns:
+        if column not in frame.columns:
+            continue
+        result = result.fillna(_to_float_series(frame, column))
+    return result
+
+
+def _rectangle_estimates(area_sqft: pd.Series, perimeter_ft: pd.Series) -> tuple[pd.Series, pd.Series, pd.Series]:
+    compactness = pd.Series(np.nan, index=area_sqft.index, dtype="float64")
+    valid = area_sqft.gt(0) & perimeter_ft.gt(0)
+    compactness.loc[valid] = ((4.0 * np.pi * area_sqft.loc[valid]) / np.square(perimeter_ft.loc[valid])).clip(0.0, 1.0)
+
+    semi_perimeter = perimeter_ft / 2.0
+    discriminant = np.square(semi_perimeter) - (4.0 * area_sqft)
+    discriminant = discriminant.where(discriminant.ge(0))
+    sqrt_disc = np.sqrt(discriminant)
+    frontage = ((semi_perimeter + sqrt_disc) / 2.0).where(valid)
+    width = ((semi_perimeter - sqrt_disc) / 2.0).where(valid)
+    frontage = frontage.where(frontage.gt(0))
+    width = width.where(width.gt(0))
+    return compactness, frontage, width
+
+
 def _vacancy_confidence_series(frame: pd.DataFrame) -> pd.Series:
     building_count = _to_float_series(frame, "building_count").fillna(0)
     building_area_total = _to_float_series(frame, "building_area_total").fillna(0)
@@ -176,20 +203,41 @@ def _vacancy_confidence_series(frame: pd.DataFrame) -> pd.Series:
 
 
 def _ensure_intelligence_fields(frame: pd.DataFrame) -> pd.DataFrame:
+    wetland_pct = _coalesce_float_series(frame, ["wetland_pct", "wetland_overlap_pct"])
+    wetland_overlap_acres = _to_float_series(frame, "wetland_overlap_acres")
+    wetland_area_sqft = _coalesce_float_series(frame, ["wetland_area_sqft"])
+    wetland_area_sqft = wetland_area_sqft.fillna(wetland_overlap_acres * SQFT_PER_ACRE)
+
+    flood_pct = _coalesce_float_series(frame, ["flood_pct", "flood_overlap_pct"])
+    flood_overlap_acres = _to_float_series(frame, "flood_overlap_acres")
+    flood_area_sqft = _coalesce_float_series(frame, ["flood_area_sqft"])
+    flood_area_sqft = flood_area_sqft.fillna(flood_overlap_acres * SQFT_PER_ACRE)
+
+    shape_area = _to_float_series(frame, "shape_area")
+    shape_length = _to_float_series(frame, "shape_length")
+    derived_compactness, derived_frontage, derived_width = _rectangle_estimates(shape_area, shape_length)
+
     numeric_defaults = {
         "assessed_total_value": _to_float_series(frame, "assessed_total_value"),
         "mean_slope_pct": _to_float_series(frame, "mean_slope_pct"),
         "max_slope_pct": _to_float_series(frame, "max_slope_pct"),
         "slope_score": _to_float_series(frame, "slope_score"),
         "elevation_mean_ft": _to_float_series(frame, "elevation_mean_ft"),
-        "shape_compactness": _to_float_series(frame, "shape_compactness"),
-        "parcel_frontage_ft_estimate": _to_float_series(frame, "parcel_frontage_ft_estimate"),
-        "parcel_width_ft_estimate": _to_float_series(frame, "parcel_width_ft_estimate"),
+        "shape_compactness": _coalesce_float_series(frame, ["shape_compactness"]).fillna(derived_compactness),
+        "parcel_frontage_ft_estimate": _coalesce_float_series(frame, ["parcel_frontage_ft_estimate"]).fillna(derived_frontage),
+        "parcel_width_ft_estimate": _coalesce_float_series(frame, ["parcel_width_ft_estimate"]).fillna(derived_width),
+        "wetland_pct": wetland_pct,
+        "wetland_area_sqft": wetland_area_sqft,
+        "flood_pct": flood_pct,
+        "flood_area_sqft": flood_area_sqft,
     }
     for column, series in numeric_defaults.items():
         frame[column] = series
 
     frame["slope_class"] = _normalize_string(frame.get("slope_class"), index=frame.index)
+    frame["primary_fema_zone"] = _normalize_string(frame.get("primary_fema_zone"), index=frame.index).fillna(
+        _normalize_string(frame.get("flood_zone_primary"), index=frame.index)
+    )
 
     if "county_vacant_flag" in frame.columns:
         county_vacant = frame["county_vacant_flag"].astype("boolean")
@@ -417,6 +465,25 @@ def _embedded_geometry_runtime_available() -> bool:
 def _embedded_geometry_dataset() -> ds.Dataset:
     partitioning = ds.partitioning(pa.schema([("county_name", pa.string())]))
     return ds.dataset(EMBEDDED_GEOMETRY_INDEX_ROOT, format="parquet", partitioning=partitioning)
+
+
+def _embedded_detail_metrics_runtime_available() -> bool:
+    return EMBEDDED_DETAIL_METRICS_PATH.exists()
+
+
+@lru_cache(maxsize=1)
+def _embedded_detail_metrics_dataset() -> ds.Dataset:
+    return ds.dataset(EMBEDDED_DETAIL_METRICS_PATH, format="parquet")
+
+
+def _lookup_embedded_detail_metrics(parcel_row_id: str) -> dict[str, Any]:
+    if not _embedded_detail_metrics_runtime_available():
+        return {}
+    table = _embedded_detail_metrics_dataset().to_table(filter=ds.field("parcel_row_id") == parcel_row_id)
+    if table.num_rows == 0:
+        return {}
+    row = table.to_pandas().iloc[0]
+    return {column: _serialize_scalar(row[column]) for column in row.index if column != "parcel_row_id" and pd.notna(row[column])}
 
 
 def _using_embedded_runtime() -> bool:
@@ -762,11 +829,18 @@ def load_base_frame() -> pd.DataFrame:
         "road_distance_ft",
         "road_access_tier",
         "wetland_flag",
+        "wetland_overlap_acres",
+        "wetland_overlap_pct",
         "flood_risk_score",
+        "flood_zone_primary",
+        "has_flood_overlap",
+        "sfha_overlap",
         "mean_slope_pct",
         "max_slope_pct",
         "slope_class",
         "slope_score",
+        "shape_length",
+        "shape_area",
         "buildability_score",
         "environment_score",
         "investment_score",
@@ -1355,6 +1429,7 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
             return None
         row = frame.iloc[0]
         payload = {column: _serialize_scalar(row[column]) for column in frame.columns if column not in {"latitude", "longitude"}}
+        payload.update(_lookup_embedded_detail_metrics(parcel_row_id))
         payload["geometry"] = _detail_geometry(parcel_row_id)
         if payload.get("ai_building_present_flag") is None:
             longitude = pd.to_numeric(row.get("longitude"), errors="coerce")
