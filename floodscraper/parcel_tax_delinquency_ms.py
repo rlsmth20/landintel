@@ -54,6 +54,11 @@ FINAL_COLUMNS = [
     "corporate_owner_flag", "owner_parcel_count", "owner_total_acres",
     "county_tax_source_configured_flag", "county_tax_source_loaded_flag",
     "county_tax_source_type", "county_tax_source_path", "tax_data_available_flag",
+    "delinquent_flag", "delinquent_amount", "delinquent_amount_bucket",
+    "delinquent_year", "tax_sale_date", "parcel_tax_status",
+    "county_tax_coverage_status", "county_tax_coverage_note",
+    "county_tax_coverage_reason", "tax_data_year", "tax_data_upload_date",
+    "tax_data_source", "delinquency_last_verified",
     "tax_delinquent_flag", "delinquent_year_count", "delinquent_tax_amount_total",
     "tax_sale_flag", "latest_delinquent_year", "most_severe_tax_status",
     "tax_record_count", "tax_source_name", "tax_distress_score",
@@ -207,9 +212,25 @@ def normalize_amount(series: pd.Series) -> pd.Series:
     return pd.to_numeric(cleaned, errors="coerce").astype("float64")
 
 
+def delinquent_amount_bucket(series: pd.Series) -> pd.Series:
+    amount = pd.to_numeric(series, errors="coerce")
+    bucket = pd.Series(pd.NA, index=series.index, dtype="string")
+    bucket.loc[amount.lt(1000)] = "<1k"
+    bucket.loc[amount.ge(1000) & amount.lt(5000)] = "1k-4.99k"
+    bucket.loc[amount.ge(5000) & amount.lt(25000)] = "5k-24.99k"
+    bucket.loc[amount.ge(25000)] = "25k+"
+    return bucket
+
+
 def normalize_date(series: pd.Series) -> pd.Series:
     dt = pd.to_datetime(series, errors="coerce")
     out = pd.Series(dt.dt.strftime("%Y-%m-%d"), index=series.index, dtype="string")
+    return out.mask(dt.isna(), pd.NA)
+
+
+def normalize_timestamp(series: pd.Series) -> pd.Series:
+    dt = pd.to_datetime(series, errors="coerce", utc=True)
+    out = pd.Series(dt.dt.strftime("%Y-%m-%dT%H:%M:%SZ"), index=series.index, dtype="string")
     return out.mask(dt.isna(), pd.NA)
 
 
@@ -243,6 +264,79 @@ def build_normalized_tax_frame(
             "tax_sale_date": sale_date,
             "record_source_path": pd.Series(source_path.relative_to(BASE_DIR).as_posix(), index=raw_frame.index, dtype="string"),
             "record_ingest_timestamp": pd.Series(processed_at, index=raw_frame.index, dtype="string"),
+        }
+    )
+
+
+def build_linked_tax_frame(
+    linked_frame: pd.DataFrame,
+    county_name: str,
+    entry: dict[str, object],
+    source_path: Path,
+) -> pd.DataFrame:
+    parcel_row_id = pd.Series(pd.NA, index=linked_frame.index, dtype="string")
+    for column in ["parcel_row_id", "parcel_row_id_master", "parcel_row_id_tax"]:
+        if column in linked_frame.columns:
+            parcel_row_id = parcel_row_id.fillna(linked_frame[column].astype("string"))
+    tax_status_raw = linked_frame["tax_status"].astype("string") if "tax_status" in linked_frame.columns else pd.Series(pd.NA, index=linked_frame.index, dtype="string")
+    normalized_status = normalize_tax_status(tax_status_raw.fillna(""))
+    delinquent_flag = (
+        linked_frame["delinquent_flag"].fillna(False).astype("boolean")
+        if "delinquent_flag" in linked_frame.columns
+        else pd.Series(False, index=linked_frame.index, dtype="boolean")
+    )
+    if "tax_delinquent_flag_standardized" in linked_frame.columns:
+        delinquent_flag = delinquent_flag.fillna(False) | linked_frame["tax_delinquent_flag_standardized"].fillna(False).astype("boolean")
+    delinquent_flag = delinquent_flag | normalized_status.isin(["delinquent", "tax_sale", "forfeited"])
+    delinquent_amount = (
+        normalize_amount(linked_frame["delinquent_amount"])
+        if "delinquent_amount" in linked_frame.columns
+        else pd.Series(np.nan, index=linked_frame.index, dtype="float64")
+    )
+    if "tax_balance_due" in linked_frame.columns:
+        delinquent_amount = delinquent_amount.fillna(normalize_amount(linked_frame["tax_balance_due"]))
+    if "tax_amount_due" in linked_frame.columns:
+        delinquent_amount = delinquent_amount.fillna(normalize_amount(linked_frame["tax_amount_due"]))
+    tax_year = normalize_year(linked_frame["tax_year"]) if "tax_year" in linked_frame.columns else pd.Series(pd.NA, index=linked_frame.index, dtype="Int64")
+    tax_sale_flag = (
+        linked_frame["tax_sale_flag"].fillna(False).astype("boolean")
+        if "tax_sale_flag" in linked_frame.columns
+        else pd.Series(False, index=linked_frame.index, dtype="boolean")
+    )
+    tax_sale_flag = tax_sale_flag | normalized_status.isin(["tax_sale", "forfeited"])
+    tax_sale_date = normalize_date(linked_frame["tax_sale_date"]) if "tax_sale_date" in linked_frame.columns else pd.Series(pd.NA, index=linked_frame.index, dtype="string")
+    loaded_at = normalize_timestamp(linked_frame["loaded_at"]) if "loaded_at" in linked_frame.columns else pd.Series(pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%SZ"), index=linked_frame.index, dtype="string")
+    source_name = (
+        linked_frame["source_name"].astype("string")
+        if "source_name" in linked_frame.columns
+        else pd.Series(entry.get("source_name"), index=linked_frame.index, dtype="string")
+    )
+    source_type = (
+        linked_frame["source_type"].astype("string")
+        if "source_type" in linked_frame.columns
+        else pd.Series(entry.get("source_type"), index=linked_frame.index, dtype="string")
+    )
+    return pd.DataFrame(
+        {
+            "parcel_row_id": parcel_row_id,
+            "state_code": pd.Series(STATE_ABBR, index=linked_frame.index, dtype="string"),
+            "county_name": pd.Series(county_name, index=linked_frame.index, dtype="string"),
+            "source_name": source_name,
+            "source_type": source_type,
+            "tax_status_raw": tax_status_raw,
+            "tax_status_normalized": normalized_status,
+            "tax_year": tax_year,
+            "delinquent_year": tax_year,
+            "delinquent_flag": delinquent_flag.astype("boolean"),
+            "delinquent_amount": delinquent_amount.astype("float64"),
+            "delinquent_amount_bucket": delinquent_amount_bucket(delinquent_amount),
+            "tax_sale_flag": tax_sale_flag.astype("boolean"),
+            "tax_sale_date": tax_sale_date,
+            "tax_data_year": tax_year,
+            "tax_data_upload_date": loaded_at,
+            "tax_data_source": source_name,
+            "delinquency_last_verified": loaded_at,
+            "record_source_path": pd.Series(source_path.relative_to(BASE_DIR).as_posix(), index=linked_frame.index, dtype="string"),
         }
     )
 
@@ -282,6 +376,69 @@ def aggregate_tax_frame(normalized: pd.DataFrame) -> pd.DataFrame:
     return grouped.drop(columns=["max_severity_rank"])
 
 
+def aggregate_linked_tax_frame(linked: pd.DataFrame) -> pd.DataFrame:
+    joinable = linked.loc[linked["parcel_row_id"].notna()].copy()
+    if joinable.empty:
+        return pd.DataFrame(
+            columns=[
+                "parcel_row_id",
+                "state_code",
+                "county_name",
+                "tax_data_available_flag",
+                "delinquent_flag",
+                "tax_delinquent_flag",
+                "delinquent_amount",
+                "delinquent_amount_bucket",
+                "delinquent_year",
+                "delinquent_year_count",
+                "delinquent_tax_amount_total",
+                "tax_sale_flag",
+                "tax_sale_date",
+                "latest_delinquent_year",
+                "most_severe_tax_status",
+                "tax_record_count",
+                "tax_source_name",
+                "tax_data_year",
+                "tax_data_upload_date",
+                "tax_data_source",
+                "delinquency_last_verified",
+            ]
+        )
+    joinable["severity_rank"] = joinable["tax_status_normalized"].map(SEVERITY_PRIORITY).fillna(0).astype(int)
+    delinquent_like = joinable["tax_status_normalized"].isin(["delinquent", "tax_sale", "forfeited"])
+    grouped = joinable.groupby(["parcel_row_id", "state_code", "county_name"], as_index=False).agg(
+        tax_data_available_flag=("parcel_row_id", lambda x: True),
+        delinquent_flag=("delinquent_flag", "max"),
+        delinquent_amount=("delinquent_amount", lambda x: float(pd.Series(x)[delinquent_like.loc[x.index]].fillna(0.0).sum())),
+        tax_sale_flag=("tax_sale_flag", "max"),
+        tax_sale_date=("tax_sale_date", "max"),
+        delinquent_year=("delinquent_year", lambda x: pd.Series(x)[delinquent_like.loc[x.index]].dropna().max() if pd.Series(x)[delinquent_like.loc[x.index]].notna().any() else pd.NA),
+        delinquent_year_count=("delinquent_year", lambda x: int(pd.Series(x)[delinquent_like.loc[x.index]].dropna().nunique())),
+        latest_delinquent_year=("delinquent_year", lambda x: pd.Series(x)[delinquent_like.loc[x.index]].dropna().max() if pd.Series(x)[delinquent_like.loc[x.index]].notna().any() else pd.NA),
+        tax_record_count=("parcel_row_id", "size"),
+        max_severity_rank=("severity_rank", "max"),
+        tax_source_name=("source_name", "first"),
+        tax_data_year=("tax_data_year", "max"),
+        tax_data_upload_date=("tax_data_upload_date", "max"),
+        tax_data_source=("tax_data_source", "first"),
+        delinquency_last_verified=("delinquency_last_verified", "max"),
+    )
+    inverse = {value: key for key, value in SEVERITY_PRIORITY.items()}
+    grouped["most_severe_tax_status"] = grouped["max_severity_rank"].map(inverse).fillna("unknown").astype("string")
+    grouped["tax_data_available_flag"] = grouped["tax_data_available_flag"].astype("boolean")
+    grouped["delinquent_flag"] = grouped["delinquent_flag"].fillna(False).astype("boolean")
+    grouped["tax_delinquent_flag"] = grouped["delinquent_flag"].copy()
+    grouped["tax_sale_flag"] = grouped["tax_sale_flag"].fillna(False).astype("boolean")
+    grouped["delinquent_amount"] = pd.to_numeric(grouped["delinquent_amount"], errors="coerce").round(2).astype("float64")
+    grouped["delinquent_amount_bucket"] = delinquent_amount_bucket(grouped["delinquent_amount"])
+    grouped["delinquent_tax_amount_total"] = grouped["delinquent_amount"].copy()
+    grouped["delinquent_year"] = pd.to_numeric(grouped["delinquent_year"], errors="coerce").astype("Int64")
+    grouped["delinquent_year_count"] = grouped["delinquent_year_count"].fillna(0).astype("int32")
+    grouped["latest_delinquent_year"] = pd.to_numeric(grouped["latest_delinquent_year"], errors="coerce").astype("Int64")
+    grouped["tax_record_count"] = grouped["tax_record_count"].fillna(0).astype("int32")
+    return grouped.drop(columns=["max_severity_rank"])
+
+
 def build_tax_distress_score(df: pd.DataFrame) -> pd.Series:
     score = (
         df["tax_delinquent_flag"].fillna(False).astype(bool).astype(int) * 2
@@ -311,30 +468,76 @@ def prepare_county_output(
     out["county_tax_source_type"] = pd.Series(entry.get("source_type") if entry else pd.NA, index=out.index, dtype="string")
     out["county_tax_source_path"] = pd.Series(source_path.relative_to(BASE_DIR).as_posix() if source_path else pd.NA, index=out.index, dtype="string")
     if aggregated is not None and not aggregated.empty:
-        out = out.merge(aggregated, on=["state_code", "county_name", "source_parcel_id_normalized"], how="left")
+        if "parcel_row_id" in aggregated.columns:
+            out = out.merge(aggregated, on=["parcel_row_id", "state_code", "county_name"], how="left")
+        else:
+            out = out.merge(aggregated, on=["state_code", "county_name", "source_parcel_id_normalized"], how="left")
     defaults = {
         "tax_data_available_flag": pd.Series(False, index=out.index, dtype="boolean"),
+        "delinquent_flag": pd.Series(False, index=out.index, dtype="boolean"),
         "tax_delinquent_flag": pd.Series(False, index=out.index, dtype="boolean"),
+        "delinquent_amount": pd.Series(np.nan, index=out.index, dtype="float64"),
+        "delinquent_amount_bucket": pd.Series(pd.NA, index=out.index, dtype="string"),
+        "delinquent_year": pd.Series(pd.NA, index=out.index, dtype="Int64"),
         "delinquent_year_count": pd.Series(0, index=out.index, dtype="int32"),
         "delinquent_tax_amount_total": pd.Series(0.0, index=out.index, dtype="float64"),
         "tax_sale_flag": pd.Series(False, index=out.index, dtype="boolean"),
+        "tax_sale_date": pd.Series(pd.NA, index=out.index, dtype="string"),
         "latest_delinquent_year": pd.Series(pd.NA, index=out.index, dtype="Int64"),
         "most_severe_tax_status": pd.Series("unknown", index=out.index, dtype="string"),
         "tax_record_count": pd.Series(0, index=out.index, dtype="int32"),
         "tax_source_name": pd.Series(pd.NA, index=out.index, dtype="string"),
+        "tax_data_year": pd.Series(pd.NA, index=out.index, dtype="Int64"),
+        "tax_data_upload_date": pd.Series(pd.NA, index=out.index, dtype="string"),
+        "tax_data_source": pd.Series(pd.NA, index=out.index, dtype="string"),
+        "delinquency_last_verified": pd.Series(pd.NA, index=out.index, dtype="string"),
     }
     for column, default in defaults.items():
         if column not in out.columns:
             out[column] = default
     out["tax_data_available_flag"] = out["tax_data_available_flag"].fillna(False).astype("boolean")
-    out["tax_delinquent_flag"] = out["tax_delinquent_flag"].fillna(False).astype("boolean")
+    out["delinquent_flag"] = out["delinquent_flag"].fillna(out["tax_delinquent_flag"]).fillna(False).astype("boolean")
+    out["tax_delinquent_flag"] = out["tax_delinquent_flag"].fillna(out["delinquent_flag"]).fillna(False).astype("boolean")
+    out["delinquent_amount"] = pd.to_numeric(out["delinquent_amount"], errors="coerce").astype("float64")
+    out["delinquent_amount_bucket"] = out["delinquent_amount_bucket"].astype("string")
+    out["delinquent_year"] = pd.to_numeric(out["delinquent_year"], errors="coerce").astype("Int64")
     out["delinquent_year_count"] = pd.to_numeric(out["delinquent_year_count"], errors="coerce").fillna(0).astype("int32")
     out["delinquent_tax_amount_total"] = pd.to_numeric(out["delinquent_tax_amount_total"], errors="coerce").fillna(0.0).round(2).astype("float64")
     out["tax_sale_flag"] = out["tax_sale_flag"].fillna(False).astype("boolean")
+    out["tax_sale_date"] = out["tax_sale_date"].astype("string")
     out["latest_delinquent_year"] = pd.to_numeric(out["latest_delinquent_year"], errors="coerce").astype("Int64")
     out["most_severe_tax_status"] = out["most_severe_tax_status"].fillna("unknown").astype("string")
     out["tax_record_count"] = pd.to_numeric(out["tax_record_count"], errors="coerce").fillna(0).astype("int32")
     out["tax_source_name"] = out["tax_source_name"].astype("string")
+    out["tax_data_year"] = pd.to_numeric(out["tax_data_year"], errors="coerce").astype("Int64")
+    out["tax_data_upload_date"] = normalize_timestamp(out["tax_data_upload_date"])
+    out["tax_data_source"] = out["tax_data_source"].astype("string").fillna(out["tax_source_name"])
+    out["delinquency_last_verified"] = normalize_timestamp(out["delinquency_last_verified"]).fillna(out["tax_data_upload_date"])
+    county_has_data = bool(out["tax_data_available_flag"].fillna(False).any())
+    county_latest_upload = pd.to_datetime(out["tax_data_upload_date"], errors="coerce", utc=True).max()
+    county_latest_year = pd.to_numeric(out["tax_data_year"], errors="coerce").max()
+    current_timestamp = pd.Timestamp.now("UTC")
+    stale = bool(pd.notna(county_latest_upload) and county_latest_upload < (current_timestamp - pd.Timedelta(days=365)))
+    if (not stale) and pd.notna(county_latest_year):
+        stale = bool(float(county_latest_year) < (current_timestamp.year - 1))
+    coverage_status = "missing"
+    coverage_note = "No county tax delinquency dataset is configured yet."
+    if entry is not None and not source_loaded:
+        coverage_note = "County tax source is configured but has not been loaded yet."
+    elif source_loaded and not county_has_data:
+        coverage_status = "partial"
+        coverage_note = "County tax source loaded, but no linked delinquency records were produced yet."
+    elif county_has_data:
+        coverage_status = "stale" if stale else "available"
+        coverage_note = "County tax delinquency coverage exists but appears stale." if stale else "County tax delinquency coverage is available."
+    out["county_tax_coverage_status"] = pd.Series(coverage_status, index=out.index, dtype="string")
+    out["county_tax_coverage_note"] = pd.Series(coverage_note, index=out.index, dtype="string")
+    out["county_tax_coverage_reason"] = out["county_tax_coverage_note"].copy()
+    out["parcel_tax_status"] = pd.Series("county coverage missing", index=out.index, dtype="string")
+    out.loc[out["county_tax_coverage_status"].eq("stale"), "parcel_tax_status"] = "county data stale"
+    out.loc[out["county_tax_coverage_status"].eq("partial"), "parcel_tax_status"] = "county coverage partial"
+    out.loc[out["county_tax_coverage_status"].eq("available"), "parcel_tax_status"] = "not delinquent"
+    out.loc[out["delinquent_flag"].fillna(False), "parcel_tax_status"] = "delinquent"
     out["tax_distress_score"] = build_tax_distress_score(out)
     out["distressed_owner_flag"] = (
         out["tax_delinquent_flag"].fillna(False).astype(bool)
@@ -466,6 +669,8 @@ def main() -> None:
         aggregated: pd.DataFrame | None = None
         source_loaded = False
 
+        ingest_mode = str(entry.get("ingest_mode", "")).strip().lower() if entry else ""
+
         if entry is None:
             status = "missing_registry"
             notes = "No county registry entry present."
@@ -477,12 +682,18 @@ def main() -> None:
             notes = f"Source file not found: {source_path.relative_to(BASE_DIR).as_posix()}"
         else:
             try:
-                raw_source = load_source_frame(str(entry.get("source_type", "")), source_path)
+                raw_source = load_source_frame("parquet" if ingest_mode == "linked_parquet" else str(entry.get("source_type", "")), source_path)
                 raw_record_count = len(raw_source)
-                normalized = build_normalized_tax_frame(raw_source, county_name, entry, source_path, processed_at)
-                normalized_record_count = int(normalized["source_parcel_id_normalized"].notna().sum())
-                normalized.to_parquet(normalized_part, index=False)
-                aggregated = aggregate_tax_frame(normalized)
+                if ingest_mode == "linked_parquet":
+                    normalized = build_linked_tax_frame(raw_source, county_name, entry, source_path)
+                    normalized_record_count = int(normalized["parcel_row_id"].notna().sum())
+                    normalized.to_parquet(normalized_part, index=False)
+                    aggregated = aggregate_linked_tax_frame(normalized)
+                else:
+                    normalized = build_normalized_tax_frame(raw_source, county_name, entry, source_path, processed_at)
+                    normalized_record_count = int(normalized["source_parcel_id_normalized"].notna().sum())
+                    normalized.to_parquet(normalized_part, index=False)
+                    aggregated = aggregate_tax_frame(normalized)
                 source_loaded = True
             except Exception as exc:
                 status = "load_error"

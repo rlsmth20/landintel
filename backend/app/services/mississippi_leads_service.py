@@ -392,6 +392,20 @@ def _merge_tax_freshness_sources(frame: pd.DataFrame) -> pd.DataFrame:
             "county_tax_source_type",
             "county_tax_source_path",
             "tax_data_available_flag",
+            "delinquent_flag",
+            "delinquent_amount",
+            "delinquent_amount_bucket",
+            "delinquent_year",
+            "tax_sale_flag",
+            "tax_sale_date",
+            "parcel_tax_status",
+            "county_tax_coverage_status",
+            "county_tax_coverage_note",
+            "county_tax_coverage_reason",
+            "tax_data_year",
+            "tax_data_upload_date",
+            "tax_data_source",
+            "delinquency_last_verified",
             "latest_delinquent_year",
             "tax_source_name",
         ]
@@ -433,6 +447,20 @@ def _lookup_tax_freshness_detail(parcel_row_id: str) -> dict[str, Any]:
             "county_tax_source_type",
             "county_tax_source_path",
             "tax_data_available_flag",
+            "delinquent_flag",
+            "delinquent_amount",
+            "delinquent_amount_bucket",
+            "delinquent_year",
+            "tax_sale_flag",
+            "tax_sale_date",
+            "parcel_tax_status",
+            "county_tax_coverage_status",
+            "county_tax_coverage_note",
+            "county_tax_coverage_reason",
+            "tax_data_year",
+            "tax_data_upload_date",
+            "tax_data_source",
+            "delinquency_last_verified",
             "latest_delinquent_year",
             "tax_source_name",
         ]
@@ -521,6 +549,7 @@ def _apply_tax_detail_defaults(payload: dict[str, Any]) -> None:
                 "missing": "county coverage missing",
             }.get(str(coverage_status), "county coverage missing")
     payload["county_tax_coverage_status"] = _serialize_scalar(coverage_status)
+    payload["county_tax_coverage_note"] = _serialize_scalar(payload.get("county_tax_coverage_note") or coverage_reason)
     payload["county_tax_coverage_reason"] = _serialize_scalar(coverage_reason)
     payload["parcel_tax_status"] = _serialize_scalar(parcel_tax_status)
 
@@ -579,6 +608,7 @@ def _apply_county_tax_coverage_fields(frame: pd.DataFrame) -> pd.DataFrame:
     status = status.mask(has_full_county_data, "available")
     status = status.mask((has_full_county_data | has_partial_data) & stale, "stale")
     reason = pd.Series("No county tax delinquency dataset is available yet.", index=frame.index, dtype="string")
+    reason = reason.mask(loaded & ~available, "County tax source loaded, but no linked delinquency records were produced yet.")
     reason = reason.mask(status.eq("partial"), "Only partial county tax delinquency coverage is currently available.")
     reason = reason.mask(status.eq("available"), "County tax delinquency coverage is available.")
     reason = reason.mask(status.eq("stale"), "County tax delinquency coverage exists but appears stale.")
@@ -591,6 +621,7 @@ def _apply_county_tax_coverage_fields(frame: pd.DataFrame) -> pd.DataFrame:
     frame["county_tax_source_loaded_flag"] = loaded
     frame["tax_data_available_flag"] = available
     frame["county_tax_coverage_status"] = status
+    frame["county_tax_coverage_note"] = reason
     frame["county_tax_coverage_reason"] = reason
     frame["parcel_tax_status"] = parcel_tax_status
     return frame

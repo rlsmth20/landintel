@@ -136,7 +136,21 @@ TAX_DISTRESS_COLUMNS = [
     "county_tax_source_type",
     "county_tax_source_path",
     "tax_data_available_flag",
+    "delinquent_flag",
+    "delinquent_amount",
+    "delinquent_amount_bucket",
+    "delinquent_year",
+    "tax_sale_flag",
+    "tax_sale_date",
     "latest_delinquent_year",
+    "parcel_tax_status",
+    "county_tax_coverage_status",
+    "county_tax_coverage_note",
+    "county_tax_coverage_reason",
+    "tax_data_year",
+    "tax_data_upload_date",
+    "tax_data_source",
+    "delinquency_last_verified",
     "tax_source_name",
 ]
 
@@ -279,9 +293,10 @@ def build_county_tax_coverage(frame: pd.DataFrame) -> pd.DataFrame:
         latest_tax_data_year=("tax_data_year", "max"),
     ).reset_index()
     uploaded = pd.to_datetime(grouped["latest_tax_data_upload_date"], errors="coerce", utc=True)
-    current_year = pd.Timestamp.utcnow().year
+    current_timestamp = pd.Timestamp.now("UTC")
+    current_year = current_timestamp.year
     stale_mask = (
-        uploaded.lt(pd.Timestamp.utcnow() - pd.Timedelta(days=365))
+        uploaded.lt(current_timestamp - pd.Timedelta(days=365))
         | pd.to_numeric(grouped["latest_tax_data_year"], errors="coerce").lt(current_year - 1).fillna(False)
     )
     has_full_county_data = grouped["county_tax_source_loaded_flag"].fillna(False) & grouped["tax_data_available_flag"].fillna(False)
@@ -291,9 +306,11 @@ def build_county_tax_coverage(frame: pd.DataFrame) -> pd.DataFrame:
     grouped.loc[has_full_county_data, "county_tax_coverage_status"] = "available"
     grouped.loc[(has_full_county_data | has_partial_data) & stale_mask, "county_tax_coverage_status"] = "stale"
     grouped["county_tax_coverage_reason"] = pd.Series("No county tax delinquency dataset is available yet.", index=grouped.index, dtype="string")
+    grouped.loc[grouped["county_tax_source_loaded_flag"].fillna(False) & ~grouped["tax_data_available_flag"].fillna(False), "county_tax_coverage_reason"] = "County tax source loaded, but no linked delinquency records were produced yet."
     grouped.loc[grouped["county_tax_coverage_status"].eq("partial"), "county_tax_coverage_reason"] = "Only partial county tax delinquency coverage is currently available."
     grouped.loc[grouped["county_tax_coverage_status"].eq("available"), "county_tax_coverage_reason"] = "County tax delinquency coverage is available."
     grouped.loc[grouped["county_tax_coverage_status"].eq("stale"), "county_tax_coverage_reason"] = "County tax delinquency coverage exists but appears stale."
+    grouped["county_tax_coverage_note"] = grouped["county_tax_coverage_reason"]
     return grouped
 
 
@@ -304,6 +321,12 @@ def apply_county_tax_coverage_fields(frame: pd.DataFrame) -> pd.DataFrame:
     frame["county_tax_source_loaded_flag"] = frame["county_tax_source_loaded_flag"].fillna(frame.get("county_tax_source_loaded_flag_county"))
     frame["tax_data_available_flag"] = frame["tax_data_available_flag"].fillna(frame.get("tax_data_available_flag_county"))
     frame["county_tax_coverage_status"] = normalize_string(frame.get("county_tax_coverage_status"), index=frame.index)
+    frame["county_tax_coverage_note"] = normalize_string(frame.get("county_tax_coverage_note"), index=frame.index).fillna(
+        normalize_string(frame.get("county_tax_coverage_reason"), index=frame.index)
+    )
+    frame["county_tax_coverage_reason"] = normalize_string(frame.get("county_tax_coverage_reason"), index=frame.index).fillna(
+        frame["county_tax_coverage_note"]
+    )
     frame["county_tax_coverage_reason"] = normalize_string(frame.get("county_tax_coverage_reason"), index=frame.index)
     frame["parcel_tax_status"] = pd.Series("county coverage missing", index=frame.index, dtype="string")
     frame.loc[frame["county_tax_coverage_status"].eq("stale"), "parcel_tax_status"] = "county data stale"
@@ -370,9 +393,14 @@ def build_detail_metrics_runtime(frame: pd.DataFrame) -> pd.DataFrame:
         "county_tax_source_loaded_flag",
         "tax_data_available_flag",
         "county_tax_coverage_status",
+        "county_tax_coverage_note",
         "county_tax_coverage_reason",
         "parcel_tax_status",
+        "delinquent_amount",
+        "delinquent_amount_bucket",
         "delinquent_year",
+        "tax_sale_flag",
+        "tax_sale_date",
         "tax_data_upload_date",
         "tax_data_year",
         "tax_data_source",

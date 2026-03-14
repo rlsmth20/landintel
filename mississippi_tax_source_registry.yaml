@@ -12,4 +12,34 @@ state: MS
 #     status_field: tax_status
 #     sale_date_field: sale_date
 
-counties: {}
+counties:
+  hinds:
+    ingest_mode: linked_parquet
+    source_type: direct_download_page
+    source_path: data/tax_linked/ms/hinds/hinds_linked_tax_records.parquet
+    source_name: hinds_tax_sale_files
+  jackson:
+    ingest_mode: linked_parquet
+    source_type: direct_download_page
+    source_path: data/tax_linked/ms/jackson/jackson_linked_tax_records.parquet
+    source_name: jackson_tax_sale_files
+  jasper:
+    ingest_mode: linked_parquet
+    source_type: direct_download_page
+    source_path: data/tax_linked/ms/jasper/jasper_linked_tax_records.parquet
+    source_name: jasper_delinquent_tax_pdfs
+  madison:
+    ingest_mode: linked_parquet
+    source_type: direct_download_page
+    source_path: data/tax_linked/ms/madison/madison_linked_tax_records.parquet
+    source_name: madison_tax_sale_parcel_information
+  pike:
+    ingest_mode: linked_parquet
+    source_type: free_direct_download
+    source_path: data/tax_linked/ms/pike/free_linked_tax_records.parquet
+    source_name: pike_tax_sale_list
+  warren:
+    ingest_mode: linked_parquet
+    source_type: direct_download_page
+    source_path: data/tax_linked/ms/warren/warren_linked_tax_records.parquet
+    source_name: warren_delinquent_taxes
