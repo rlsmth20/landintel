@@ -189,6 +189,17 @@ def _coalesce_float_series(frame: pd.DataFrame, columns: list[str]) -> pd.Series
     return result
 
 
+def _acreage_bucket(series: pd.Series) -> pd.Series:
+    acres = pd.to_numeric(series, errors="coerce")
+    bucket = pd.Series(pd.NA, index=series.index, dtype="string")
+    bucket.loc[acres.lt(1)] = "<1"
+    bucket.loc[acres.ge(1) & acres.lt(5)] = "1-4.99"
+    bucket.loc[acres.ge(5) & acres.lt(20)] = "5-19.99"
+    bucket.loc[acres.ge(20) & acres.lt(100)] = "20-99.99"
+    bucket.loc[acres.ge(100)] = "100+"
+    return bucket
+
+
 def _rectangle_estimates(area_sqft: pd.Series, perimeter_ft: pd.Series) -> tuple[pd.Series, pd.Series, pd.Series]:
     compactness = pd.Series(np.nan, index=area_sqft.index, dtype="float64")
     valid = area_sqft.gt(0) & perimeter_ft.gt(0)
@@ -258,6 +269,7 @@ def _ensure_intelligence_fields(frame: pd.DataFrame) -> pd.DataFrame:
     for column, series in numeric_defaults.items():
         frame[column] = series
 
+    frame["acreage_bucket"] = _normalize_string(frame.get("acreage_bucket"), index=frame.index).fillna(_acreage_bucket(_to_float_series(frame, "acreage")))
     frame["slope_class"] = _normalize_string(frame.get("slope_class"), index=frame.index)
     frame["primary_fema_zone"] = _normalize_string(frame.get("primary_fema_zone"), index=frame.index).fillna(
         _normalize_string(frame.get("flood_zone_primary"), index=frame.index)
@@ -317,6 +329,8 @@ def _ensure_intelligence_fields(frame: pd.DataFrame) -> pd.DataFrame:
         ai_building_present = pd.Series(pd.NA, index=frame.index, dtype="boolean")
     frame["county_vacant_flag"] = county_vacant
     frame["ai_building_present_flag"] = ai_building_present
+    frame["building_present_confidence"] = _to_float_series(frame, "building_present_confidence")
+    frame["building_presence_reason"] = _normalize_string(frame.get("building_presence_reason"), index=frame.index)
     frame["vacancy_confidence_score"] = _to_float_series(frame, "vacancy_confidence_score").fillna(_vacancy_confidence_series(frame))
     frame = _apply_county_tax_coverage_fields(frame)
     return frame
@@ -508,6 +522,17 @@ def _apply_tax_detail_defaults(payload: dict[str, Any]) -> None:
     payload["county_tax_coverage_status"] = _serialize_scalar(coverage_status)
     payload["county_tax_coverage_reason"] = _serialize_scalar(coverage_reason)
     payload["parcel_tax_status"] = _serialize_scalar(parcel_tax_status)
+
+
+def _stabilize_detail_payload(payload: dict[str, Any]) -> None:
+    acreage = _float_or_none(payload.get("acreage"))
+    acreage_bucket = payload.get("acreage_bucket")
+    if acreage_bucket is None and acreage is not None:
+        acreage_bucket = _serialize_scalar(_acreage_bucket(pd.Series([acreage])).iloc[0])
+    payload["acreage_bucket"] = acreage_bucket
+    payload["building_present_confidence"] = _float_or_none(payload.get("building_present_confidence"))
+    payload["building_presence_reason"] = _serialize_scalar(payload.get("building_presence_reason"))
+    payload["overall_vacancy_assessment"] = _serialize_scalar(payload.get("overall_vacancy_assessment"))
 
 
 def _apply_county_tax_coverage_fields(frame: pd.DataFrame) -> pd.DataFrame:
@@ -1928,6 +1953,7 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
                     payload.update(ai_payload)
         _apply_tax_detail_defaults(payload)
         _apply_vacancy_assessment(payload)
+        _stabilize_detail_payload(payload)
         return payload
 
     frame = load_base_frame()
@@ -1960,6 +1986,7 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
                 payload.update(ai_payload)
     _apply_tax_detail_defaults(payload)
     _apply_vacancy_assessment(payload)
+    _stabilize_detail_payload(payload)
     return payload
 
 

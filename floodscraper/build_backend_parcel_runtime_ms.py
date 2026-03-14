@@ -150,6 +150,17 @@ def coalesce_numeric(frame: pd.DataFrame, columns: list[str]) -> pd.Series:
     return result
 
 
+def acreage_bucket(series: pd.Series) -> pd.Series:
+    acres = pd.to_numeric(series, errors="coerce")
+    bucket = pd.Series(pd.NA, index=series.index, dtype="string")
+    bucket.loc[acres.lt(1)] = "<1"
+    bucket.loc[acres.ge(1) & acres.lt(5)] = "1-4.99"
+    bucket.loc[acres.ge(5) & acres.lt(20)] = "5-19.99"
+    bucket.loc[acres.ge(20) & acres.lt(100)] = "20-99.99"
+    bucket.loc[acres.ge(100)] = "100+"
+    return bucket
+
+
 def point_geometry_from_wkb(value: bytes | None) -> dict[str, object] | None:
     if not value:
         return None
@@ -354,6 +365,7 @@ def derive_shape_metrics(frame: pd.DataFrame) -> pd.DataFrame:
 def build_detail_metrics_runtime(frame: pd.DataFrame) -> pd.DataFrame:
     detail_columns = [
         "parcel_row_id",
+        "acreage_bucket",
         "county_tax_source_configured_flag",
         "county_tax_source_loaded_flag",
         "tax_data_available_flag",
@@ -388,6 +400,7 @@ def build_detail_metrics_runtime(frame: pd.DataFrame) -> pd.DataFrame:
 def build_runtime_frame() -> pd.DataFrame:
     parcels = pd.read_parquet(PARCEL_MASTER_PATH, columns=PARCEL_COLUMNS, engine="pyarrow")
     parcels["acreage"] = coalesce_numeric(parcels, ["total_acres", "parcel_area_acres", "gis_acres", "tax_acres"])
+    parcels["acreage_bucket"] = acreage_bucket(parcels["acreage"])
     parcels["land_use"] = parcels["land_use_raw"].astype("string").str.strip()
     parcels["assessed_total_value"] = pd.to_numeric(parcels["total_value"], errors="coerce")
     parcels["wetland_pct"] = pd.to_numeric(parcels.get("wetland_overlap_pct"), errors="coerce")
