@@ -191,12 +191,18 @@ def _vacancy_confidence_series(frame: pd.DataFrame) -> pd.Series:
     building_count = _to_float_series(frame, "building_count").fillna(0)
     building_area_total = _to_float_series(frame, "building_area_total").fillna(0)
     acreage = _to_float_series(frame, "acreage").fillna(0)
+    assessed_total_value = _to_float_series(frame, "assessed_total_value").fillna(0)
+    road_distance_ft = _to_float_series(frame, "road_distance_ft")
+    nearby_building_density = _to_float_series(frame, "nearby_building_density").fillna(0)
     parcel_vacant = frame.get("parcel_vacant_flag")
     vacant_mask = parcel_vacant.fillna(False) if parcel_vacant is not None else pd.Series(False, index=frame.index)
 
     confidence = pd.Series(45.0, index=frame.index, dtype="float64")
     confidence = confidence.mask(vacant_mask & building_count.eq(0) & building_area_total.le(0), 92.0)
     confidence = confidence.mask(vacant_mask & building_count.le(1) & building_area_total.le(750) & acreage.ge(1), 78.0)
+    confidence = confidence.mask(vacant_mask & assessed_total_value.ge(25000), 18.0)
+    confidence = confidence.mask(vacant_mask & assessed_total_value.ge(10000) & road_distance_ft.le(150).fillna(False), 28.0)
+    confidence = confidence.mask(vacant_mask & nearby_building_density.ge(120) & acreage.le(2), 35.0)
     confidence = confidence.mask(~vacant_mask & building_count.gt(0), 18.0)
     confidence = confidence.mask(~vacant_mask & building_area_total.gt(1500), 8.0)
     return confidence.clip(0, 100)
@@ -364,34 +370,102 @@ def _predict_ai_building_presence(
     }
 
 
+def _bool_or_none(value: Any) -> bool | None:
+    if value is None or pd.isna(value):
+        return None
+    return bool(value)
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value is None or pd.isna(value):
+        return None
+    try:
+        number = float(value)
+    except Exception:
+        return None
+    if not np.isfinite(number):
+        return None
+    return number
+
+
 def _apply_vacancy_assessment(payload: dict[str, Any]) -> None:
-    parcel_vacant_flag = payload.get("parcel_vacant_flag")
-    ai_building_present_flag = payload.get("ai_building_present_flag")
-    current_confidence = payload.get("vacancy_confidence_score")
-    confidence_value = float(current_confidence) if current_confidence is not None and pd.notna(current_confidence) else None
+    parcel_vacant_flag = _bool_or_none(payload.get("parcel_vacant_flag"))
+    ai_building_present_flag = _bool_or_none(payload.get("ai_building_present_flag"))
+    ai_probability = _float_or_none(payload.get("ai_building_present_probability"))
+    building_count = _float_or_none(payload.get("building_count")) or 0.0
+    building_area_total = _float_or_none(payload.get("building_area_total")) or 0.0
+    assessed_total_value = _float_or_none(payload.get("assessed_total_value")) or 0.0
+    road_distance_ft = _float_or_none(payload.get("road_distance_ft"))
+    nearby_building_density = _float_or_none(payload.get("nearby_building_density")) or 0.0
+    acreage = _float_or_none(payload.get("acreage")) or 0.0
 
-    if parcel_vacant_flag is True and ai_building_present_flag is True:
-        payload["overall_vacancy_assessment"] = "Likely improved - conflicting signals"
-        payload["vacancy_confidence_score"] = min(confidence_value if confidence_value is not None else 35.0, 35.0)
-        payload["vacant_reason"] = "Footprint logic marked the parcel vacant, but imagery detected a building. Treat as likely improved until reviewed."
-        return
-    if parcel_vacant_flag is True and ai_building_present_flag is False:
-        payload["overall_vacancy_assessment"] = "Likely vacant"
-        payload["vacant_reason"] = payload.get("vacant_reason") or "No mapped building footprints or imagery building signal detected."
-        return
-    if parcel_vacant_flag is False and ai_building_present_flag is True:
+    improved_evidence = 0.0
+    vacant_evidence = 0.0
+
+    if parcel_vacant_flag is True:
+        vacant_evidence += 42.0
+    elif parcel_vacant_flag is False:
+        improved_evidence += 18.0
+
+    if building_count >= 1:
+        improved_evidence += 55.0
+    if building_area_total >= 400:
+        improved_evidence += 45.0
+    elif building_area_total > 0:
+        improved_evidence += 18.0
+    if building_count <= 0 and building_area_total <= 0:
+        vacant_evidence += 18.0
+
+    if ai_probability is not None:
+        if ai_probability >= 0.8:
+            improved_evidence += 55.0
+        elif ai_probability >= 0.65:
+            improved_evidence += 40.0
+        elif ai_probability >= 0.5:
+            improved_evidence += 22.0
+        elif ai_probability <= 0.2:
+            vacant_evidence += 18.0
+        elif ai_probability <= 0.35:
+            vacant_evidence += 10.0
+    elif ai_building_present_flag is True:
+        improved_evidence += 32.0
+
+    if assessed_total_value >= 25000:
+        improved_evidence += 42.0
+    elif assessed_total_value >= 10000:
+        improved_evidence += 28.0
+    elif assessed_total_value >= 3000:
+        improved_evidence += 12.0
+    else:
+        vacant_evidence += 8.0
+
+    if road_distance_ft is not None and road_distance_ft <= 150:
+        improved_evidence += 8.0
+    if nearby_building_density >= 120 and acreage <= 5:
+        improved_evidence += 8.0
+    elif nearby_building_density <= 10 and acreage >= 5:
+        vacant_evidence += 6.0
+
+    vacancy_likelihood = float(np.clip(50.0 + vacant_evidence - improved_evidence, 0.0, 100.0))
+
+    if improved_evidence >= vacant_evidence + 25.0:
         payload["overall_vacancy_assessment"] = "Likely improved"
-        payload["vacancy_confidence_score"] = min(confidence_value if confidence_value is not None else 20.0, 25.0)
-        payload["vacant_reason"] = "Parcel data and imagery both indicate building presence."
-        return
-    if parcel_vacant_flag is False and ai_building_present_flag is False:
-        payload["overall_vacancy_assessment"] = "Review manually"
-        payload["vacant_reason"] = "Parcel data shows improvement, but imagery did not confirm building presence."
+        payload["vacancy_confidence_score"] = round(min(vacancy_likelihood, 25.0), 1)
+        payload["vacant_reason"] = "Improvement evidence outweighs vacancy signals based on parcel value, structure context, and imagery."
+        if parcel_vacant_flag is True:
+            payload["overall_vacancy_assessment"] = "Likely improved - conflicting signals"
+            payload["vacant_reason"] = "Footprint logic suggests vacancy, but assessed value, access, nearby context, or imagery point to an improved parcel."
         return
 
-    payload["overall_vacancy_assessment"] = "Footprint-only signal"
-    if payload.get("vacant_reason") is None:
-        payload["vacant_reason"] = "Vacancy status is currently based on parcel/building-footprint data only."
+    if vacant_evidence >= improved_evidence + 30.0 and assessed_total_value < 10000 and building_count <= 0 and building_area_total <= 0:
+        payload["overall_vacancy_assessment"] = "Likely vacant"
+        payload["vacancy_confidence_score"] = round(max(vacancy_likelihood, 70.0), 1)
+        payload["vacant_reason"] = "Vacancy signals are consistent across parcel footprints, limited improvement evidence, and available imagery."
+        return
+
+    payload["overall_vacancy_assessment"] = "Needs review"
+    payload["vacancy_confidence_score"] = round(float(np.clip(vacancy_likelihood, 35.0, 65.0)), 1)
+    payload["vacant_reason"] = "Signals conflict or are incomplete. Review imagery and local records before treating this parcel as vacant."
 
 
 def _coalesce_numeric(frame: pd.DataFrame, columns: list[str]) -> pd.Series:

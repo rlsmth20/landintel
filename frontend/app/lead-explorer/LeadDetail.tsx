@@ -50,7 +50,7 @@ export function LeadDetail({ lead }: { lead: LeadRecord }) {
       </DetailSection>
 
       <DetailSection title="Motivation Signals">
-        <DetailRow label="Vacant" value={formatBoolean(lead.parcel_vacant_flag)} />
+        <DetailRow label="Raw vacant flag" value={formatBoolean(lead.parcel_vacant_flag)} />
         <DetailRow label="Delinquent amount" value={formatCurrency(lead.delinquent_amount)} />
         <DetailRow label="Delinquent amount bucket" value={lead.delinquent_amount_bucket} />
         <DetailRow label="Delinquent flag" value={formatBoolean(lead.delinquent_flag)} />
@@ -62,7 +62,7 @@ export function LeadDetail({ lead }: { lead: LeadRecord }) {
         <DetailRow label="County vacant flag" value={formatBoolean(lead.county_vacant_flag)} />
         <DetailRow label="AI building-present signal" value={formatBoolean(lead.ai_building_present_flag)} />
         <DetailRow label="Overall vacancy assessment" value={lead.overall_vacancy_assessment} />
-        <DetailRow label="Vacancy confidence score" value={formatNumber(lead.vacancy_confidence_score, 1)} />
+        <DetailRow label="Vacancy likelihood score" value={formatNumber(lead.vacancy_confidence_score, 1)} />
         <DetailRow label="Vacant reason" value={lead.vacant_reason} />
       </DetailSection>
 
