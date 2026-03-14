@@ -2265,8 +2265,6 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
             return None
         row = frame.iloc[0]
         payload = {column: _serialize_scalar(row[column]) for column in frame.columns if column not in {"latitude", "longitude"}}
-        payload.update(_lookup_embedded_detail_metrics(parcel_row_id))
-        payload.update({key: value for key, value in _lookup_tax_freshness_detail(parcel_row_id).items() if payload.get(key) is None})
         payload["geometry"] = _detail_geometry(parcel_row_id)
         _maybe_apply_on_demand_ai(payload, row)
         _apply_tax_detail_defaults(payload)
