@@ -135,6 +135,7 @@ MISSISSIPPI_TILE_BOUNDS = (-91.65, 30.15, -88.0, 35.1)
 tile_logger = logging.getLogger("parcel-tiles")
 DEFAULT_TILE_URL_TEMPLATE = "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
 SQFT_PER_ACRE = 43560.0
+ENABLE_ON_DEMAND_AI_DETAIL = os.getenv("MISSISSIPPI_ENABLE_ON_DEMAND_AI_DETAIL", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _normalize_string(series: pd.Series | None, index: pd.Index | None = None) -> pd.Series:
@@ -533,6 +534,31 @@ def _stabilize_detail_payload(payload: dict[str, Any]) -> None:
     payload["building_present_confidence"] = _float_or_none(payload.get("building_present_confidence"))
     payload["building_presence_reason"] = _serialize_scalar(payload.get("building_presence_reason"))
     payload["overall_vacancy_assessment"] = _serialize_scalar(payload.get("overall_vacancy_assessment"))
+
+
+def _maybe_apply_on_demand_ai(payload: dict[str, Any], row: pd.Series) -> None:
+    if (not ENABLE_ON_DEMAND_AI_DETAIL) or payload.get("ai_building_present_flag") is not None:
+        return
+    longitude = pd.to_numeric(row.get("longitude"), errors="coerce")
+    latitude = pd.to_numeric(row.get("latitude"), errors="coerce")
+    if pd.isna(longitude) or pd.isna(latitude):
+        return
+    try:
+        ai_payload = _predict_ai_building_presence(
+            float(longitude),
+            float(latitude),
+            bool(payload.get("parcel_vacant_flag")),
+            pd.to_numeric(row.get("building_count"), errors="coerce"),
+            pd.to_numeric(row.get("building_area_total"), errors="coerce"),
+            pd.to_numeric(row.get("assessed_total_value"), errors="coerce"),
+            pd.to_numeric(row.get("road_distance_ft"), errors="coerce"),
+            pd.to_numeric(row.get("nearby_building_density"), errors="coerce"),
+            pd.to_numeric(row.get("acreage"), errors="coerce"),
+        )
+    except Exception:
+        ai_payload = None
+    if ai_payload:
+        payload.update(ai_payload)
 
 
 def _apply_county_tax_coverage_fields(frame: pd.DataFrame) -> pd.DataFrame:
@@ -1931,26 +1957,7 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
         payload.update(_lookup_embedded_detail_metrics(parcel_row_id))
         payload.update({key: value for key, value in _lookup_tax_freshness_detail(parcel_row_id).items() if payload.get(key) is None})
         payload["geometry"] = _detail_geometry(parcel_row_id)
-        if payload.get("ai_building_present_flag") is None:
-            longitude = pd.to_numeric(row.get("longitude"), errors="coerce")
-            latitude = pd.to_numeric(row.get("latitude"), errors="coerce")
-            if pd.notna(longitude) and pd.notna(latitude):
-                try:
-                    ai_payload = _predict_ai_building_presence(
-                        float(longitude),
-                        float(latitude),
-                        bool(payload.get("parcel_vacant_flag")),
-                        pd.to_numeric(row.get("building_count"), errors="coerce"),
-                        pd.to_numeric(row.get("building_area_total"), errors="coerce"),
-                        pd.to_numeric(row.get("assessed_total_value"), errors="coerce"),
-                        pd.to_numeric(row.get("road_distance_ft"), errors="coerce"),
-                        pd.to_numeric(row.get("nearby_building_density"), errors="coerce"),
-                        pd.to_numeric(row.get("acreage"), errors="coerce"),
-                    )
-                except Exception:
-                    ai_payload = None
-                if ai_payload:
-                    payload.update(ai_payload)
+        _maybe_apply_on_demand_ai(payload, row)
         _apply_tax_detail_defaults(payload)
         _apply_vacancy_assessment(payload)
         _stabilize_detail_payload(payload)
@@ -1964,26 +1971,7 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
     payload = {column: _serialize_scalar(row[column]) for column in frame.columns if column not in {"latitude", "longitude"}}
     payload.update({key: value for key, value in _lookup_tax_freshness_detail(parcel_row_id).items() if payload.get(key) is None})
     payload["geometry"] = _detail_geometry(parcel_row_id)
-    if payload.get("ai_building_present_flag") is None:
-        longitude = pd.to_numeric(row.get("longitude"), errors="coerce")
-        latitude = pd.to_numeric(row.get("latitude"), errors="coerce")
-        if pd.notna(longitude) and pd.notna(latitude):
-            try:
-                    ai_payload = _predict_ai_building_presence(
-                        float(longitude),
-                        float(latitude),
-                        bool(payload.get("parcel_vacant_flag")),
-                        pd.to_numeric(row.get("building_count"), errors="coerce"),
-                        pd.to_numeric(row.get("building_area_total"), errors="coerce"),
-                        pd.to_numeric(row.get("assessed_total_value"), errors="coerce"),
-                        pd.to_numeric(row.get("road_distance_ft"), errors="coerce"),
-                        pd.to_numeric(row.get("nearby_building_density"), errors="coerce"),
-                        pd.to_numeric(row.get("acreage"), errors="coerce"),
-                    )
-            except Exception:
-                ai_payload = None
-            if ai_payload:
-                payload.update(ai_payload)
+    _maybe_apply_on_demand_ai(payload, row)
     _apply_tax_detail_defaults(payload)
     _apply_vacancy_assessment(payload)
     _stabilize_detail_payload(payload)
