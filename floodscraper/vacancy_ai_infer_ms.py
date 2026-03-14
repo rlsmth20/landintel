@@ -11,8 +11,11 @@ from vacancy_ai_common import (
     MODEL_PATH,
     PREDICTIONS_PATH,
     combined_vacancy_confidence,
+    crop_specs_for_acreage,
     ensure_tile_image,
     extract_image_features,
+    imagery_context_signals,
+    load_tile_image,
     load_candidate_frame,
 )
 
@@ -52,10 +55,34 @@ def infer_predictions(
             refresh=refresh,
             template=tile_template,
         )
-        features = extract_image_features(image_path)
-        feature_frame = pd.DataFrame([{column: features[column] for column in columns}])
-        building_probability = float(pipeline.predict_proba(feature_frame)[0, 1])
-        ai_building_present_flag = building_probability >= 0.5
+        image = load_tile_image(image_path)
+        crop_predictions: list[dict[str, object]] = []
+        for crop_label, crop_box in crop_specs_for_acreage(row.get("acreage")):
+            features = extract_image_features(image, crop_box)
+            feature_frame = pd.DataFrame([{column: features[column] for column in columns}])
+            building_probability = float(pipeline.predict_proba(feature_frame)[0, 1])
+            crop_predictions.append(
+                {
+                    "crop_label": crop_label,
+                    "probability": building_probability,
+                    **imagery_context_signals(features),
+                }
+            )
+        best_crop = max(crop_predictions, key=lambda item: float(item["probability"]))
+        building_probability = float(best_crop["probability"])
+        building_present_confidence = round(
+            float(
+                min(
+                    100.0,
+                    (building_probability * 100.0 * 0.72)
+                    + (float(best_crop["imagery_driveway_signal"]) * 0.18)
+                    + (float(best_crop["imagery_clearing_signal"]) * 0.10),
+                )
+            ),
+            1,
+        )
+        ai_building_present_flag = building_present_confidence >= 60.0
+        building_presence_reason = f"Best crop {best_crop['crop_label']} with imagery confidence {building_present_confidence:.1f}."
         rows.append(
             {
                 "parcel_row_id": str(row["parcel_row_id"]),
@@ -65,8 +92,20 @@ def infer_predictions(
                 "tile_x": address.x,
                 "tile_y": address.y,
                 "ai_building_present_probability": round(building_probability, 6),
+                "building_present_confidence": building_present_confidence,
                 "ai_building_present_flag": ai_building_present_flag,
-                "vacancy_confidence_score": combined_vacancy_confidence(bool(row["parcel_vacant_flag"]), building_probability),
+                "building_presence_reason": building_presence_reason,
+                "imagery_crop_strategy": "multi_crop_v2",
+                "imagery_best_crop_label": str(best_crop["crop_label"]),
+                "imagery_crop_count": len(crop_predictions),
+                "imagery_driveway_signal": round(float(best_crop["imagery_driveway_signal"]), 1),
+                "imagery_clearing_signal": round(float(best_crop["imagery_clearing_signal"]), 1),
+                "parcel_boundary_crop_ready_flag": False,
+                "vacancy_confidence_score": combined_vacancy_confidence(
+                    bool(row["parcel_vacant_flag"]),
+                    building_probability,
+                    building_present_confidence,
+                ),
                 "vacancy_model_version": model_version,
                 "inference_timestamp": datetime.now(timezone.utc).isoformat(),
             }

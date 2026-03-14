@@ -28,7 +28,7 @@ TILE_CACHE_DIR = AI_DATA_DIR / "ai_building_tiles_ms"
 DEFAULT_TILE_URL_TEMPLATE = (
     "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
 )
-MODEL_VERSION = "ms_building_presence_v1"
+MODEL_VERSION = "ms_building_presence_v2_multi_crop"
 
 
 @dataclass
@@ -116,8 +116,39 @@ def ensure_tile_image(
     return path, address
 
 
-def extract_image_features(image_path: Path) -> dict[str, float]:
-    image = Image.open(image_path).convert("RGB").resize((128, 128))
+def load_tile_image(image_source: Path | Image.Image) -> Image.Image:
+    if isinstance(image_source, Image.Image):
+        return image_source.convert("RGB")
+    return Image.open(image_source).convert("RGB")
+
+
+def crop_specs_for_acreage(acreage: float | None) -> list[tuple[str, tuple[int, int, int, int]]]:
+    # Smaller, shifted crops help find off-center rural houses that disappear in full-tile scoring.
+    specs = [
+        ("tile_full", (0, 0, 256, 256)),
+        ("center_tight", (48, 48, 208, 208)),
+        ("northwest", (0, 0, 160, 160)),
+        ("northeast", (96, 0, 256, 160)),
+        ("southwest", (0, 96, 160, 256)),
+        ("southeast", (96, 96, 256, 256)),
+    ]
+    if acreage is not None and float(acreage) >= 5:
+        specs.extend(
+            [
+                ("north_center", (48, 0, 208, 160)),
+                ("south_center", (48, 96, 208, 256)),
+                ("west_center", (0, 48, 160, 208)),
+                ("east_center", (96, 48, 256, 208)),
+            ]
+        )
+    return specs
+
+
+def extract_image_features(image_source: Path | Image.Image, crop_box: tuple[int, int, int, int] | None = None) -> dict[str, float]:
+    image = load_tile_image(image_source)
+    if crop_box is not None:
+        image = image.crop(crop_box)
+    image = image.resize((128, 128))
     array = np.asarray(image, dtype=np.float32) / 255.0
     gray = array.mean(axis=2)
     flattened = array.reshape(-1, 3)
@@ -147,6 +178,32 @@ def extract_image_features(image_path: Path) -> dict[str, float]:
     return features
 
 
+def imagery_context_signals(features: dict[str, float]) -> dict[str, float]:
+    driveway_signal = float(
+        np.clip(
+            (features["roof_tone_pct"] * 120.0)
+            + (features["edge_density_total"] * 280.0)
+            + (features["dark_shadow_pct"] * 35.0)
+            - (max(features["green_excess"], 0.0) * 55.0),
+            0.0,
+            100.0,
+        )
+    )
+    clearing_signal = float(
+        np.clip(
+            ((features["r_mean"] + features["g_mean"] + features["b_mean"]) / 3.0 * 100.0)
+            + (features["roof_tone_pct"] * 40.0)
+            - (max(features["green_excess"], 0.0) * 45.0),
+            0.0,
+            100.0,
+        )
+    )
+    return {
+        "imagery_driveway_signal": driveway_signal,
+        "imagery_clearing_signal": clearing_signal,
+    }
+
+
 def feature_columns(frame: pd.DataFrame) -> list[str]:
     base_columns = {
         "parcel_row_id",
@@ -161,6 +218,15 @@ def feature_columns(frame: pd.DataFrame) -> list[str]:
         "tile_x",
         "tile_y",
         "model_version",
+        "imagery_crop_strategy",
+        "imagery_crop_label",
+        "imagery_best_crop_label",
+        "imagery_crop_count",
+        "parcel_boundary_crop_ready_flag",
+        "building_present_confidence",
+        "building_presence_reason",
+        "imagery_driveway_signal",
+        "imagery_clearing_signal",
         "ai_building_present_probability",
         "ai_building_present_flag",
         "vacancy_confidence_score",
@@ -169,10 +235,16 @@ def feature_columns(frame: pd.DataFrame) -> list[str]:
     return [column for column in frame.columns if column not in base_columns]
 
 
-def combined_vacancy_confidence(parcel_vacant_flag: bool, building_probability: float) -> float:
+def combined_vacancy_confidence(
+    parcel_vacant_flag: bool,
+    building_probability: float,
+    building_present_confidence: float | None = None,
+) -> float:
     footprint_vacancy_score = 92.0 if parcel_vacant_flag else 15.0
     imagery_vacancy_score = (1.0 - building_probability) * 100.0
-    return float(round((footprint_vacancy_score * 0.55) + (imagery_vacancy_score * 0.45), 2))
+    if building_present_confidence is not None:
+        imagery_vacancy_score = 100.0 - float(building_present_confidence)
+    return float(round((footprint_vacancy_score * 0.45) + (imagery_vacancy_score * 0.55), 2))
 
 
 def write_metrics(path: Path, metrics: dict[str, Any]) -> None:

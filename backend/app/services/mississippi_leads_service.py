@@ -265,7 +265,15 @@ def _merge_ai_predictions(frame: pd.DataFrame) -> pd.DataFrame:
     ai_columns = [
         "parcel_row_id",
         "ai_building_present_probability",
+        "building_present_confidence",
         "ai_building_present_flag",
+        "building_presence_reason",
+        "imagery_crop_strategy",
+        "imagery_best_crop_label",
+        "imagery_crop_count",
+        "imagery_driveway_signal",
+        "imagery_clearing_signal",
+        "parcel_boundary_crop_ready_flag",
         "vacancy_confidence_score",
         "vacancy_model_version",
     ]
@@ -328,12 +336,94 @@ def _ai_extract_image_features(image_bytes: bytes) -> dict[str, float]:
     return features
 
 
+def _ai_crop_specs(acreage: float | None) -> list[tuple[str, tuple[int, int, int, int]]]:
+    specs = [
+        ("tile_full", (0, 0, 256, 256)),
+        ("center_tight", (48, 48, 208, 208)),
+        ("northwest", (0, 0, 160, 160)),
+        ("northeast", (96, 0, 256, 160)),
+        ("southwest", (0, 96, 160, 256)),
+        ("southeast", (96, 96, 256, 256)),
+    ]
+    if acreage is not None and np.isfinite(acreage) and acreage >= 5:
+        specs.extend(
+            [
+                ("north_center", (48, 0, 208, 160)),
+                ("south_center", (48, 96, 208, 256)),
+                ("west_center", (0, 48, 160, 208)),
+                ("east_center", (96, 48, 256, 208)),
+            ]
+        )
+    return specs
+
+
+def _imagery_context_signals(features: dict[str, float]) -> dict[str, float]:
+    driveway_signal = float(
+        np.clip(
+            (features["roof_tone_pct"] * 120.0)
+            + (features["edge_density_total"] * 280.0)
+            + (features["dark_shadow_pct"] * 35.0)
+            - (max(features["green_excess"], 0.0) * 55.0),
+            0.0,
+            100.0,
+        )
+    )
+    clearing_signal = float(
+        np.clip(
+            (((features["r_mean"] + features["g_mean"] + features["b_mean"]) / 3.0) * 100.0)
+            + (features["roof_tone_pct"] * 40.0)
+            - (max(features["green_excess"], 0.0) * 45.0),
+            0.0,
+            100.0,
+        )
+    )
+    return {
+        "imagery_driveway_signal": driveway_signal,
+        "imagery_clearing_signal": clearing_signal,
+    }
+
+
+def _building_presence_confidence(
+    *,
+    probability: float,
+    building_count: float,
+    building_area_total: float,
+    assessed_total_value: float,
+    road_distance_ft: float | None,
+    nearby_building_density: float,
+    driveway_signal: float,
+    clearing_signal: float,
+) -> float:
+    confidence = probability * 100.0 * 0.68
+    confidence += driveway_signal * 0.14
+    confidence += clearing_signal * 0.08
+    if building_count >= 1:
+        confidence += 28.0
+    if building_area_total >= 400:
+        confidence += 24.0
+    elif building_area_total > 0:
+        confidence += 10.0
+    if assessed_total_value >= 25000:
+        confidence += 20.0
+    elif assessed_total_value >= 10000:
+        confidence += 12.0
+    if road_distance_ft is not None and np.isfinite(road_distance_ft) and road_distance_ft <= 150:
+        confidence += 8.0
+    if nearby_building_density >= 120:
+        confidence += 6.0
+    return float(np.clip(confidence, 0.0, 100.0))
+
+
 def _predict_ai_building_presence(
     longitude: float,
     latitude: float,
     parcel_vacant_flag: bool,
     building_count: float | None = None,
     building_area_total: float | None = None,
+    assessed_total_value: float | None = None,
+    road_distance_ft: float | None = None,
+    nearby_building_density: float | None = None,
+    acreage: float | None = None,
 ) -> dict[str, Any] | None:
     params = _ai_model_params()
     if params is None:
@@ -343,28 +433,64 @@ def _predict_ai_building_presence(
     url = DEFAULT_TILE_URL_TEMPLATE.format(z=zoom, x=tile_x, y=tile_y)
     response = requests.get(url, timeout=20)
     response.raise_for_status()
-    features = _ai_extract_image_features(response.content)
     feature_columns = params["feature_columns"]
     mean = np.asarray(params["scaler_mean"], dtype=np.float64)
     scale = np.asarray(params["scaler_scale"], dtype=np.float64)
     coef = np.asarray(params["coef"], dtype=np.float64)
     intercept = float(params["intercept"])
-    values = np.asarray([features[column] for column in feature_columns], dtype=np.float64)
-    scaled = (values - mean) / scale
-    logit = float(np.dot(scaled, coef) + intercept)
-    probability = 1.0 / (1.0 + np.exp(-logit))
+    tile_image = Image.open(io.BytesIO(response.content)).convert("RGB")
+    crop_predictions: list[dict[str, Any]] = []
+    for crop_label, crop_box in _ai_crop_specs(acreage):
+        crop_image = tile_image.crop(crop_box).resize((128, 128))
+        image_bytes = io.BytesIO()
+        crop_image.save(image_bytes, format="PNG")
+        features = _ai_extract_image_features(image_bytes.getvalue())
+        values = np.asarray([features[column] for column in feature_columns], dtype=np.float64)
+        scaled = (values - mean) / scale
+        logit = float(np.dot(scaled, coef) + intercept)
+        probability = 1.0 / (1.0 + np.exp(-logit))
+        crop_predictions.append(
+            {
+                "crop_label": crop_label,
+                "probability": probability,
+                **_imagery_context_signals(features),
+            }
+        )
+    best_crop = max(crop_predictions, key=lambda item: float(item["probability"]))
+    probability = float(best_crop["probability"])
     building_count_value = 0.0 if building_count is None or not np.isfinite(building_count) else float(building_count)
     building_area_value = 0.0 if building_area_total is None or not np.isfinite(building_area_total) else float(building_area_total)
+    assessed_value = 0.0 if assessed_total_value is None or not np.isfinite(assessed_total_value) else float(assessed_total_value)
+    nearby_density = 0.0 if nearby_building_density is None or not np.isfinite(nearby_building_density) else float(nearby_building_density)
+    building_present_confidence = _building_presence_confidence(
+        probability=probability,
+        building_count=building_count_value,
+        building_area_total=building_area_value,
+        assessed_total_value=assessed_value,
+        road_distance_ft=road_distance_ft,
+        nearby_building_density=nearby_density,
+        driveway_signal=float(best_crop["imagery_driveway_signal"]),
+        clearing_signal=float(best_crop["imagery_clearing_signal"]),
+    )
     if building_count_value >= 1 or building_area_value >= 400:
         probability = max(probability, 0.75)
-    threshold = float(params.get("classification_threshold", 0.5))
-    ai_building_present_flag = probability >= threshold
+        building_present_confidence = max(building_present_confidence, 80.0)
+    ai_building_present_flag = building_present_confidence >= 60.0
     footprint_vacancy_score = 92.0 if parcel_vacant_flag else 15.0
-    imagery_vacancy_score = (1.0 - probability) * 100.0
-    vacancy_confidence_score = round((footprint_vacancy_score * 0.55) + (imagery_vacancy_score * 0.45), 2)
+    imagery_vacancy_score = 100.0 - building_present_confidence
+    vacancy_confidence_score = round((footprint_vacancy_score * 0.45) + (imagery_vacancy_score * 0.55), 2)
+    building_presence_reason = f"Best imagery crop {best_crop['crop_label']} with confidence {building_present_confidence:.1f}."
     return {
         "ai_building_present_probability": round(probability, 6),
+        "building_present_confidence": round(building_present_confidence, 1),
         "ai_building_present_flag": bool(ai_building_present_flag),
+        "building_presence_reason": building_presence_reason,
+        "imagery_crop_strategy": "multi_crop_v2",
+        "imagery_best_crop_label": str(best_crop["crop_label"]),
+        "imagery_crop_count": len(crop_predictions),
+        "imagery_driveway_signal": round(float(best_crop["imagery_driveway_signal"]), 1),
+        "imagery_clearing_signal": round(float(best_crop["imagery_clearing_signal"]), 1),
+        "parcel_boundary_crop_ready_flag": False,
         "vacancy_confidence_score": vacancy_confidence_score,
         "vacancy_model_version": params.get("model_version"),
     }
@@ -392,6 +518,7 @@ def _apply_vacancy_assessment(payload: dict[str, Any]) -> None:
     parcel_vacant_flag = _bool_or_none(payload.get("parcel_vacant_flag"))
     ai_building_present_flag = _bool_or_none(payload.get("ai_building_present_flag"))
     ai_probability = _float_or_none(payload.get("ai_building_present_probability"))
+    building_present_confidence = _float_or_none(payload.get("building_present_confidence"))
     building_count = _float_or_none(payload.get("building_count")) or 0.0
     building_area_total = _float_or_none(payload.get("building_area_total")) or 0.0
     assessed_total_value = _float_or_none(payload.get("assessed_total_value")) or 0.0
@@ -416,7 +543,18 @@ def _apply_vacancy_assessment(payload: dict[str, Any]) -> None:
     if building_count <= 0 and building_area_total <= 0:
         vacant_evidence += 18.0
 
-    if ai_probability is not None:
+    if building_present_confidence is not None:
+        if building_present_confidence >= 80.0:
+            improved_evidence += 62.0
+        elif building_present_confidence >= 65.0:
+            improved_evidence += 44.0
+        elif building_present_confidence >= 50.0:
+            improved_evidence += 22.0
+        elif building_present_confidence <= 25.0:
+            vacant_evidence += 14.0
+        elif building_present_confidence <= 40.0:
+            vacant_evidence += 8.0
+    elif ai_probability is not None:
         if ai_probability >= 0.8:
             improved_evidence += 55.0
         elif ai_probability >= 0.65:
@@ -451,7 +589,7 @@ def _apply_vacancy_assessment(payload: dict[str, Any]) -> None:
     if improved_evidence >= vacant_evidence + 25.0:
         payload["overall_vacancy_assessment"] = "Likely improved"
         payload["vacancy_confidence_score"] = round(min(vacancy_likelihood, 25.0), 1)
-        payload["vacant_reason"] = "Improvement evidence outweighs vacancy signals based on parcel value, structure context, and imagery."
+        payload["vacant_reason"] = payload.get("building_presence_reason") or "Improvement evidence outweighs vacancy signals based on parcel value, structure context, and imagery."
         if parcel_vacant_flag is True:
             payload["overall_vacancy_assessment"] = "Likely improved - conflicting signals"
             payload["vacant_reason"] = "Footprint logic suggests vacancy, but assessed value, access, nearby context, or imagery point to an improved parcel."
@@ -1519,6 +1657,10 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
                         bool(payload.get("parcel_vacant_flag")),
                         pd.to_numeric(row.get("building_count"), errors="coerce"),
                         pd.to_numeric(row.get("building_area_total"), errors="coerce"),
+                        pd.to_numeric(row.get("assessed_total_value"), errors="coerce"),
+                        pd.to_numeric(row.get("road_distance_ft"), errors="coerce"),
+                        pd.to_numeric(row.get("nearby_building_density"), errors="coerce"),
+                        pd.to_numeric(row.get("acreage"), errors="coerce"),
                     )
                 except Exception:
                     ai_payload = None
@@ -1545,6 +1687,10 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
                         bool(payload.get("parcel_vacant_flag")),
                         pd.to_numeric(row.get("building_count"), errors="coerce"),
                         pd.to_numeric(row.get("building_area_total"), errors="coerce"),
+                        pd.to_numeric(row.get("assessed_total_value"), errors="coerce"),
+                        pd.to_numeric(row.get("road_distance_ft"), errors="coerce"),
+                        pd.to_numeric(row.get("nearby_building_density"), errors="coerce"),
+                        pd.to_numeric(row.get("acreage"), errors="coerce"),
                     )
             except Exception:
                 ai_payload = None

@@ -8,8 +8,10 @@ from vacancy_ai_common import (
     DEFAULT_TILE_URL_TEMPLATE,
     MODEL_VERSION,
     TRAINING_MANIFEST_PATH,
+    crop_specs_for_acreage,
     ensure_tile_image,
     extract_image_features,
+    load_tile_image,
     load_candidate_frame,
     weak_label_frame,
 )
@@ -21,6 +23,7 @@ def build_dataset(
     zoom: int,
     positive_limit: int,
     negative_limit: int,
+    crop_strategy: str,
     refresh: bool,
     tile_template: str,
 ) -> None:
@@ -40,7 +43,12 @@ def build_dataset(
             refresh=refresh,
             template=tile_template,
         )
-        features = extract_image_features(image_path)
+        image = load_tile_image(image_path)
+        if crop_strategy == "center_tight":
+            crop_label, crop_box = crop_specs_for_acreage(row.get("acreage"))[1]
+        else:
+            crop_label, crop_box = crop_specs_for_acreage(row.get("acreage"))[0]
+        features = extract_image_features(image, crop_box)
         rows.append(
             {
                 "parcel_row_id": str(row["parcel_row_id"]),
@@ -54,6 +62,9 @@ def build_dataset(
                 "imagery_zoom": zoom,
                 "tile_x": address.x,
                 "tile_y": address.y,
+                "imagery_crop_strategy": crop_strategy,
+                "imagery_crop_label": crop_label,
+                "parcel_boundary_crop_ready_flag": False,
                 "model_version": MODEL_VERSION,
                 **features,
             }
@@ -70,6 +81,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--zoom", type=int, default=19)
     parser.add_argument("--positive-limit", type=int, default=3000)
     parser.add_argument("--negative-limit", type=int, default=3000)
+    parser.add_argument("--crop-strategy", choices=["tile_full", "center_tight"], default="center_tight")
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--tile-template", default=DEFAULT_TILE_URL_TEMPLATE)
     return parser.parse_args()
@@ -82,6 +94,7 @@ if __name__ == "__main__":
         zoom=args.zoom,
         positive_limit=args.positive_limit,
         negative_limit=args.negative_limit,
+        crop_strategy=args.crop_strategy,
         refresh=args.refresh,
         tile_template=args.tile_template,
     )

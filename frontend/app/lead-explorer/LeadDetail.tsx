@@ -61,6 +61,8 @@ export function LeadDetail({ lead }: { lead: LeadRecord }) {
         <DetailRow label="Footprint vacant flag" value={formatBoolean(lead.parcel_vacant_flag)} />
         <DetailRow label="County vacant flag" value={formatBoolean(lead.county_vacant_flag)} />
         <DetailRow label="AI building-present signal" value={formatBoolean(lead.ai_building_present_flag)} />
+        <DetailRow label="Building-present confidence" value={formatNumber(lead.building_present_confidence, 1)} />
+        <DetailRow label="Building-presence reason" value={lead.building_presence_reason} />
         <DetailRow label="Overall vacancy assessment" value={lead.overall_vacancy_assessment} />
         <DetailRow label="Vacancy likelihood score" value={formatNumber(lead.vacancy_confidence_score, 1)} />
         <DetailRow label="Vacant reason" value={lead.vacant_reason} />

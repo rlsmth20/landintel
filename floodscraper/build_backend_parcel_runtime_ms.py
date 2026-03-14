@@ -266,7 +266,15 @@ def build_runtime_frame() -> pd.DataFrame:
         ai_columns = [
             "parcel_row_id",
             "ai_building_present_probability",
+            "building_present_confidence",
             "ai_building_present_flag",
+            "building_presence_reason",
+            "imagery_crop_strategy",
+            "imagery_best_crop_label",
+            "imagery_crop_count",
+            "imagery_driveway_signal",
+            "imagery_clearing_signal",
+            "parcel_boundary_crop_ready_flag",
             "vacancy_confidence_score",
             "vacancy_model_version",
         ]
