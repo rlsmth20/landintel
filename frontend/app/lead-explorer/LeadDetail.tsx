@@ -3,6 +3,14 @@
 import type { LeadRecord } from "./types";
 import { badgeTone, formatBoolean, formatCurrency, formatNumber } from "./utils";
 
+function formatDateValue(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString();
+}
+
 function LeadBadge({ label, tone }: { label: string; tone?: string }) {
   return <span className={`badge badge-${tone ?? "neutral"}`}>{label}</span>;
 }
@@ -52,8 +60,13 @@ export function LeadDetail({ lead }: { lead: LeadRecord }) {
       <DetailSection title="Motivation Signals">
         <DetailRow label="Raw vacant flag" value={formatBoolean(lead.parcel_vacant_flag)} />
         <DetailRow label="Delinquent amount" value={formatCurrency(lead.delinquent_amount)} />
+        <DetailRow label="Delinquent year" value={formatNumber(lead.delinquent_year)} />
         <DetailRow label="Delinquent amount bucket" value={lead.delinquent_amount_bucket} />
         <DetailRow label="Delinquent flag" value={formatBoolean(lead.delinquent_flag)} />
+        <DetailRow label="Tax data year" value={formatNumber(lead.tax_data_year)} />
+        <DetailRow label="Tax data upload date" value={formatDateValue(lead.tax_data_upload_date)} />
+        <DetailRow label="Tax data source" value={lead.tax_data_source} />
+        <DetailRow label="Delinquency last verified" value={formatDateValue(lead.delinquency_last_verified)} />
         <DetailRow label="Forfeited flag" value={formatBoolean(lead.forfeited_flag)} />
       </DetailSection>
 

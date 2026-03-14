@@ -60,6 +60,8 @@ OWNER_LEADS_PATH = PROJECT_ROOT / "data" / "parcels" / "mississippi_parcels_owne
 BUILDING_METRICS_PATH = PROJECT_ROOT / "data" / "buildings_processed" / "parcel_building_metrics.parquet"
 AI_BUILDING_PREDICTIONS_PATH = PROJECT_ROOT / "data" / "buildings_processed" / "ai_building_presence_predictions_ms.parquet"
 LEAD_SIGNALS_PATH = PROJECT_ROOT / "data" / "tax_published" / "ms" / "app_ready_mississippi_leads.parquet"
+DELINQUENT_LEADS_STATEWIDE_PATH = PROJECT_ROOT / "data" / "tax_published" / "ms" / "delinquent_leads_statewide.parquet"
+TAX_DISTRESS_PATH = PROJECT_ROOT / "data" / "parcels" / "mississippi_parcels_tax_distress.parquet"
 EMBEDDED_LEAD_SIGNALS_PATH = EMBEDDED_RUNTIME_DIR / "app_ready_mississippi_leads.parquet"
 
 SUMMARY_FIELDS = [
@@ -141,6 +143,22 @@ def _normalize_string(series: pd.Series | None, index: pd.Index | None = None) -
             return pd.Series(dtype="string")
         return pd.Series(pd.NA, index=index, dtype="string")
     return series.astype("string").str.strip().replace({"": pd.NA, "nan": pd.NA, "None": pd.NA})
+
+
+def _normalize_timestamp_string(series: pd.Series | None, index: pd.Index | None = None) -> pd.Series:
+    normalized = _normalize_string(series, index=index)
+    if normalized.empty:
+        return normalized
+    parsed = pd.to_datetime(normalized, errors="coerce", utc=True)
+    formatted = parsed.dt.strftime("%Y-%m-%dT%H:%M:%SZ").astype("string")
+    return formatted.where(parsed.notna(), normalized)
+
+
+def _default_tax_upload_date() -> str | None:
+    source_path = DELINQUENT_LEADS_STATEWIDE_PATH if DELINQUENT_LEADS_STATEWIDE_PATH.exists() else LEAD_SIGNALS_PATH
+    if not source_path.exists():
+        return None
+    return pd.Timestamp(source_path.stat().st_mtime, unit="s", tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _serialize_scalar(value: Any) -> Any:
@@ -244,6 +262,50 @@ def _ensure_intelligence_fields(frame: pd.DataFrame) -> pd.DataFrame:
     frame["primary_fema_zone"] = _normalize_string(frame.get("primary_fema_zone"), index=frame.index).fillna(
         _normalize_string(frame.get("flood_zone_primary"), index=frame.index)
     )
+    tax_year = pd.to_numeric(frame["tax_year"], errors="coerce").astype("Int64") if "tax_year" in frame.columns else pd.Series(pd.NA, index=frame.index, dtype="Int64")
+    latest_delinquent_year = (
+        pd.to_numeric(frame["latest_delinquent_year"], errors="coerce").astype("Int64")
+        if "latest_delinquent_year" in frame.columns
+        else pd.Series(pd.NA, index=frame.index, dtype="Int64")
+    )
+    if "latest_delinquent_year_taxdistress" in frame.columns:
+        latest_delinquent_year = latest_delinquent_year.fillna(
+            pd.to_numeric(frame.get("latest_delinquent_year_taxdistress"), errors="coerce").astype("Int64")
+        )
+    tax_upload_date = _normalize_timestamp_string(frame.get("tax_data_upload_date"), index=frame.index)
+    tax_upload_date = tax_upload_date.fillna(_normalize_timestamp_string(frame.get("latest_loaded_at"), index=frame.index))
+    tax_available_mask = (
+        frame.get("delinquent_flag", pd.Series(False, index=frame.index)).fillna(False)
+        | frame.get("tax_data_available_flag", pd.Series(False, index=frame.index)).fillna(False)
+        | frame.get("county_tax_source_loaded_flag", pd.Series(False, index=frame.index)).fillna(False)
+    )
+    default_upload_date = _default_tax_upload_date()
+    if default_upload_date:
+        tax_upload_date = tax_upload_date.where(
+            tax_upload_date.notna(),
+            pd.Series(np.where(tax_available_mask, default_upload_date, pd.NA), index=frame.index, dtype="object"),
+        )
+    tax_data_source = _normalize_string(frame.get("tax_data_source"), index=frame.index)
+    tax_data_source = tax_data_source.fillna(_normalize_string(frame.get("tax_source_name"), index=frame.index))
+    tax_data_source = tax_data_source.fillna(_normalize_string(frame.get("best_source_name_delinq"), index=frame.index))
+    tax_data_source = tax_data_source.fillna(_normalize_string(frame.get("best_source_name"), index=frame.index))
+    tax_data_source = tax_data_source.fillna(_normalize_string(frame.get("county_tax_source_type"), index=frame.index))
+    tax_data_source = tax_data_source.where(tax_available_mask, pd.NA)
+    delinquent_year = (
+        pd.to_numeric(frame["delinquent_year"], errors="coerce").astype("Int64")
+        if "delinquent_year" in frame.columns
+        else pd.Series(pd.NA, index=frame.index, dtype="Int64")
+    )
+    tax_data_year = (
+        pd.to_numeric(frame["tax_data_year"], errors="coerce").astype("Int64")
+        if "tax_data_year" in frame.columns
+        else pd.Series(pd.NA, index=frame.index, dtype="Int64")
+    )
+    frame["delinquent_year"] = delinquent_year.fillna(latest_delinquent_year).fillna(tax_year)
+    frame["tax_data_year"] = tax_data_year.fillna(tax_year).fillna(latest_delinquent_year)
+    frame["tax_data_upload_date"] = tax_upload_date
+    frame["tax_data_source"] = tax_data_source
+    frame["delinquency_last_verified"] = _normalize_timestamp_string(frame.get("delinquency_last_verified"), index=frame.index).fillna(tax_upload_date)
 
     if "county_vacant_flag" in frame.columns:
         county_vacant = frame["county_vacant_flag"].astype("boolean")
@@ -287,6 +349,124 @@ def _merge_ai_predictions(frame: pd.DataFrame) -> pd.DataFrame:
     ai_predictions = pd.read_parquet(AI_BUILDING_PREDICTIONS_PATH, columns=available_columns, engine="pyarrow")
     ai_predictions["parcel_row_id"] = _normalize_string(ai_predictions.get("parcel_row_id"), index=ai_predictions.index)
     return frame.merge(ai_predictions, on="parcel_row_id", how="left")
+
+
+def _merge_tax_freshness_sources(frame: pd.DataFrame) -> pd.DataFrame:
+    if "parcel_row_id" not in frame.columns:
+        return frame
+    merged = frame.copy()
+    if DELINQUENT_LEADS_STATEWIDE_PATH.exists():
+        lead_columns = [
+            "parcel_row_id",
+            "tax_year",
+            "latest_delinquent_year",
+            "latest_loaded_at",
+            "best_source_name",
+            "best_source_file_path",
+        ]
+        available = [column for column in lead_columns if column in ds.dataset(DELINQUENT_LEADS_STATEWIDE_PATH, format="parquet").schema.names]
+        if "parcel_row_id" in available:
+            delinquent_leads = pd.read_parquet(DELINQUENT_LEADS_STATEWIDE_PATH, columns=available, engine="pyarrow")
+            merged = merged.merge(delinquent_leads, on="parcel_row_id", how="left", suffixes=("", "_delinq"))
+    if TAX_DISTRESS_PATH.exists():
+        distress_columns = [
+            "parcel_row_id",
+            "county_tax_source_configured_flag",
+            "county_tax_source_loaded_flag",
+            "county_tax_source_type",
+            "county_tax_source_path",
+            "tax_data_available_flag",
+            "latest_delinquent_year",
+            "tax_source_name",
+        ]
+        available = [column for column in distress_columns if column in ds.dataset(TAX_DISTRESS_PATH, format="parquet").schema.names]
+        if "parcel_row_id" in available:
+            tax_distress = pd.read_parquet(TAX_DISTRESS_PATH, columns=available, engine="pyarrow")
+            merged = merged.merge(tax_distress, on="parcel_row_id", how="left", suffixes=("", "_taxdistress"))
+    return merged
+
+
+def _lookup_tax_freshness_detail(parcel_row_id: str) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    if DELINQUENT_LEADS_STATEWIDE_PATH.exists():
+        lead_columns = [
+            "parcel_row_id",
+            "tax_year",
+            "latest_delinquent_year",
+            "latest_loaded_at",
+            "best_source_name",
+            "best_source_file_path",
+        ]
+        try:
+            row = pd.read_parquet(
+                DELINQUENT_LEADS_STATEWIDE_PATH,
+                columns=lead_columns,
+                filters=[("parcel_row_id", "==", parcel_row_id)],
+                engine="pyarrow",
+            )
+        except Exception:
+            row = pd.DataFrame()
+        if not row.empty:
+            record = row.iloc[0]
+            payload.update({column: _serialize_scalar(record[column]) for column in row.columns if column != "parcel_row_id"})
+    if TAX_DISTRESS_PATH.exists():
+        distress_columns = [
+            "parcel_row_id",
+            "county_tax_source_configured_flag",
+            "county_tax_source_loaded_flag",
+            "county_tax_source_type",
+            "county_tax_source_path",
+            "tax_data_available_flag",
+            "latest_delinquent_year",
+            "tax_source_name",
+        ]
+        try:
+            row = pd.read_parquet(
+                TAX_DISTRESS_PATH,
+                columns=distress_columns,
+                filters=[("parcel_row_id", "==", parcel_row_id)],
+                engine="pyarrow",
+            )
+        except Exception:
+            row = pd.DataFrame()
+        if not row.empty:
+            record = row.iloc[0]
+            for column in row.columns:
+                if column != "parcel_row_id" and payload.get(column) is None:
+                    payload[column] = _serialize_scalar(record[column])
+    return payload
+
+
+def _apply_tax_detail_defaults(payload: dict[str, Any]) -> None:
+    delinquent_year = payload.get("delinquent_year")
+    if delinquent_year is None:
+        delinquent_year = payload.get("latest_delinquent_year")
+    if delinquent_year is None:
+        delinquent_year = payload.get("tax_year")
+    tax_data_year = payload.get("tax_data_year")
+    if tax_data_year is None:
+        tax_data_year = payload.get("tax_year")
+    if tax_data_year is None:
+        tax_data_year = payload.get("latest_delinquent_year")
+    has_tax_data = bool(
+        payload.get("delinquent_flag")
+        or payload.get("tax_data_available_flag")
+        or payload.get("county_tax_source_loaded_flag")
+    )
+    upload_date = payload.get("tax_data_upload_date") or payload.get("latest_loaded_at") or (_default_tax_upload_date() if has_tax_data else None)
+    if upload_date is not None:
+        upload_date = _serialize_scalar(_normalize_timestamp_string(pd.Series([upload_date])).iloc[0])
+    tax_data_source = (
+        payload.get("tax_data_source")
+        or payload.get("tax_source_name")
+        or (payload.get("best_source_name") if has_tax_data else None)
+        or (payload.get("county_tax_source_type") if has_tax_data else None)
+    )
+    payload["delinquent_year"] = _serialize_scalar(delinquent_year)
+    payload["tax_data_year"] = _serialize_scalar(tax_data_year)
+    payload["tax_data_upload_date"] = upload_date
+    payload["tax_data_source"] = _serialize_scalar(tax_data_source)
+    payload["delinquency_last_verified"] = _serialize_scalar(payload.get("delinquency_last_verified") or upload_date)
 
 
 @lru_cache(maxsize=1)
@@ -966,6 +1146,7 @@ def load_base_frame() -> pd.DataFrame:
 
     if not _full_runtime_available() and _embedded_parcel_runtime_available():
         frame = ds.dataset(EMBEDDED_PARCEL_INDEX_ROOT, format="parquet").to_table().to_pandas()
+        frame = _merge_tax_freshness_sources(frame)
         frame["county_hosted_flag"] = frame["county_hosted_flag"].fillna(_county_hosted_flag(frame.get("best_source_type")))
         frame["parcel_vacant_flag"] = frame["parcel_vacant_flag"].fillna(False)
         frame["corporate_owner_flag"] = frame["corporate_owner_flag"].fillna(False)
@@ -996,6 +1177,7 @@ def load_base_frame() -> pd.DataFrame:
             frame = pd.read_parquet(parquet_path, engine="pyarrow").copy()
         except Exception:
             frame = _load_static_feed_frame()
+        frame = _merge_tax_freshness_sources(frame)
         frame["acreage"] = _to_float_series(frame, "acreage")
         frame["land_use"] = _normalize_string(frame.get("land_use"), index=frame.index)
         frame["assessed_total_value"] = _to_float_series(frame, "assessed_total_value")
@@ -1141,6 +1323,7 @@ def load_base_frame() -> pd.DataFrame:
     frame = parcels.merge(owners, on="parcel_row_id", how="left")
     frame = frame.merge(buildings, on="parcel_row_id", how="left")
     frame = frame.merge(signals, on="parcel_row_id", how="left")
+    frame = _merge_tax_freshness_sources(frame)
 
     frame["parcel_vacant_flag"] = frame["parcel_vacant_flag"].fillna(False)
     frame["corporate_owner_flag"] = frame["corporate_owner_flag"].fillna(False)
@@ -1645,6 +1828,7 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
         row = frame.iloc[0]
         payload = {column: _serialize_scalar(row[column]) for column in frame.columns if column not in {"latitude", "longitude"}}
         payload.update(_lookup_embedded_detail_metrics(parcel_row_id))
+        payload.update({key: value for key, value in _lookup_tax_freshness_detail(parcel_row_id).items() if payload.get(key) is None})
         payload["geometry"] = _detail_geometry(parcel_row_id)
         if payload.get("ai_building_present_flag") is None:
             longitude = pd.to_numeric(row.get("longitude"), errors="coerce")
@@ -1666,6 +1850,7 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
                     ai_payload = None
                 if ai_payload:
                     payload.update(ai_payload)
+        _apply_tax_detail_defaults(payload)
         _apply_vacancy_assessment(payload)
         return payload
 
@@ -1675,6 +1860,7 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
         return None
     row = match.iloc[0]
     payload = {column: _serialize_scalar(row[column]) for column in frame.columns if column not in {"latitude", "longitude"}}
+    payload.update({key: value for key, value in _lookup_tax_freshness_detail(parcel_row_id).items() if payload.get(key) is None})
     payload["geometry"] = _detail_geometry(parcel_row_id)
     if payload.get("ai_building_present_flag") is None:
         longitude = pd.to_numeric(row.get("longitude"), errors="coerce")
@@ -1696,6 +1882,7 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
                 ai_payload = None
             if ai_payload:
                 payload.update(ai_payload)
+    _apply_tax_detail_defaults(payload)
     _apply_vacancy_assessment(payload)
     return payload
 

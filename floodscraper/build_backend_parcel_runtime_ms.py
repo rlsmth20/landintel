@@ -16,6 +16,8 @@ OWNER_LEADS_PATH = ROOT / "data" / "parcels" / "mississippi_parcels_owner_leads.
 BUILDING_METRICS_PATH = ROOT / "data" / "buildings_processed" / "parcel_building_metrics.parquet"
 AI_BUILDING_PREDICTIONS_PATH = ROOT / "data" / "buildings_processed" / "ai_building_presence_predictions_ms.parquet"
 LEAD_SIGNALS_PATH = ROOT / "data" / "tax_published" / "ms" / "app_ready_mississippi_leads.parquet"
+DELINQUENT_LEADS_PATH = ROOT / "data" / "tax_published" / "ms" / "delinquent_leads_statewide.parquet"
+TAX_DISTRESS_PATH = ROOT / "data" / "parcels" / "mississippi_parcels_tax_distress.parquet"
 OUTPUT_ROOT = ROOT / "backend" / "runtime" / "mississippi" / "parcel_index"
 RUNTIME_ROOT = ROOT / "backend" / "runtime" / "mississippi"
 GEOMETRY_OUTPUT_ROOT = RUNTIME_ROOT / "parcel_geometry_index"
@@ -118,6 +120,26 @@ SIGNAL_COLUMNS = [
     "recommended_view_bucket",
 ]
 
+DELINQUENT_LEAD_COLUMNS = [
+    "parcel_row_id",
+    "tax_year",
+    "latest_delinquent_year",
+    "latest_loaded_at",
+    "best_source_name",
+    "best_source_file_path",
+]
+
+TAX_DISTRESS_COLUMNS = [
+    "parcel_row_id",
+    "county_tax_source_configured_flag",
+    "county_tax_source_loaded_flag",
+    "county_tax_source_type",
+    "county_tax_source_path",
+    "tax_data_available_flag",
+    "latest_delinquent_year",
+    "tax_source_name",
+]
+
 
 def coalesce_numeric(frame: pd.DataFrame, columns: list[str]) -> pd.Series:
     result = pd.Series(np.nan, index=frame.index, dtype="float64")
@@ -163,6 +185,66 @@ def json_scalar(value):
     return value
 
 
+def normalize_string(series: pd.Series | None, index: pd.Index | None = None) -> pd.Series:
+    if series is None:
+        if index is None:
+            return pd.Series(dtype="string")
+        return pd.Series(pd.NA, index=index, dtype="string")
+    return series.astype("string").str.strip().replace({"": pd.NA, "nan": pd.NA, "None": pd.NA})
+
+
+def normalize_timestamp_string(series: pd.Series | None, index: pd.Index | None = None) -> pd.Series:
+    normalized = normalize_string(series, index=index)
+    if normalized.empty:
+        return normalized
+    parsed = pd.to_datetime(normalized, errors="coerce", utc=True)
+    formatted = parsed.dt.strftime("%Y-%m-%dT%H:%M:%SZ").astype("string")
+    return formatted.where(parsed.notna(), normalized)
+
+
+def iso_mtime(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    return pd.Timestamp(path.stat().st_mtime, unit="s", tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def apply_tax_freshness_fields(frame: pd.DataFrame) -> pd.DataFrame:
+    tax_year = pd.to_numeric(frame["tax_year"], errors="coerce").astype("Int64") if "tax_year" in frame.columns else pd.Series(pd.NA, index=frame.index, dtype="Int64")
+    latest_delinquent_year = (
+        pd.to_numeric(frame["latest_delinquent_year"], errors="coerce").astype("Int64")
+        if "latest_delinquent_year" in frame.columns
+        else pd.Series(pd.NA, index=frame.index, dtype="Int64")
+    )
+    if "latest_delinquent_year_taxdistress" in frame.columns:
+        latest_delinquent_year = latest_delinquent_year.fillna(
+            pd.to_numeric(frame.get("latest_delinquent_year_taxdistress"), errors="coerce").astype("Int64")
+        )
+    latest_loaded_at = normalize_timestamp_string(frame.get("latest_loaded_at"), index=frame.index)
+    default_upload = iso_mtime(DELINQUENT_LEADS_PATH if DELINQUENT_LEADS_PATH.exists() else LEAD_SIGNALS_PATH)
+    tax_available_mask = (
+        frame.get("delinquent_flag", pd.Series(False, index=frame.index)).fillna(False)
+        | frame.get("tax_data_available_flag", pd.Series(False, index=frame.index)).fillna(False)
+        | frame.get("county_tax_source_loaded_flag", pd.Series(False, index=frame.index)).fillna(False)
+    )
+    if default_upload:
+        latest_loaded_at = latest_loaded_at.where(latest_loaded_at.notna(), pd.Series(np.where(tax_available_mask, default_upload, pd.NA), index=frame.index, dtype="object"))
+
+    tax_data_source = normalize_string(frame.get("tax_source_name"), index=frame.index)
+    tax_data_source = tax_data_source.fillna(normalize_string(frame.get("best_source_name_delinq"), index=frame.index))
+    tax_data_source = tax_data_source.fillna(normalize_string(frame.get("best_source_name"), index=frame.index))
+    tax_data_source = tax_data_source.fillna(normalize_string(frame.get("county_tax_source_type"), index=frame.index))
+    tax_data_source = tax_data_source.where(tax_available_mask, pd.NA)
+
+    frame["tax_year"] = tax_year
+    frame["latest_delinquent_year"] = latest_delinquent_year
+    frame["delinquent_year"] = latest_delinquent_year.fillna(tax_year)
+    frame["tax_data_year"] = tax_year.fillna(latest_delinquent_year)
+    frame["tax_data_upload_date"] = latest_loaded_at
+    frame["tax_data_source"] = tax_data_source
+    frame["delinquency_last_verified"] = latest_loaded_at
+    return frame
+
+
 def vacancy_confidence(frame: pd.DataFrame) -> pd.Series:
     building_count = pd.to_numeric(frame.get("building_count"), errors="coerce").fillna(0)
     building_area_total = pd.to_numeric(frame.get("building_area_total"), errors="coerce").fillna(0)
@@ -205,6 +287,11 @@ def derive_shape_metrics(frame: pd.DataFrame) -> pd.DataFrame:
 def build_detail_metrics_runtime(frame: pd.DataFrame) -> pd.DataFrame:
     detail_columns = [
         "parcel_row_id",
+        "delinquent_year",
+        "tax_data_upload_date",
+        "tax_data_year",
+        "tax_data_source",
+        "delinquency_last_verified",
         "mean_slope_pct",
         "max_slope_pct",
         "slope_class",
@@ -262,6 +349,12 @@ def build_runtime_frame() -> pd.DataFrame:
     frame = parcels.merge(owners, on="parcel_row_id", how="left")
     frame = frame.merge(buildings, on="parcel_row_id", how="left")
     frame = frame.merge(signals, on="parcel_row_id", how="left")
+    if DELINQUENT_LEADS_PATH.exists():
+        delinquent_leads = pd.read_parquet(DELINQUENT_LEADS_PATH, columns=DELINQUENT_LEAD_COLUMNS, engine="pyarrow")
+        frame = frame.merge(delinquent_leads, on="parcel_row_id", how="left", suffixes=("", "_delinq"))
+    if TAX_DISTRESS_PATH.exists():
+        tax_distress = pd.read_parquet(TAX_DISTRESS_PATH, columns=TAX_DISTRESS_COLUMNS, engine="pyarrow")
+        frame = frame.merge(tax_distress, on="parcel_row_id", how="left", suffixes=("", "_taxdistress"))
     if AI_BUILDING_PREDICTIONS_PATH.exists():
         ai_columns = [
             "parcel_row_id",
@@ -309,6 +402,7 @@ def build_runtime_frame() -> pd.DataFrame:
     else:
         vacancy_confidence_series = pd.Series(np.nan, index=frame.index, dtype="float64")
     frame["vacancy_confidence_score"] = vacancy_confidence_series.fillna(vacancy_confidence(frame))
+    frame = apply_tax_freshness_fields(frame)
 
     return frame
 

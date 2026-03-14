@@ -95,6 +95,11 @@ export type LeadRecord = {
   delinquent_amount: number | null;
   delinquent_amount_bucket: string | null;
   delinquent_flag: boolean | null;
+  delinquent_year: number | null;
+  tax_data_upload_date: string | null;
+  tax_data_year: number | null;
+  tax_data_source: string | null;
+  delinquency_last_verified: string | null;
   forfeited_flag: boolean | null;
   best_source_type: string | null;
   best_source_name: string | null;
