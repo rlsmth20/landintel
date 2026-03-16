@@ -600,6 +600,26 @@ tbody td:nth-child(13) {
   font-size: 0.92rem;
 }
 
+.detail-disclosure {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.detail-disclosure-summary {
+  cursor: pointer;
+  color: var(--ink);
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.detail-disclosure-content {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-top: 16px;
+}
+
 .empty-detail {
   color: var(--muted);
 }

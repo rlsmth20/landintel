@@ -102,6 +102,12 @@ export type LeadRecord = {
   county_tax_coverage_status: string | null;
   county_tax_coverage_reason: string | null;
   parcel_tax_status: string | null;
+  parcel_tax_status_label?: string | null;
+  parcel_tax_status_category?: string | null;
+  parcel_tax_actionability?: string | null;
+  parcel_tax_data_warning?: string | null;
+  parcel_tax_freshness_bucket?: string | null;
+  parcel_tax_freshness_reason?: string | null;
   tax_data_upload_date: string | null;
   tax_data_year: number | null;
   tax_data_source: string | null;
