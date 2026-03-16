@@ -257,9 +257,21 @@ def export_vacant_no_wetland_good_access(scored: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_app_ready_frame(scored: pd.DataFrame) -> pd.DataFrame:
+    export = scored.copy()
+    export["top_score_driver"] = normalize_string(export["lead_score_driver_1"], export.index)
+    export["recommended_sort_reason"] = recommended_sort_reason(export)
+    export["caution_flags"] = caution_flags(export)
+    export["vacant_reason"] = vacant_reason(export)
+    export["growth_pressure_reason"] = growth_pressure_reason(export)
+    export["recommended_use_case"] = recommended_use_case(export)
+    export["recommended_view_bucket"] = normalize_string(export.get("recommended_view_bucket"), export.index).fillna("general_ranked")
+    export["county_hosted_flag"] = normalize_string(export["best_source_type"], export.index).isin(["direct_download_page", "free_direct_download"])
     columns = [
         "parcel_row_id",
         "parcel_id",
+        "apn",
+        "source_parcel_id_raw",
+        "source_parcel_id_normalized",
         "county_fips",
         "county_name",
         "geometry",
@@ -275,6 +287,9 @@ def build_app_ready_frame(scored: pd.DataFrame) -> pd.DataFrame:
         "out_of_state_owner_flag",
         "wetland_flag",
         "delinquent_amount",
+        "delinquent_amount_bucket",
+        "delinquent_flag",
+        "forfeited_flag",
         "has_reported_delinquent_amount_flag",
         "parcel_vacant_flag",
         "building_count",
@@ -298,8 +313,17 @@ def build_app_ready_frame(scored: pd.DataFrame) -> pd.DataFrame:
         "lead_score_driver_2",
         "lead_score_driver_3",
         "lead_score_explanation",
+        "best_source_name",
+        "county_hosted_flag",
+        "recommended_sort_reason",
+        "top_score_driver",
+        "caution_flags",
+        "vacant_reason",
+        "growth_pressure_reason",
+        "recommended_use_case",
+        "recommended_view_bucket",
     ]
-    return scored.loc[:, columns].copy()
+    return export.loc[:, columns].copy()
 
 
 def main() -> None:

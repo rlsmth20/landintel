@@ -286,6 +286,19 @@ def select_series(frame: pd.DataFrame, preferred: str, fallback: str | None = No
     return pd.Series(pd.NA, index=frame.index, dtype="string")
 
 
+def choose_canonical_external_parcel_id(frame: pd.DataFrame) -> pd.Series:
+    source_raw = blank_to_na(select_series(frame, "source_parcel_id_raw"))
+    apn = blank_to_na(select_series(frame, "apn"))
+    current = blank_to_na(select_series(frame, "parcel_id"))
+    current = current.mask(current.str.fullmatch(r"row_\d+", na=False))
+    normalized = blank_to_na(select_series(frame, "source_parcel_id_normalized"))
+    row_id = blank_to_na(select_series(frame, "parcel_row_id"))
+    canonical = source_raw.where(source_raw.notna(), apn)
+    canonical = canonical.where(canonical.notna(), current)
+    canonical = canonical.where(canonical.notna(), normalized)
+    return canonical.where(canonical.notna(), row_id).astype("string")
+
+
 def build_owner_type(owner_name_normalized: pd.Series) -> pd.Series:
     owner = owner_name_normalized.fillna("")
     patterns = {
@@ -763,6 +776,7 @@ def main() -> None:
     master = gpd.read_file(input_file, columns=OWNER_SOURCE_FIELDS, engine="pyogrio")
 
     owner_leads = master.copy()
+    owner_leads["parcel_id"] = choose_canonical_external_parcel_id(owner_leads)
     owner_leads["apn"] = blank_to_na(select_series(owner_leads, "apn", "source_parcel_id_raw")).where(
         blank_to_na(select_series(owner_leads, "apn", "source_parcel_id_raw")).notna(),
         blank_to_na(owner_leads["source_parcel_id_raw"]),

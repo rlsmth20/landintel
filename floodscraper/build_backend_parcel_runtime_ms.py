@@ -31,6 +31,9 @@ SQFT_PER_ACRE = 43560.0
 PARCEL_COLUMNS = [
     "parcel_row_id",
     "parcel_id",
+    "apn",
+    "source_parcel_id_raw",
+    "source_parcel_id_normalized",
     "county_name",
     "county_fips",
     "state_code",
@@ -285,6 +288,19 @@ def normalize_string(series: pd.Series | None, index: pd.Index | None = None) ->
             return pd.Series(dtype="string")
         return pd.Series(pd.NA, index=index, dtype="string")
     return series.astype("string").str.strip().replace({"": pd.NA, "nan": pd.NA, "None": pd.NA})
+
+
+def choose_canonical_external_parcel_id(frame: pd.DataFrame) -> pd.Series:
+    source_raw = normalize_string(frame.get("source_parcel_id_raw"), index=frame.index)
+    apn = normalize_string(frame.get("apn"), index=frame.index)
+    current = normalize_string(frame.get("parcel_id"), index=frame.index)
+    current = current.mask(current.str.fullmatch(r"row_\d+", na=False))
+    normalized = normalize_string(frame.get("source_parcel_id_normalized"), index=frame.index)
+    row_id = normalize_string(frame.get("parcel_row_id"), index=frame.index)
+    canonical = source_raw.where(source_raw.notna(), apn)
+    canonical = canonical.where(canonical.notna(), current)
+    canonical = canonical.where(canonical.notna(), normalized)
+    return canonical.where(canonical.notna(), row_id).astype("string")
 
 
 def normalize_timestamp_string(series: pd.Series | None, index: pd.Index | None = None) -> pd.Series:
@@ -735,6 +751,10 @@ def build_runtime_frame() -> pd.DataFrame:
     parcels["elevation_mean_ft"] = pd.to_numeric(parcels.get("elevation_mean_ft"), errors="coerce")
     parcels = derive_shape_metrics(parcels)
     parcels["geometry"] = parcels["geometry"].map(point_geometry_from_wkb)
+    parcels["parcel_id"] = choose_canonical_external_parcel_id(parcels)
+    parcels["apn"] = normalize_string(parcels.get("apn"), parcels.index).fillna(normalize_string(parcels.get("source_parcel_id_raw"), parcels.index))
+    parcels["source_parcel_id_raw"] = normalize_string(parcels.get("source_parcel_id_raw"), parcels.index)
+    parcels["source_parcel_id_normalized"] = normalize_string(parcels.get("source_parcel_id_normalized"), parcels.index)
     parcels = parcels.drop(
         columns=[
             "land_use_raw",

@@ -23,6 +23,9 @@ OUTPUT_SUMMARY_CSV = TAX_PUBLISHED_DIR / "delinquent_leads_summary.csv"
 MASTER_COLUMNS = [
     "parcel_row_id",
     "parcel_id",
+    "apn",
+    "source_parcel_id_raw",
+    "source_parcel_id_normalized",
     "state_code",
     "county_fips",
     "county_name",
@@ -111,6 +114,9 @@ TAX_DISTRESS_COLUMNS = [
 LEAD_COLUMNS = [
     "parcel_row_id",
     "parcel_id",
+    "apn",
+    "source_parcel_id_raw",
+    "source_parcel_id_normalized",
     "state_code",
     "county_fips",
     "county_name",
@@ -236,6 +242,19 @@ def normalize_string(series: pd.Series | None, index: pd.Index | None = None) ->
             return pd.Series(dtype="string")
         return pd.Series(pd.NA, index=index, dtype="string")
     return series.astype("string").str.strip().replace({"": pd.NA, "nan": pd.NA, "None": pd.NA})
+
+
+def choose_canonical_external_parcel_id(frame: pd.DataFrame) -> pd.Series:
+    source_raw = normalize_string(frame.get("source_parcel_id_raw"), frame.index)
+    apn = normalize_string(frame.get("apn"), frame.index)
+    current = normalize_string(frame.get("parcel_id"), frame.index)
+    current = current.mask(current.str.fullmatch(r"row_\d+", na=False))
+    normalized = normalize_string(frame.get("source_parcel_id_normalized"), frame.index)
+    row_id = normalize_string(frame.get("parcel_row_id"), frame.index)
+    canonical = source_raw.where(source_raw.notna(), apn)
+    canonical = canonical.where(canonical.notna(), current)
+    canonical = canonical.where(canonical.notna(), normalized)
+    return canonical.where(canonical.notna(), row_id).astype("string")
 
 
 def join_line1_line2(line1: pd.Series, line2: pd.Series) -> pd.Series:
@@ -380,7 +399,10 @@ def main() -> None:
     acreage = acreage.where(acreage.notna(), pd.to_numeric(leads.get("tax_acres"), errors="coerce"))
     acreage = acreage.where(acreage.notna(), pd.to_numeric(leads.get("gis_acres"), errors="coerce"))
 
-    leads["parcel_id"] = normalize_string(leads.get("parcel_id"), leads.index).fillna(normalize_string(leads.get("apn"), leads.index))
+    leads["parcel_id"] = choose_canonical_external_parcel_id(leads)
+    leads["apn"] = normalize_string(leads.get("apn"), leads.index).fillna(normalize_string(leads.get("source_parcel_id_raw"), leads.index))
+    leads["source_parcel_id_raw"] = normalize_string(leads.get("source_parcel_id_raw"), leads.index)
+    leads["source_parcel_id_normalized"] = normalize_string(leads.get("source_parcel_id_normalized"), leads.index)
     leads["state_code"] = normalize_string(leads.get("state_code")).fillna("MS")
     leads["county_fips"] = normalize_string(leads.get("county_fips"), leads.index).fillna(normalize_string(leads.get("county_fips_master"), leads.index))
     leads["county_name"] = normalize_string(leads.get("county_name"), leads.index).fillna(normalize_string(leads.get("county_name_master"), leads.index))

@@ -200,6 +200,15 @@ def build_selected_source_parcel_id_normalized(base: pd.DataFrame) -> pd.Series:
     return selected.astype("string")
 
 
+def choose_canonical_external_parcel_id(base: pd.DataFrame) -> pd.Series:
+    canonical = choose_source_parcel_id_raw(base)
+    legacy = base["legacy_parcel_id"].astype("string").str.strip().replace({"": pd.NA, "nan": pd.NA, "None": pd.NA})
+    normalized = build_selected_source_parcel_id_normalized(base)
+    canonical = canonical.where(canonical.notna(), legacy)
+    canonical = canonical.where(canonical.notna(), normalized)
+    return canonical.where(canonical.notna(), base["parcel_row_id"].astype("string")).astype("string")
+
+
 def load_base_master_frame() -> tuple[gpd.GeoDataFrame, pd.DataFrame]:
     base = gpd.read_file(INPUT_FILES["base"], engine="pyogrio").rename(columns=BASE_RENAMES)
     base["parcel_row_id"] = pd.Series(base.index.astype(str).map(lambda value: f"row_{value}"), index=base.index, dtype="string")
@@ -242,7 +251,7 @@ def load_base_master_frame() -> tuple[gpd.GeoDataFrame, pd.DataFrame]:
         base["state_code"].fillna("") + ":" + base["county_fips"].fillna("") + ":" + base["source_name"].fillna("") + ":" + base["source_parcel_id_normalized"].fillna("")
     ).astype("string")
     base.loc[~base["county_name"].map(safe_map).fillna(False), "parcel_national_key_candidate"] = pd.NA
-    base["parcel_id"] = base["parcel_row_id"].astype("string")
+    base["parcel_id"] = choose_canonical_external_parcel_id(base)
     return base, audit
 
 
