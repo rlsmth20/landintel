@@ -28,6 +28,16 @@ let staticMetaCache: Record<string, unknown> | null = null;
 let staticLeadCache: LeadRecord[] | null = null;
 let staticLeadDetailCache: LeadRecord[] | null = null;
 
+const PARCEL_ID_CANDIDATE_FIELDS = [
+  "apn",
+  "source_parcel_number",
+  "source_alt_parcel_number",
+  "source_ppin",
+  "legacy_parcel_id",
+  "source_parcel_id_normalized",
+  "source_parcel_id_raw",
+] as const;
+
 const CANONICAL_DETAIL_NULL_FIELDS = [
   "ai_building_present_flag",
   "assessed_total_value",
@@ -62,8 +72,26 @@ const CANONICAL_DETAIL_NULL_FIELDS = [
   "wetland_pct",
 ] as const;
 
-export function normalizeDetailLeadRecord(record: LeadRecord): LeadRecord {
+function normalizeParcelIdentifier(record: LeadRecord): LeadRecord {
   const normalized = { ...record } as LeadRecord & Record<string, unknown>;
+  const rowId = typeof normalized.parcel_row_id === "string" ? normalized.parcel_row_id.trim() : "";
+  const currentParcelId = typeof normalized.parcel_id === "string" ? normalized.parcel_id.trim() : "";
+  const isInternalRowId = (value: string) => value === rowId || /^row_\d+$/i.test(value);
+  const alternateParcelId = PARCEL_ID_CANDIDATE_FIELDS
+    .map((field) => normalized[field])
+    .find((value): value is string => typeof value === "string" && value.trim().length > 0 && !isInternalRowId(value.trim()));
+
+  if (alternateParcelId) {
+    normalized.parcel_id = alternateParcelId.trim();
+    return normalized;
+  }
+
+  normalized.parcel_id = currentParcelId && !isInternalRowId(currentParcelId) ? currentParcelId : null;
+  return normalized;
+}
+
+export function normalizeDetailLeadRecord(record: LeadRecord): LeadRecord {
+  const normalized = normalizeParcelIdentifier(record) as LeadRecord & Record<string, unknown>;
   for (const field of CANONICAL_DETAIL_NULL_FIELDS) {
     if (!(field in normalized)) {
       normalized[field] = null;

@@ -34,6 +34,8 @@ function DetailRow({ label, value }: { label: string; value: string | null | und
 }
 
 export function LeadDetail({ lead }: { lead: LeadRecord }) {
+  const parcelIdValue = lead.parcel_id ?? "Not available";
+
   return (
     <div className="detail-scroll">
       <div className="detail-header">
@@ -48,7 +50,7 @@ export function LeadDetail({ lead }: { lead: LeadRecord }) {
 
       <DetailSection title="Parcel Basics">
         <DetailRow label="Parcel row ID" value={lead.parcel_row_id} />
-        <DetailRow label="Parcel ID" value={lead.parcel_id} />
+        <DetailRow label="Parcel ID" value={parcelIdValue} />
         <DetailRow label="County" value={lead.county_name} />
         <DetailRow label="County FIPS" value={lead.county_fips} />
         <DetailRow label="Acreage" value={formatNumber(lead.acreage, 2)} />
