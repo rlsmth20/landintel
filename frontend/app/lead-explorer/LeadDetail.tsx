@@ -472,8 +472,9 @@ export function LeadDetail({
         </DetailSection>
 
         <DetailSection title="Vacancy Model Details">
-          <DetailRow label="Footprint vacancy signal" value={formatBoolean(lead.parcel_vacant_flag)} />
+          <DetailRow label="No-building-footprint signal" value={formatBoolean(lead.parcel_vacant_flag)} />
           <DetailRow label="County vacant flag" value={formatBoolean(lead.county_vacant_flag)} />
+          <DetailRow label="Building signal conflict" value={formatBoolean(lead.building_signal_conflict_flag)} />
           <DetailRow label="AI availability" value={formatBoolean(lead.ai_vacancy_available_flag)} />
           <DetailRow label="AI source" value={humanizeValue(lead.ai_vacancy_source)} />
           <DetailRow label="AI status note" value={lead.ai_vacancy_status_note} />

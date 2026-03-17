@@ -67,6 +67,7 @@ export type LeadRecord = {
   parcel_improvement_confidence?: number | null;
   parcel_improvement_reason?: string | null;
   parcel_improvement_evidence_summary?: string | null;
+  building_signal_conflict_flag?: boolean | null;
   building_count: number | null;
   building_area_total: number | null;
   nearby_building_count_1km: number | null;

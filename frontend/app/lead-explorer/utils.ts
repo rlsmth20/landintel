@@ -114,8 +114,8 @@ export const TABLE_COLUMNS: TableColumnDefinition[] = [
   },
   {
     key: "parcel_vacant_flag",
-    label: "Likely Vacant",
-    tooltip: "Indicates whether building footprints suggest the parcel is likely vacant land.",
+    label: "Vacancy",
+    tooltip: "A fused vacancy/improvement classification derived from imagery, parcel value, land use, and supporting parcel signals. Missing footprints alone do not mark a parcel vacant.",
   },
   {
     key: "road_access_tier",

@@ -45,6 +45,7 @@ const CANONICAL_DETAIL_NULL_FIELDS = [
   "ai_vacancy_source",
   "ai_vacancy_status_note",
   "assessed_total_value",
+  "building_signal_conflict_flag",
   "building_presence_reason",
   "building_present_confidence",
   "county_tax_coverage_reason",

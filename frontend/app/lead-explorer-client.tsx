@@ -95,6 +95,13 @@ function SummaryValue({
   return <>{entry?.value ?? "-"}</>;
 }
 
+function vacancyCellLabel(status: string | null | undefined) {
+  if (status === "likely_vacant") return "Yes";
+  if (status === "likely_improved") return "No";
+  if (status === "needs_review") return "Review";
+  return "-";
+}
+
 export default function LeadExplorerClient() {
   const [summary, setSummary] = useState<ExplorerMeta | null>(null);
   const [presets, setPresets] = useState<PresetItem[]>([]);
@@ -314,7 +321,11 @@ export default function LeadExplorerClient() {
 
   const visibleLeads = leads;
   const visibleVacantCount = useMemo(
-    () => visibleLeads.reduce((count, lead) => count + (lead.parcel_vacant_flag ? 1 : 0), 0),
+    () =>
+      visibleLeads.reduce(
+        (count, lead) => count + (lead.parcel_improvement_status === "likely_vacant" ? 1 : 0),
+        0,
+      ),
     [visibleLeads],
   );
   const currentPage = Math.floor(offset / limit) + 1;
@@ -556,7 +567,7 @@ export default function LeadExplorerClient() {
                   updateFilter("parcelVacantOnly", event.target.checked);
                 }}
               />
-              Vacant parcels only
+              Likely vacant only
             </label>
             <label className="checkbox-item">
               <input
@@ -868,7 +879,7 @@ export default function LeadExplorerClient() {
                       <td>
                         <LeadBadge label={lead.lead_score_tier ?? "-"} tone="good" />
                       </td>
-                      <td>{lead.parcel_vacant_flag ? "Yes" : "No"}</td>
+                      <td>{vacancyCellLabel(lead.parcel_improvement_status)}</td>
                       <td>{lead.road_access_tier ?? "-"}</td>
                       <td>{lead.growth_pressure_bucket ?? "-"}</td>
                       <td>

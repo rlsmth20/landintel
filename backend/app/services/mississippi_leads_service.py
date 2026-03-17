@@ -74,6 +74,8 @@ SUMMARY_FIELDS = [
     "lead_score_total_effective",
     "lead_score_tier",
     "parcel_vacant_flag",
+    "parcel_improvement_status",
+    "building_signal_conflict_flag",
     "road_access_tier",
     "growth_pressure_bucket",
     "best_source_type",
@@ -112,6 +114,17 @@ TAX_INTERPRETATION_FIELDS = [
     "parcel_tax_score_adjustment",
     "lead_score_total_effective",
 ]
+IMPROVEMENT_CLASSIFICATION_FIELDS = [
+    "building_count",
+    "building_area_total",
+    "parcel_vacant_flag",
+    "county_vacant_flag",
+    "ai_building_present_probability",
+    "ai_building_present_flag",
+    "building_present_confidence",
+    "assessed_total_value",
+    "land_use",
+]
 DEFAULT_LEAD_SORT_FIELD = "lead_score_total_effective"
 NEARBY_COMPS_DEFAULT_LIMIT = 8
 NEARBY_COMPS_MAX_LIMIT = 12
@@ -140,8 +153,8 @@ NEARBY_COMPS_FIELDS = [
 
 PRESET_DEFINITIONS = {
     "safest_early_investor_use": {
-        "description": "High-confidence county-hosted parcels with stronger amount reliability, no wetlands, and vacancy preference.",
-        "filter_expression": "county_hosted_flag=true AND high_confidence_link_flag=true AND parcel_vacant_flag=true AND wetland_flag=false AND amount_trust_tier in trusted/use_with_caution",
+        "description": "High-confidence county-hosted parcels with stronger amount reliability, no wetlands, and likely-vacant preference.",
+        "filter_expression": "county_hosted_flag=true AND high_confidence_link_flag=true AND likely_vacant=true AND wetland_flag=false AND amount_trust_tier in trusted/use_with_caution",
         "filters": {
             "parcel_vacant_flag": True,
             "county_hosted_flag": True,
@@ -152,8 +165,8 @@ PRESET_DEFINITIONS = {
         },
     },
     "vacant_land_targeting": {
-        "description": "Vacant parcels with stronger road access and fewer wetland constraints.",
-        "filter_expression": "parcel_vacant_flag=true AND wetland_flag=false AND road_access_tier in direct/near",
+        "description": "Likely-vacant parcels with stronger road access and fewer wetland constraints.",
+        "filter_expression": "likely_vacant=true AND wetland_flag=false AND road_access_tier in direct/near",
         "filters": {
             "parcel_vacant_flag": True,
             "wetland_flag": False,
@@ -162,8 +175,8 @@ PRESET_DEFINITIONS = {
         },
     },
     "larger_acreage_land_targeting": {
-        "description": "Vacant larger-acreage parcels for land assembly and development exploration.",
-        "filter_expression": "parcel_vacant_flag=true AND county_hosted_flag=true AND acreage>=5",
+        "description": "Likely-vacant larger-acreage parcels for land assembly and development exploration.",
+        "filter_expression": "likely_vacant=true AND county_hosted_flag=true AND acreage>=5",
         "filters": {
             "parcel_vacant_flag": True,
             "county_hosted_flag": True,
@@ -230,6 +243,10 @@ def _serialize_scalar(value: Any) -> Any:
     return value
 
 
+def _with_improvement_columns(columns: list[str]) -> list[str]:
+    return list(dict.fromkeys([*columns, *IMPROVEMENT_CLASSIFICATION_FIELDS]))
+
+
 def _to_float_series(frame: pd.DataFrame, column: str) -> pd.Series:
     if column not in frame.columns:
         return pd.Series(np.nan, index=frame.index, dtype="float64")
@@ -273,24 +290,100 @@ def _rectangle_estimates(area_sqft: pd.Series, perimeter_ft: pd.Series) -> tuple
 
 
 def _vacancy_confidence_series(frame: pd.DataFrame) -> pd.Series:
+    status = _normalize_string(frame.get("parcel_improvement_status"), index=frame.index)
+    conflict = frame.get("building_signal_conflict_flag", pd.Series(False, index=frame.index)).fillna(False).astype(bool)
+    confidence = pd.Series(52.0, index=frame.index, dtype="float64")
+    confidence = confidence.mask(status.eq("likely_vacant"), 76.0)
+    confidence = confidence.mask(status.eq("likely_improved"), 22.0)
+    confidence = confidence.mask(status.eq("needs_review"), 48.0)
+    confidence = confidence.mask(conflict, 38.0)
+    return confidence.clip(0, 100)
+
+
+def _apply_parcel_improvement_fields_frame(frame: pd.DataFrame) -> pd.DataFrame:
     building_count = _to_float_series(frame, "building_count").fillna(0)
     building_area_total = _to_float_series(frame, "building_area_total").fillna(0)
-    acreage = _to_float_series(frame, "acreage").fillna(0)
     assessed_total_value = _to_float_series(frame, "assessed_total_value").fillna(0)
-    road_distance_ft = _to_float_series(frame, "road_distance_ft")
-    nearby_building_density = _to_float_series(frame, "nearby_building_density").fillna(0)
-    parcel_vacant = frame.get("parcel_vacant_flag")
-    vacant_mask = parcel_vacant.fillna(False) if parcel_vacant is not None else pd.Series(False, index=frame.index)
+    parcel_vacant = frame.get("parcel_vacant_flag", pd.Series(False, index=frame.index)).fillna(False).astype(bool)
+    county_vacant = frame.get("county_vacant_flag", pd.Series(pd.NA, index=frame.index)).fillna(False).astype(bool)
+    ai_confidence = _to_float_series(frame, "building_present_confidence")
+    ai_probability = _to_float_series(frame, "ai_building_present_probability")
+    ai_flag = frame.get("ai_building_present_flag", pd.Series(pd.NA, index=frame.index)).astype("boolean")
+    land_use = _normalize_string(frame.get("land_use"), index=frame.index).fillna("")
 
-    confidence = pd.Series(45.0, index=frame.index, dtype="float64")
-    confidence = confidence.mask(vacant_mask & building_count.eq(0) & building_area_total.le(0), 92.0)
-    confidence = confidence.mask(vacant_mask & building_count.le(1) & building_area_total.le(750) & acreage.ge(1), 78.0)
-    confidence = confidence.mask(vacant_mask & assessed_total_value.ge(25000), 18.0)
-    confidence = confidence.mask(vacant_mask & assessed_total_value.ge(10000) & road_distance_ft.le(150).fillna(False), 28.0)
-    confidence = confidence.mask(vacant_mask & nearby_building_density.ge(120) & acreage.le(2), 35.0)
-    confidence = confidence.mask(~vacant_mask & building_count.gt(0), 18.0)
-    confidence = confidence.mask(~vacant_mask & building_area_total.gt(1500), 8.0)
-    return confidence.clip(0, 100)
+    improved_evidence = pd.Series(0.0, index=frame.index, dtype="float64")
+    vacant_evidence = pd.Series(0.0, index=frame.index, dtype="float64")
+
+    improved_evidence += np.where(building_count.ge(1), 70.0, 0.0)
+    improved_evidence += np.where(building_area_total.ge(400), 55.0, np.where(building_area_total.gt(0), 20.0, 0.0))
+    vacant_evidence += np.where(parcel_vacant, 12.0, 0.0)
+    vacant_evidence += np.where(county_vacant, 5.0, 0.0)
+
+    improved_evidence += np.where(ai_confidence.ge(80), 72.0, np.where(ai_confidence.ge(65), 50.0, np.where(ai_confidence.ge(50), 22.0, 0.0)))
+    vacant_evidence += np.where(ai_confidence.le(25), 18.0, np.where(ai_confidence.le(40), 8.0, 0.0))
+
+    ai_conf_missing = ai_confidence.isna()
+    improved_evidence += np.where(ai_conf_missing & ai_probability.ge(0.8), 62.0, np.where(ai_conf_missing & ai_probability.ge(0.65), 42.0, 0.0))
+    vacant_evidence += np.where(ai_conf_missing & ai_probability.le(0.2), 14.0, np.where(ai_conf_missing & ai_probability.le(0.35), 6.0, 0.0))
+
+    ai_prob_missing = ai_probability.isna()
+    improved_evidence += np.where(ai_conf_missing & ai_prob_missing & ai_flag.fillna(False), 32.0, 0.0)
+    vacant_evidence += np.where(ai_conf_missing & ai_prob_missing & ai_flag.eq(False).fillna(False), 4.0, 0.0)
+
+    improved_evidence += np.where(assessed_total_value.ge(25000), 34.0, np.where(assessed_total_value.ge(10000), 20.0, 0.0))
+    vacant_evidence += np.where(assessed_total_value.le(2000) & building_count.le(0) & building_area_total.le(0), 4.0, 0.0)
+
+    improved_land_use = land_use.str.contains("residential|commercial|industrial|mobile|manufactured", case=False, regex=True, na=False)
+    vacant_land_use = land_use.str.contains("vacant|unimproved|lot", case=False, regex=True, na=False)
+    improved_evidence += np.where(improved_land_use, 10.0, 0.0)
+    vacant_evidence += np.where(vacant_land_use, 8.0, 0.0)
+
+    building_signal_conflict_flag = (
+        building_count.le(0)
+        & building_area_total.le(0)
+        & (ai_confidence.ge(65).fillna(False) | ai_probability.ge(0.75).fillna(False) | ai_flag.fillna(False))
+    )
+    value_signal_conflict_flag = parcel_vacant & assessed_total_value.ge(25000)
+
+    strong_improved = (
+        building_count.ge(1)
+        | building_area_total.ge(400)
+        | ai_confidence.ge(65).fillna(False)
+        | ai_probability.ge(0.75).fillna(False)
+        | assessed_total_value.ge(25000)
+    )
+    strong_vacant = (
+        parcel_vacant
+        & building_count.le(0)
+        & building_area_total.le(0)
+        & (ai_confidence.le(35).fillna(False) | ai_probability.le(0.35).fillna(False) | ai_flag.eq(False).fillna(False))
+        & assessed_total_value.lt(10000)
+    )
+    evidence_gap = improved_evidence - vacant_evidence
+
+    status = pd.Series("needs_review", index=frame.index, dtype="string")
+    status = status.mask((strong_improved & evidence_gap.ge(10)) | evidence_gap.ge(30), "likely_improved")
+    status = status.mask(((strong_vacant & evidence_gap.le(-10)) | evidence_gap.le(-30)) & ~status.eq("likely_improved"), "likely_vacant")
+
+    confidence = pd.Series(48.0, index=frame.index, dtype="float64")
+    confidence = confidence.mask(status.eq("likely_improved"), (58.0 + evidence_gap.clip(lower=0) * 0.7).clip(58.0, 98.0))
+    confidence = confidence.mask(status.eq("likely_vacant"), (58.0 + (-evidence_gap).clip(lower=0) * 0.7).clip(58.0, 96.0))
+    confidence = confidence.mask(status.eq("needs_review"), (42.0 + np.abs(evidence_gap) * 0.35).clip(35.0, 72.0))
+    confidence = confidence.mask((building_signal_conflict_flag | value_signal_conflict_flag) & status.eq("likely_improved"), 78.0)
+    confidence = confidence.mask((building_signal_conflict_flag | value_signal_conflict_flag) & status.eq("needs_review"), 45.0)
+
+    reason = pd.Series("Improvement and vacancy signals are incomplete or conflict, so this parcel should be reviewed.", index=frame.index, dtype="string")
+    reason = reason.mask(building_signal_conflict_flag, "Imagery suggests an improvement, but mapped building footprints are missing.")
+    reason = reason.mask(value_signal_conflict_flag & ~building_signal_conflict_flag, "Vacancy flag conflicts with assessed value that suggests improvements.")
+    reason = reason.mask(status.eq("likely_improved") & building_count.ge(1), "Mapped building evidence indicates the parcel is improved.")
+    reason = reason.mask(status.eq("likely_improved") & building_count.lt(1) & (ai_confidence.ge(65).fillna(False) | ai_flag.fillna(False)), "Imagery and parcel evidence indicate a structure or improvement is present.")
+    reason = reason.mask(status.eq("likely_vacant"), "Available imagery, value, and supporting parcel signals lean toward vacant land.")
+
+    frame["parcel_improvement_status"] = status
+    frame["parcel_improvement_confidence"] = confidence.round(1)
+    frame["parcel_improvement_reason"] = reason
+    frame["building_signal_conflict_flag"] = pd.Series(building_signal_conflict_flag | value_signal_conflict_flag, index=frame.index, dtype="boolean")
+    return frame
 
 
 def _ensure_intelligence_fields(frame: pd.DataFrame) -> pd.DataFrame:
@@ -390,7 +483,6 @@ def _ensure_intelligence_fields(frame: pd.DataFrame) -> pd.DataFrame:
     frame["building_present_confidence"] = _to_float_series(frame, "building_present_confidence")
     frame["building_presence_reason"] = _normalize_string(frame.get("building_presence_reason"), index=frame.index)
     frame["vacancy_model_version"] = _normalize_string(frame.get("vacancy_model_version"), index=frame.index)
-    frame["vacancy_confidence_score"] = _to_float_series(frame, "vacancy_confidence_score").fillna(_vacancy_confidence_series(frame))
     ai_available = (
         frame["ai_building_present_flag"].notna()
         | frame["ai_building_present_probability"].notna()
@@ -412,6 +504,8 @@ def _ensure_intelligence_fields(frame: pd.DataFrame) -> pd.DataFrame:
         index=frame.index,
         dtype="string",
     )
+    frame = _apply_parcel_improvement_fields_frame(frame)
+    frame["vacancy_confidence_score"] = _to_float_series(frame, "vacancy_confidence_score").fillna(_vacancy_confidence_series(frame))
     frame = _apply_county_tax_coverage_fields(frame)
     frame = _apply_tax_recency_fields(frame)
     return frame
@@ -789,13 +883,13 @@ def _apply_parcel_improvement_classification(payload: dict[str, Any]) -> None:
         evidence.append("Some mapped building area is present")
 
     if parcel_vacant_flag is True:
-        vacant_evidence += 32.0
+        vacant_evidence += 12.0
         evidence.append("Footprint vacancy signal is active")
     elif parcel_vacant_flag is False:
-        improved_evidence += 10.0
+        improved_evidence += 4.0
 
     if county_vacant_flag is True:
-        vacant_evidence += 8.0
+        vacant_evidence += 5.0
         evidence.append("County vacancy flag suggests vacant land")
 
     if building_present_confidence is not None:
@@ -809,10 +903,10 @@ def _apply_parcel_improvement_classification(payload: dict[str, Any]) -> None:
             improved_evidence += 22.0
             evidence.append("AI imagery weakly suggests improvement")
         elif building_present_confidence <= 25.0:
-            vacant_evidence += 24.0
+            vacant_evidence += 18.0
             evidence.append("AI imagery strongly suggests no structure")
         elif building_present_confidence <= 40.0:
-            vacant_evidence += 14.0
+            vacant_evidence += 8.0
             evidence.append("AI imagery leans vacant")
     elif ai_probability is not None:
         if ai_probability >= 0.8:
@@ -822,16 +916,16 @@ def _apply_parcel_improvement_classification(payload: dict[str, Any]) -> None:
             improved_evidence += 42.0
             evidence.append("AI building probability supports improvement")
         elif ai_probability <= 0.2:
-            vacant_evidence += 22.0
+            vacant_evidence += 14.0
             evidence.append("AI building probability is very low")
         elif ai_probability <= 0.35:
-            vacant_evidence += 12.0
+            vacant_evidence += 6.0
             evidence.append("AI building probability leans vacant")
     elif ai_building_present_flag is True:
         improved_evidence += 40.0
         evidence.append("AI building-present signal is positive")
     elif ai_building_present_flag is False:
-        vacant_evidence += 10.0
+        vacant_evidence += 4.0
         evidence.append("AI building-present signal is negative")
 
     if assessed_total_value >= 25000:
@@ -841,7 +935,7 @@ def _apply_parcel_improvement_classification(payload: dict[str, Any]) -> None:
         improved_evidence += 20.0
         evidence.append("Assessed value supports improvement")
     elif assessed_total_value <= 2000 and building_count <= 0 and building_area_total <= 0:
-        vacant_evidence += 8.0
+        vacant_evidence += 4.0
         evidence.append("Low assessed value does not support improvements")
 
     if any(token in land_use for token in ("residential", "commercial", "industrial", "mobile", "manufactured")):
@@ -908,6 +1002,7 @@ def _apply_parcel_improvement_classification(payload: dict[str, Any]) -> None:
     payload["parcel_improvement_confidence"] = round(confidence, 1)
     payload["parcel_improvement_reason"] = reason
     payload["parcel_improvement_evidence_summary"] = "; ".join(summary_parts) if summary_parts else None
+    payload["building_signal_conflict_flag"] = bool(conflicts)
 
 
 def _apply_county_tax_coverage_fields(frame: pd.DataFrame) -> pd.DataFrame:
@@ -1353,9 +1448,9 @@ def _predict_ai_building_presence(
         probability = max(probability, 0.75)
         building_present_confidence = max(building_present_confidence, 80.0)
     ai_building_present_flag = building_present_confidence >= 60.0
-    footprint_vacancy_score = 92.0 if parcel_vacant_flag else 15.0
+    footprint_vacancy_score = 58.0 if parcel_vacant_flag else 35.0
     imagery_vacancy_score = 100.0 - building_present_confidence
-    vacancy_confidence_score = round((footprint_vacancy_score * 0.45) + (imagery_vacancy_score * 0.55), 2)
+    vacancy_confidence_score = round((footprint_vacancy_score * 0.15) + (imagery_vacancy_score * 0.85), 2)
     building_presence_reason = f"Best imagery crop {best_crop['crop_label']} with confidence {building_present_confidence:.1f}."
     return {
         "ai_building_present_probability": round(probability, 6),
@@ -1417,9 +1512,9 @@ def _apply_vacancy_assessment(payload: dict[str, Any]) -> None:
     vacant_evidence = 0.0
 
     if parcel_vacant_flag is True:
-        vacant_evidence += 42.0
+        vacant_evidence += 12.0
     elif parcel_vacant_flag is False:
-        improved_evidence += 18.0
+        improved_evidence += 4.0
 
     if building_count >= 1:
         improved_evidence += 55.0
@@ -1428,7 +1523,7 @@ def _apply_vacancy_assessment(payload: dict[str, Any]) -> None:
     elif building_area_total > 0:
         improved_evidence += 18.0
     if building_count <= 0 and building_area_total <= 0:
-        vacant_evidence += 18.0
+        vacant_evidence += 4.0
 
     if building_present_confidence is not None:
         if building_present_confidence >= 80.0:
@@ -1438,9 +1533,9 @@ def _apply_vacancy_assessment(payload: dict[str, Any]) -> None:
         elif building_present_confidence >= 50.0:
             improved_evidence += 22.0
         elif building_present_confidence <= 25.0:
-            vacant_evidence += 14.0
+            vacant_evidence += 10.0
         elif building_present_confidence <= 40.0:
-            vacant_evidence += 8.0
+            vacant_evidence += 4.0
     elif ai_probability is not None:
         if ai_probability >= 0.8:
             improved_evidence += 55.0
@@ -1449,9 +1544,9 @@ def _apply_vacancy_assessment(payload: dict[str, Any]) -> None:
         elif ai_probability >= 0.5:
             improved_evidence += 22.0
         elif ai_probability <= 0.2:
-            vacant_evidence += 18.0
+            vacant_evidence += 12.0
         elif ai_probability <= 0.35:
-            vacant_evidence += 10.0
+            vacant_evidence += 5.0
     elif ai_building_present_flag is True:
         improved_evidence += 32.0
 
@@ -1462,14 +1557,14 @@ def _apply_vacancy_assessment(payload: dict[str, Any]) -> None:
     elif assessed_total_value >= 3000:
         improved_evidence += 12.0
     else:
-        vacant_evidence += 8.0
+        vacant_evidence += 4.0
 
     if road_distance_ft is not None and road_distance_ft <= 150:
         improved_evidence += 8.0
     if nearby_building_density >= 120 and acreage <= 5:
         improved_evidence += 8.0
     elif nearby_building_density <= 10 and acreage >= 5:
-        vacant_evidence += 6.0
+        vacant_evidence += 4.0
 
     vacancy_likelihood = float(np.clip(50.0 + vacant_evidence - improved_evidence, 0.0, 100.0))
 
@@ -1479,13 +1574,13 @@ def _apply_vacancy_assessment(payload: dict[str, Any]) -> None:
         payload["vacant_reason"] = payload.get("building_presence_reason") or "Improvement evidence outweighs vacancy signals based on parcel value, structure context, and imagery."
         if parcel_vacant_flag is True:
             payload["overall_vacancy_assessment"] = "Likely improved - conflicting signals"
-            payload["vacant_reason"] = "Footprint logic suggests vacancy, but assessed value, access, nearby context, or imagery point to an improved parcel."
+            payload["vacant_reason"] = "Missing building footprints conflict with stronger imagery, value, or context signals that point to an improved parcel."
         return
 
     if vacant_evidence >= improved_evidence + 30.0 and assessed_total_value < 10000 and building_count <= 0 and building_area_total <= 0:
         payload["overall_vacancy_assessment"] = "Likely vacant"
         payload["vacancy_confidence_score"] = round(max(vacancy_likelihood, 70.0), 1)
-        payload["vacant_reason"] = "Vacancy signals are consistent across parcel footprints, limited improvement evidence, and available imagery."
+        payload["vacant_reason"] = "Imagery, value, and supporting parcel signals lean consistently toward vacant land."
         return
 
     payload["overall_vacancy_assessment"] = "Needs review"
@@ -1634,8 +1729,6 @@ def _embedded_filter_expression(
         combine(ds.field("acreage") >= acreage_min)
     if acreage_max is not None:
         combine(ds.field("acreage") <= acreage_max)
-    if parcel_vacant_flag is not None:
-        combine(ds.field("parcel_vacant_flag") == parcel_vacant_flag)
     if county_hosted_flag is not None:
         combine(ds.field("county_hosted_flag") == county_hosted_flag)
     if high_confidence_link_flag is not None:
@@ -2092,9 +2185,11 @@ def load_base_frame() -> pd.DataFrame:
     source_conf_base = source_conf_base.mask(frame["source_confidence_tier"].eq("parcel_master_only"), 38.0)
     frame["source_confidence_component"] = pd.to_numeric(frame.get("source_confidence_component"), errors="coerce").fillna(source_conf_base)
 
-    vacant_base = pd.Series(18.0, index=frame.index)
-    vacant_base = vacant_base.mask(frame["parcel_vacant_flag"], 94.0)
-    vacant_base = vacant_base.mask((pd.to_numeric(frame.get("building_count"), errors="coerce").fillna(0) <= 1) & acreage.ge(5), 72.0)
+    improvement_status = _normalize_string(frame.get("parcel_improvement_status"), index=frame.index)
+    vacant_base = pd.Series(22.0, index=frame.index)
+    vacant_base = vacant_base.mask(improvement_status.eq("likely_vacant"), 84.0)
+    vacant_base = vacant_base.mask(improvement_status.eq("needs_review"), 34.0)
+    vacant_base = vacant_base.mask(improvement_status.eq("likely_improved"), 10.0)
     frame["vacant_land_component"] = pd.to_numeric(frame.get("vacant_land_component"), errors="coerce").fillna(vacant_base)
 
     growth_map = {"very_low": 20.0, "low": 38.0, "moderate": 68.0, "high": 88.0, "unknown": 28.0}
@@ -2142,7 +2237,12 @@ def load_base_frame() -> pd.DataFrame:
         frame["lead_score_driver_1"].str.replace("_component", "", regex=False).str.replace("_score", "", regex=False).str.replace("_", " ", regex=False)
     )
     frame["vacant_reason"] = _normalize_string(frame.get("vacant_reason"), index=frame.index).fillna(
-        frame["parcel_vacant_flag"].map({True: "No mapped building footprints on parcel.", False: "Existing building footprint detected."})
+        frame["parcel_vacant_flag"].map(
+            {
+                True: "No mapped building footprints were detected. Verify imagery and local records before treating the parcel as vacant.",
+                False: "Mapped building footprint evidence is present on the parcel.",
+            }
+        )
     )
     frame["growth_pressure_reason"] = _normalize_string(frame.get("growth_pressure_reason"), index=frame.index).fillna(
         frame["growth_pressure_bucket"].map(
@@ -2176,7 +2276,7 @@ def load_base_frame() -> pd.DataFrame:
         )
     )
     frame["recommended_view_bucket"] = frame["recommended_view_bucket"].mask(
-        frame["parcel_vacant_flag"] & frame["buildability_component"].ge(75),
+        improvement_status.eq("likely_vacant") & frame["buildability_component"].ge(75),
         "vacant_buildable",
     )
     frame["recommended_view_bucket"] = frame["recommended_view_bucket"].mask(
@@ -2184,7 +2284,7 @@ def load_base_frame() -> pd.DataFrame:
         "growth_edge_opportunity",
     )
     frame["recommended_view_bucket"] = frame["recommended_view_bucket"].mask(
-        acreage.ge(5) & frame["parcel_vacant_flag"],
+        acreage.ge(5) & improvement_status.eq("likely_vacant"),
         "larger_land_target",
     )
     return frame
@@ -2230,7 +2330,10 @@ def _apply_filters(
     if acreage_max is not None:
         filtered = filtered.loc[pd.to_numeric(filtered["acreage"], errors="coerce").le(acreage_max).fillna(False)].copy()
     if parcel_vacant_flag is not None:
-        filtered = filtered.loc[filtered["parcel_vacant_flag"].fillna(False).eq(parcel_vacant_flag)].copy()
+        if "parcel_improvement_status" not in filtered.columns:
+            filtered = _apply_parcel_improvement_fields_frame(filtered.copy())
+        vacancy_mask = _normalize_string(filtered.get("parcel_improvement_status"), index=filtered.index).eq("likely_vacant")
+        filtered = filtered.loc[vacancy_mask.eq(parcel_vacant_flag)].copy()
     if county_hosted_flag is not None:
         filtered = filtered.loc[filtered["county_hosted_flag"].fillna(False).eq(county_hosted_flag)].copy()
     if high_confidence_link_flag is not None:
@@ -2734,38 +2837,6 @@ def get_leads(
 ) -> dict[str, Any]:
     if _using_embedded_runtime():
         resolved_sort_by = _resolve_sort_by(sort_by, _embedded_parcel_dataset().schema.names)
-        if (
-            _is_default_filter_state(
-                county_name=county_name,
-                lead_score_tier=lead_score_tier,
-                min_lead_score_total=min_lead_score_total,
-                acreage_min=acreage_min,
-                acreage_max=acreage_max,
-                parcel_vacant_flag=parcel_vacant_flag,
-                county_hosted_flag=county_hosted_flag,
-                high_confidence_link_flag=high_confidence_link_flag,
-                wetland_flag=wetland_flag,
-                amount_trust_tier=amount_trust_tier,
-                corporate_owner_flag=corporate_owner_flag,
-                absentee_owner_flag=absentee_owner_flag,
-                out_of_state_owner_flag=out_of_state_owner_flag,
-                growth_pressure_bucket=growth_pressure_bucket,
-                recommended_view_bucket=recommended_view_bucket,
-                road_access_tier=road_access_tier,
-                road_distance_ft_max=road_distance_ft_max,
-            )
-            and sort_by == "lead_score_total"
-            and sort_direction == "desc"
-            and int(offset) == 0
-        ):
-            cached = _load_embedded_json(EMBEDDED_DEFAULT_LEADS_PATH)
-            if cached is not None:
-                requested_limit = _clamp_limit(limit, default=LEADS_DEFAULT_LIMIT, max_limit=LEADS_MAX_LIMIT)
-                cached["limit"] = requested_limit
-                cached["offset"] = 0
-                cached["items"] = cached["items"][:requested_limit]
-                return cached
-
         safe_limit = _clamp_limit(limit, default=LEADS_DEFAULT_LIMIT, max_limit=LEADS_MAX_LIMIT)
         safe_offset = max(int(offset), 0)
         expression = _embedded_filter_expression(
@@ -2787,15 +2858,43 @@ def get_leads(
             road_access_tier=road_access_tier,
             road_distance_ft_max=road_distance_ft_max,
         )
-        total_count = _embedded_count_rows(expression)
         ascending = sort_direction.lower() == "asc"
-        filtered = _bounded_sorted_batches(
-            columns=SUMMARY_FIELDS,
-            expression=expression,
-            sort_by=resolved_sort_by,
-            ascending=ascending,
-            keep_rows=safe_limit + safe_offset,
-        )
+        query_columns = _with_improvement_columns(SUMMARY_FIELDS)
+        if parcel_vacant_flag is not None:
+            filtered = _embedded_to_pandas(query_columns, expression)
+            filtered = _ensure_intelligence_fields(filtered)
+            filtered = _apply_filters(
+                filtered,
+                county_name=county_name,
+                lead_score_tier=lead_score_tier,
+                min_lead_score_total=min_lead_score_total,
+                acreage_min=acreage_min,
+                acreage_max=acreage_max,
+                parcel_vacant_flag=parcel_vacant_flag,
+                county_hosted_flag=county_hosted_flag,
+                high_confidence_link_flag=high_confidence_link_flag,
+                wetland_flag=wetland_flag,
+                amount_trust_tier=amount_trust_tier,
+                corporate_owner_flag=corporate_owner_flag,
+                absentee_owner_flag=absentee_owner_flag,
+                out_of_state_owner_flag=out_of_state_owner_flag,
+                growth_pressure_bucket=growth_pressure_bucket,
+                recommended_view_bucket=recommended_view_bucket,
+                road_access_tier=road_access_tier,
+                road_distance_ft_max=road_distance_ft_max,
+            )
+            total_count = len(filtered)
+            filtered = filtered.sort_values(resolved_sort_by, ascending=ascending, na_position="last")
+        else:
+            total_count = _embedded_count_rows(expression)
+            filtered = _bounded_sorted_batches(
+                columns=query_columns,
+                expression=expression,
+                sort_by=resolved_sort_by,
+                ascending=ascending,
+                keep_rows=safe_limit + safe_offset,
+            )
+            filtered = _ensure_intelligence_fields(filtered)
         paged = filtered.iloc[safe_offset : safe_offset + safe_limit].copy()
         items = [{column: _serialize_scalar(row[column]) for column in SUMMARY_FIELDS} for _, row in paged.loc[:, SUMMARY_FIELDS].iterrows()]
         return {"total_count": total_count, "limit": safe_limit, "offset": safe_offset, "items": items}
@@ -3078,6 +3177,7 @@ def get_geometry(
             "best_source_type",
             "geometry",
         ]
+        query_columns = _with_improvement_columns(geometry_columns)
         expression = _embedded_filter_expression(
             county_name=county_name,
             lead_score_tier=lead_score_tier,
@@ -3116,21 +3216,48 @@ def get_geometry(
             }
 
         if parcel_row_ids:
-            filtered = _embedded_to_pandas(geometry_columns, expression)
+            filtered = _embedded_to_pandas(query_columns, expression)
+        elif parcel_vacant_flag is not None:
+            filtered = _embedded_to_pandas(query_columns, expression)
+            filtered = _ensure_intelligence_fields(filtered)
+            filtered = _apply_filters(
+                filtered,
+                county_name=county_name,
+                lead_score_tier=lead_score_tier,
+                min_lead_score_total=min_lead_score_total,
+                acreage_min=acreage_min,
+                acreage_max=acreage_max,
+                parcel_vacant_flag=parcel_vacant_flag,
+                county_hosted_flag=county_hosted_flag,
+                high_confidence_link_flag=high_confidence_link_flag,
+                wetland_flag=wetland_flag,
+                amount_trust_tier=amount_trust_tier,
+                corporate_owner_flag=corporate_owner_flag,
+                absentee_owner_flag=absentee_owner_flag,
+                out_of_state_owner_flag=out_of_state_owner_flag,
+                growth_pressure_bucket=growth_pressure_bucket,
+                recommended_view_bucket=recommended_view_bucket,
+                road_access_tier=road_access_tier,
+                road_distance_ft_max=road_distance_ft_max,
+            )
         elif bounds is not None or selected_parcel_id:
             filtered = _bounded_scan_batches(
-                columns=geometry_columns,
+                columns=query_columns,
                 expression=expression,
                 keep_rows=safe_limit,
             )
         else:
             filtered = _bounded_sorted_batches(
-                columns=geometry_columns,
+                columns=query_columns,
                 expression=expression,
-                sort_by=_lead_sort_field(geometry_columns),
+                sort_by=_lead_sort_field(query_columns),
                 ascending=False,
                 keep_rows=safe_limit,
             )
+        if parcel_vacant_flag is None:
+            filtered = _ensure_intelligence_fields(filtered)
+        if not parcel_row_ids:
+            filtered = filtered.head(safe_limit)
 
         features: list[dict[str, Any]] = []
         if render_mode in {"points", "centroids"}:
@@ -3398,25 +3525,30 @@ def get_geometry(
 
 def get_presets() -> list[dict[str, Any]]:
     if _using_embedded_runtime():
-        cached = _load_embedded_json(EMBEDDED_PRESETS_PATH)
-        if cached is not None:
-            return cached
         presets: list[dict[str, Any]] = []
         for view_name, definition in PRESET_DEFINITIONS.items():
             expression = _embedded_filter_expression(**definition["filters"])
-            row_count = _embedded_count_rows(expression)
-            score_sum = 0.0
-            score_count = 0
-            scanner = _embedded_parcel_dataset().scanner(columns=[_lead_sort_field(_embedded_parcel_dataset().schema.names)], filter=expression, batch_size=50000)
-            for batch in scanner.to_batches():
-                frame = batch.to_pandas()
-                if frame.empty:
-                    continue
-                score_field = _lead_sort_field(frame.columns)
-                scores = pd.to_numeric(frame[score_field], errors="coerce")
-                score_sum += float(scores.fillna(0).sum())
-                score_count += int(scores.notna().sum())
-            mean_score = (score_sum / score_count) if score_count else 0
+            score_field = _lead_sort_field(_embedded_parcel_dataset().schema.names)
+            if definition["filters"].get("parcel_vacant_flag") is not None:
+                preset_columns = _with_improvement_columns(["parcel_row_id", score_field])
+                frame = _embedded_to_pandas(preset_columns, expression)
+                frame = _ensure_intelligence_fields(frame)
+                frame = _apply_filters(frame, **definition["filters"])
+                row_count = len(frame)
+                mean_score = pd.to_numeric(frame[score_field], errors="coerce").mean() if row_count else 0
+            else:
+                row_count = _embedded_count_rows(expression)
+                score_sum = 0.0
+                score_count = 0
+                scanner = _embedded_parcel_dataset().scanner(columns=[score_field], filter=expression, batch_size=50000)
+                for batch in scanner.to_batches():
+                    frame = batch.to_pandas()
+                    if frame.empty:
+                        continue
+                    scores = pd.to_numeric(frame[score_field], errors="coerce")
+                    score_sum += float(scores.fillna(0).sum())
+                    score_count += int(scores.notna().sum())
+                mean_score = (score_sum / score_count) if score_count else 0
             presets.append(
                 {
                     "view_name": view_name,
@@ -3447,18 +3579,16 @@ def get_presets() -> list[dict[str, Any]]:
 
 def get_summary() -> dict[str, Any]:
     if _using_embedded_runtime():
-        cached = _load_embedded_json(EMBEDDED_SUMMARY_PATH)
-        if cached is not None and isinstance(cached, dict) and "tax_status" in cached.get("sections", {}):
-            return cached
-        summary_columns = [
+        summary_columns = _with_improvement_columns([
             "county_name",
             "recommended_view_bucket",
             _lead_sort_field(_embedded_parcel_dataset().schema.names),
             "parcel_vacant_flag",
+            "parcel_improvement_status",
             "county_hosted_flag",
             "parcel_tax_status_category",
             "parcel_tax_actionability",
-        ]
+        ])
         total_rows = 0
         vacant_rows = 0
         county_hosted_rows = 0
@@ -3473,8 +3603,9 @@ def get_summary() -> dict[str, Any]:
             frame = batch.to_pandas()
             if frame.empty:
                 continue
+            frame = _ensure_intelligence_fields(frame)
             total_rows += len(frame)
-            vacant_rows += int(frame["parcel_vacant_flag"].fillna(False).sum())
+            vacant_rows += int(_normalize_string(frame.get("parcel_improvement_status"), index=frame.index).eq("likely_vacant").sum())
             county_hosted_rows += int(frame["county_hosted_flag"].fillna(False).sum())
             score_field = _lead_sort_field(frame.columns)
             scores = pd.to_numeric(frame[score_field], errors="coerce")
@@ -3536,8 +3667,8 @@ def get_summary() -> dict[str, Any]:
             "statewide": [
                 {"section": "statewide", "metric": "lead_count", "value": str(len(frame))},
                 {"section": "statewide", "metric": "average_lead_score", "value": f"{average_score:.1f}"},
-                {"section": "statewide", "metric": "likely_vacant_count", "value": str(int(frame["parcel_vacant_flag"].fillna(False).sum()))},
-                {"section": "statewide", "metric": "vacant_share_pct", "value": f"{frame['parcel_vacant_flag'].fillna(False).mean() * 100:.1f}"},
+                {"section": "statewide", "metric": "likely_vacant_count", "value": str(int(_normalize_string(frame.get("parcel_improvement_status"), index=frame.index).eq("likely_vacant").sum()))},
+                {"section": "statewide", "metric": "vacant_share_pct", "value": f"{_normalize_string(frame.get('parcel_improvement_status'), index=frame.index).eq('likely_vacant').mean() * 100:.1f}"},
                 {"section": "statewide", "metric": "county_hosted_share_pct", "value": f"{frame['county_hosted_flag'].fillna(False).mean() * 100:.1f}"},
             ],
             "top_counties": [
