@@ -164,7 +164,9 @@ MISSISSIPPI_TILE_BOUNDS = (-91.65, 30.15, -88.0, 35.1)
 tile_logger = logging.getLogger("parcel-tiles")
 DEFAULT_TILE_URL_TEMPLATE = "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
 SQFT_PER_ACRE = 43560.0
-ENABLE_ON_DEMAND_AI_DETAIL = os.getenv("MISSISSIPPI_ENABLE_ON_DEMAND_AI_DETAIL", "").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_ON_DEMAND_AI_DETAIL = os.getenv("MISSISSIPPI_ENABLE_ON_DEMAND_AI_DETAIL", "true").strip().lower() not in {"0", "false", "no", "off"}
+ON_DEMAND_AI_DETAIL_TIMEOUT_SECONDS = float(os.getenv("MISSISSIPPI_ON_DEMAND_AI_DETAIL_TIMEOUT_SECONDS", "4.0"))
+ON_DEMAND_AI_DETAIL_CACHE: dict[str, dict[str, Any]] = {}
 
 
 def _normalize_string(series: pd.Series | None, index: pd.Index | None = None) -> pd.Series:
@@ -618,6 +620,10 @@ def _stabilize_detail_payload(payload: dict[str, Any]) -> None:
 def _maybe_apply_on_demand_ai(payload: dict[str, Any], row: pd.Series) -> None:
     if (not ENABLE_ON_DEMAND_AI_DETAIL) or payload.get("ai_building_present_flag") is not None:
         return
+    parcel_row_id = str(payload.get("parcel_row_id") or row.get("parcel_row_id") or "").strip()
+    if parcel_row_id and parcel_row_id in ON_DEMAND_AI_DETAIL_CACHE:
+        payload.update(ON_DEMAND_AI_DETAIL_CACHE[parcel_row_id])
+        return
     longitude = pd.to_numeric(row.get("longitude"), errors="coerce")
     latitude = pd.to_numeric(row.get("latitude"), errors="coerce")
     if pd.isna(longitude) or pd.isna(latitude):
@@ -637,6 +643,8 @@ def _maybe_apply_on_demand_ai(payload: dict[str, Any], row: pd.Series) -> None:
     except Exception:
         ai_payload = None
     if ai_payload:
+        if parcel_row_id:
+            ON_DEMAND_AI_DETAIL_CACHE[parcel_row_id] = ai_payload
         payload.update(ai_payload)
 
 
@@ -1038,7 +1046,7 @@ def _predict_ai_building_presence(
     zoom = 19
     tile_x, tile_y = _centroid_tile(longitude, latitude, zoom)
     url = DEFAULT_TILE_URL_TEMPLATE.format(z=zoom, x=tile_x, y=tile_y)
-    response = requests.get(url, timeout=20)
+    response = requests.get(url, timeout=ON_DEMAND_AI_DETAIL_TIMEOUT_SECONDS)
     response.raise_for_status()
     feature_columns = params["feature_columns"]
     mean = np.asarray(params["scaler_mean"], dtype=np.float64)
