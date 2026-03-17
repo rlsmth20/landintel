@@ -419,6 +419,19 @@ button {
   margin-bottom: 14px;
 }
 
+.search-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.search-label-row strong {
+  font-size: 0.92rem;
+  letter-spacing: -0.02em;
+}
+
 .search-input-row {
   display: flex;
   gap: 10px;

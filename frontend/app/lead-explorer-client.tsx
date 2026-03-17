@@ -932,6 +932,10 @@ export default function LeadExplorerClient() {
               </div>
             </div>
             <div className="search-shell">
+              <div className="search-label-row">
+                <strong>Jump to parcel</strong>
+                <span className="field-note">Search by parcel ID, row ID, or owner name.</span>
+              </div>
               <div className="search-input-row">
                 <input
                   type="search"
