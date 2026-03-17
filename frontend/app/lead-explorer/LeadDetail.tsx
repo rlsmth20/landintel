@@ -1,5 +1,7 @@
 "use client";
 
+import { useMemo, useState } from "react";
+
 import type { LeadRecord, NearbyCompsResponse } from "./types";
 import { badgeTone, formatBoolean, formatCurrency, formatNumber } from "./utils";
 
@@ -71,6 +73,18 @@ function formatDistanceMiles(value: number | null | undefined) {
 function formatValuePerAcre(value: number | null | undefined) {
   const formatted = formatCurrency(value);
   return formatted ? `${formatted}/ac` : null;
+}
+
+function sortNullableNumbers(left: number | null | undefined, right: number | null | undefined, direction: "asc" | "desc") {
+  const leftValue = left ?? (direction === "asc" ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY);
+  const rightValue = right ?? (direction === "asc" ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY);
+  return direction === "asc" ? leftValue - rightValue : rightValue - leftValue;
+}
+
+function sortNullableText(left: string | null | undefined, right: string | null | undefined, direction: "asc" | "desc") {
+  const leftValue = (left ?? "").toLowerCase();
+  const rightValue = (right ?? "").toLowerCase();
+  return direction === "asc" ? leftValue.localeCompare(rightValue) : rightValue.localeCompare(leftValue);
 }
 
 function formatTaxDelinquency(lead: LeadRecord) {
@@ -202,6 +216,43 @@ function NearbyCompsSection({
   error: string | null;
   onSelectComp?: ((parcelRowId: string) => void) | null;
 }) {
+  const [sortField, setSortField] = useState<"distance" | "acreage" | "value_per_acre" | "similarity">("distance");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+
+  const items = useMemo(() => {
+    if (!comps?.items) {
+      return [];
+    }
+    return [...comps.items].sort((left, right) => {
+      if (sortField === "distance") {
+        return sortNullableNumbers(left.distance_to_subject_miles, right.distance_to_subject_miles, sortDirection);
+      }
+      if (sortField === "acreage") {
+        return sortNullableNumbers(left.acreage, right.acreage, sortDirection);
+      }
+      if (sortField === "value_per_acre") {
+        return sortNullableNumbers(left.value_per_acre, right.value_per_acre, sortDirection);
+      }
+      return sortNullableNumbers(left.similarity_score, right.similarity_score, sortDirection);
+    });
+  }, [comps?.items, sortDirection, sortField]);
+
+  function handleSort(nextField: "distance" | "acreage" | "value_per_acre" | "similarity") {
+    if (sortField === nextField) {
+      setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setSortField(nextField);
+    setSortDirection(nextField === "similarity" ? "desc" : "asc");
+  }
+
+  function sortIndicator(field: "distance" | "acreage" | "value_per_acre" | "similarity") {
+    if (sortField !== field) {
+      return "";
+    }
+    return sortDirection === "asc" ? " ↑" : " ↓";
+  }
+
   return (
     <DetailSection title="Nearby Comps">
       <div className="detail-section-block">
@@ -226,40 +277,87 @@ function NearbyCompsSection({
           <p className="muted">No nearby comps found within 3 miles using the current parcel similarity rules.</p>
         ) : null}
         {!loading && !error && comps && comps.items.length > 0 ? (
-          <div className="comp-list">
-            {comps.items.map((item) => (
-              <button
-                key={item.parcel_row_id}
-                type="button"
-                className="comp-card"
-                onClick={() => onSelectComp?.(item.parcel_row_id)}
-              >
-                <div className="comp-card-top">
-                  <div>
-                    <strong>{item.parcel_id ?? item.parcel_row_id}</strong>
-                    <p className="muted">{item.county_name}</p>
-                  </div>
-                  <div className="inline-badges">
-                    {item.radius_bucket ? <LeadBadge label={item.radius_bucket} tone="neutral" /> : null}
-                    {item.land_use ? <LeadBadge label={item.land_use} tone="good" /> : null}
-                    {item.parcel_improvement_status ? (
-                      <LeadBadge
-                        label={humanizeValue(item.parcel_improvement_status) ?? item.parcel_improvement_status}
-                        tone={improvementTone(item.parcel_improvement_status)}
-                      />
-                    ) : null}
-                  </div>
-                </div>
-                <div className="comp-metrics">
-                  <span>Distance: {formatDistanceMiles(item.distance_to_subject_miles) ?? "-"}</span>
-                  <span>Acreage: {formatNumber(item.acreage, 2) ?? "-"}</span>
-                  <span>Assessed: {formatCurrency(item.assessed_total_value) ?? "-"}</span>
-                  <span>$ / acre: {formatValuePerAcre(item.value_per_acre) ?? "-"}</span>
-                  <span>Lead score: {formatNumber(item.lead_score_total, 1) ?? "-"}</span>
-                </div>
-                {item.parcel_improvement_reason ? <p className="field-note">{item.parcel_improvement_reason}</p> : null}
-              </button>
-            ))}
+          <div className="comp-table-wrap">
+            <table className="comp-table">
+              <thead>
+                <tr>
+                  <th>Parcel</th>
+                  <th>
+                    <button type="button" className="comp-sort-button" onClick={() => handleSort("distance")}>
+                      Distance{sortIndicator("distance")}
+                    </button>
+                  </th>
+                  <th>
+                    <button type="button" className="comp-sort-button" onClick={() => handleSort("acreage")}>
+                      Acres{sortIndicator("acreage")}
+                    </button>
+                  </th>
+                  <th>
+                    <button type="button" className="comp-sort-button" onClick={() => handleSort("value_per_acre")}>
+                      $/ac{sortIndicator("value_per_acre")}
+                    </button>
+                  </th>
+                  <th>Width</th>
+                  <th>Buildability</th>
+                  <th>Road</th>
+                  <th>
+                    <button type="button" className="comp-sort-button" onClick={() => handleSort("similarity")}>
+                      Similarity{sortIndicator("similarity")}
+                    </button>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => {
+                  const widthEstimate = "parcel_width_ft_estimate" in item ? item.parcel_width_ft_estimate : null;
+                  const buildabilityScore = "buildability_score" in item ? item.buildability_score : null;
+                  const roadAccessTier = "road_access_tier" in item ? item.road_access_tier : null;
+                  const rowClassName = [
+                    "comp-row",
+                    item.parcel_improvement_status === "needs_review" ? "is-review" : "",
+                    (typeof widthEstimate === "number" && widthEstimate > 0 && widthEstimate < 60) ||
+                    (typeof buildabilityScore === "number" && buildabilityScore < 40)
+                      ? "is-poor-fit"
+                      : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ");
+                  return (
+                    <tr
+                      key={item.parcel_row_id}
+                      className={rowClassName}
+                      onClick={() => onSelectComp?.(item.parcel_row_id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          onSelectComp?.(item.parcel_row_id);
+                        }
+                      }}
+                      tabIndex={0}
+                    >
+                      <td>
+                        <div className="comp-cell-primary">
+                          <strong>{item.parcel_id ?? item.parcel_row_id}</strong>
+                          <span className="comp-cell-subtle">{item.county_name ?? "-"}</span>
+                          <span className="comp-cell-subtle">
+                            {item.radius_bucket ?? "-"} · {humanizeValue(item.parcel_improvement_status) ?? "-"}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="comp-num">{formatDistanceMiles(item.distance_to_subject_miles) ?? "-"}</td>
+                      <td className="comp-num">{formatNumber(item.acreage, 2) ?? "-"}</td>
+                      <td className="comp-num">{formatValuePerAcre(item.value_per_acre) ?? "-"}</td>
+                      <td className="comp-num">
+                        {typeof widthEstimate === "number" ? `${formatNumber(widthEstimate, 0) ?? "-"} ft` : "-"}
+                      </td>
+                      <td className="comp-num">{formatNumber(buildabilityScore, 1) ?? "-"}</td>
+                      <td>{roadAccessTier ?? "-"}</td>
+                      <td className="comp-num">{formatNumber(item.similarity_score, 2) ?? "-"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         ) : null}
       </div>

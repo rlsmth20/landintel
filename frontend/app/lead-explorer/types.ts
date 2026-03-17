@@ -205,6 +205,9 @@ export type NearbyCompRecord = {
   radius_bucket: string | null;
   assessed_total_value: number | null;
   value_per_acre: number | null;
+  parcel_width_ft_estimate?: number | null;
+  buildability_score?: number | null;
+  road_access_tier?: string | null;
   lead_score_total: number | null;
   investment_score: number | null;
   parcel_vacant_flag: boolean | null;

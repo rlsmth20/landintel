@@ -595,44 +595,77 @@ tbody td:nth-child(13) {
   gap: 12px;
 }
 
-.comp-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.comp-card {
+.comp-table-wrap {
+  overflow-x: auto;
   border: 1px solid var(--line);
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.6);
-  padding: 12px 14px;
-  text-align: left;
-  transition: background 160ms ease, border-color 160ms ease;
+  background: rgba(255, 255, 255, 0.55);
 }
 
-.comp-card:hover {
-  background: rgba(47, 107, 109, 0.07);
-  border-color: rgba(47, 107, 109, 0.22);
-}
-
-.comp-card-top {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: flex-start;
-}
-
-.comp-card-top p {
-  margin: 4px 0 0;
-}
-
-.comp-metrics {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 14px;
-  margin-top: 10px;
-  color: var(--muted);
+.comp-table {
+  width: 100%;
+  min-width: 0;
+  border-collapse: collapse;
   font-size: 0.84rem;
+}
+
+.comp-table th,
+.comp-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid rgba(58, 43, 24, 0.08);
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.comp-table th {
+  position: static;
+  background: rgba(246, 234, 216, 0.92);
+  font-size: 0.78rem;
+}
+
+.comp-sort-button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  color: inherit;
+}
+
+.comp-row {
+  cursor: pointer;
+  transition: background 160ms ease;
+}
+
+.comp-row:hover,
+.comp-row:focus-visible {
+  background: rgba(47, 107, 109, 0.08);
+  outline: none;
+}
+
+.comp-row.is-review {
+  background: rgba(241, 143, 1, 0.06);
+}
+
+.comp-row.is-poor-fit td.comp-num {
+  color: #b84e2a;
+  font-weight: 600;
+}
+
+.comp-cell-primary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.comp-cell-subtle {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.comp-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .detail-label {
