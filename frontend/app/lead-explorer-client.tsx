@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 
 import {
   fetchLeadDetail,
+  fetchLeadSearch,
   fetchLeads,
   fetchNearbyComps,
   fetchParcelGeometryById,
@@ -24,6 +25,7 @@ import type {
   MapViewportState,
   NearbyCompsResponse,
   PresetItem,
+  SearchResultRecord,
   SortField,
 } from "./lead-explorer/types";
 import {
@@ -41,6 +43,8 @@ import {
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 250;
 const FILTER_DEBOUNCE_MS = 250;
+const SEARCH_DEBOUNCE_MS = 200;
+const SEARCH_MIN_QUERY_LENGTH = 2;
 const DEFAULT_VIEWPORT: MapViewportState = {
   center: [-89.6787, 32.7416],
   zoom: 6.1,
@@ -124,6 +128,10 @@ export default function LeadExplorerClient() {
   const [activeOverlays, setActiveOverlays] = useState<MapOverlayId[]>(["parcels", "road_access"]);
   const [basemapMode, setBasemapMode] = useState<BasemapMode>("street");
   const [viewport, setViewport] = useState<MapViewportState>(DEFAULT_VIEWPORT);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResultRecord[]>([]);
+  const [searchActiveIndex, setSearchActiveIndex] = useState(0);
 
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [summaryError, setSummaryError] = useState<string | null>(null);
@@ -135,6 +143,8 @@ export default function LeadExplorerClient() {
   const [geometryError, setGeometryError] = useState<string | null>(null);
   const [nearbyCompsLoading, setNearbyCompsLoading] = useState(false);
   const [nearbyCompsError, setNearbyCompsError] = useState<string | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -143,6 +153,13 @@ export default function LeadExplorerClient() {
     }, FILTER_DEBOUNCE_MS);
     return () => window.clearTimeout(timeout);
   }, [filters]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery.trim());
+    }, SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timeout);
+  }, [searchQuery]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -314,6 +331,37 @@ export default function LeadExplorerClient() {
     };
   }, [selectedId]);
 
+  useEffect(() => {
+    if (debouncedSearchQuery.length < SEARCH_MIN_QUERY_LENGTH) {
+      setSearchResults([]);
+      setSearchError(null);
+      setSearchLoading(false);
+      setSearchActiveIndex(0);
+      return;
+    }
+    let cancelled = false;
+    async function loadSearchResults() {
+      setSearchLoading(true);
+      setSearchError(null);
+      try {
+        const response = await fetchLeadSearch(debouncedSearchQuery, 10);
+        if (cancelled) return;
+        setSearchResults(response.items);
+        setSearchActiveIndex(0);
+      } catch (error) {
+        if (cancelled) return;
+        setSearchResults([]);
+        setSearchError(error instanceof Error ? error.message : "Failed to search parcels");
+      } finally {
+        if (!cancelled) setSearchLoading(false);
+      }
+    }
+    void loadSearchResults();
+    return () => {
+      cancelled = true;
+    };
+  }, [debouncedSearchQuery]);
+
   const countySuggestions = useMemo(
     () => summary?.sections?.top_counties?.map((item) => item.key).filter(Boolean) ?? [],
     [summary],
@@ -352,6 +400,17 @@ export default function LeadExplorerClient() {
     setFitNonce((current) => current + 1);
   }, []);
 
+  const handleSearchSelect = useCallback(
+    (result: SearchResultRecord) => {
+      setSearchQuery("");
+      setSearchResults([]);
+      setSearchActiveIndex(0);
+      handleSelectParcel(result.parcel_row_id, null);
+      setLocateSelectedNonce((current) => current + 1);
+    },
+    [handleSelectParcel],
+  );
+
   function toggleOverlay(overlayId: MapOverlayId, enabled: boolean) {
     if (!enabled) return;
     setActiveOverlays((current) =>
@@ -371,6 +430,31 @@ export default function LeadExplorerClient() {
   function sortIndicator(field: SortField) {
     if (sortField !== field) return "";
     return sortDirection === "desc" ? " ↓" : " ↑";
+  }
+
+  function handleSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setSearchActiveIndex((current) => Math.min(current + 1, Math.max(searchResults.length - 1, 0)));
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setSearchActiveIndex((current) => Math.max(current - 1, 0));
+      return;
+    }
+    if (event.key === "Enter") {
+      if (searchResults.length > 0) {
+        event.preventDefault();
+        handleSearchSelect(searchResults[Math.min(searchActiveIndex, searchResults.length - 1)]);
+      }
+      return;
+    }
+    if (event.key === "Escape") {
+      setSearchQuery("");
+      setSearchResults([]);
+      setSearchActiveIndex(0);
+    }
   }
 
   return (
@@ -846,6 +930,66 @@ export default function LeadExplorerClient() {
                   Next
                 </button>
               </div>
+            </div>
+            <div className="search-shell">
+              <div className="search-input-row">
+                <input
+                  type="search"
+                  className="search-input"
+                  placeholder="Search parcel ID or row ID"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  onKeyDown={handleSearchKeyDown}
+                />
+                {searchQuery ? (
+                  <button
+                    type="button"
+                    className="search-clear-button"
+                    onClick={() => {
+                      setSearchQuery("");
+                      setSearchResults([]);
+                      setSearchActiveIndex(0);
+                    }}
+                    aria-label="Clear parcel search"
+                  >
+                    Clear
+                  </button>
+                ) : null}
+              </div>
+              {searchQuery.trim().length > 0 ? (
+                <div className="search-results">
+                  {searchLoading ? <p className="muted">Searching parcels...</p> : null}
+                  {!searchLoading && searchError ? <p className="error-text">{searchError}</p> : null}
+                  {!searchLoading && !searchError && debouncedSearchQuery.length < SEARCH_MIN_QUERY_LENGTH ? (
+                    <p className="muted">Type at least {SEARCH_MIN_QUERY_LENGTH} characters to search.</p>
+                  ) : null}
+                  {!searchLoading && !searchError && debouncedSearchQuery.length >= SEARCH_MIN_QUERY_LENGTH && searchResults.length === 0 ? (
+                    <p className="muted">No parcels matched that search.</p>
+                  ) : null}
+                  {!searchLoading && !searchError && searchResults.length > 0 ? (
+                    <ul className="search-result-list">
+                      {searchResults.map((result, index) => (
+                        <li key={result.parcel_row_id}>
+                          <button
+                            type="button"
+                            className={`search-result-item ${index === searchActiveIndex ? "is-active" : ""}`}
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              handleSearchSelect(result);
+                            }}
+                            onMouseEnter={() => setSearchActiveIndex(index)}
+                          >
+                            <strong>{result.parcel_id ?? result.parcel_row_id}</strong>
+                            <span>{result.county_name ?? "-"}</span>
+                            <span>{formatNumber(result.acreage, 2)} ac</span>
+                            <span>{result.owner_name ?? "-"}</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
             {leadsLoading ? <p className="muted">Loading leads...</p> : null}
             {leadsError ? <p className="error-text">{leadsError}</p> : null}

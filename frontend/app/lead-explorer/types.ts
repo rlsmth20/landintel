@@ -196,6 +196,21 @@ export type LeadsResponse = {
   items: LeadRecord[];
 };
 
+export type SearchResultRecord = {
+  parcel_row_id: string;
+  parcel_id: string | null;
+  county_name: string | null;
+  acreage: number | null;
+  owner_name: string | null;
+  centroid: GeometryPoint | null;
+  match_field?: string | null;
+};
+
+export type SearchResponse = {
+  query: string;
+  items: SearchResultRecord[];
+};
+
 export type NearbyCompRecord = {
   parcel_row_id: string;
   parcel_id: string | null;

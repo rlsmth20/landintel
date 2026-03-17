@@ -13,6 +13,7 @@ from app.services.mississippi_leads_service import (
     get_parcel_tile,
     get_presets,
     get_summary,
+    search_leads,
 )
 from app.settings import GEOMETRY_DEFAULT_LIMIT, LEADS_DEFAULT_LIMIT
 
@@ -68,6 +69,11 @@ def leads(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/leads/search")
+def leads_search(q: str, limit: int = 10):
+    return search_leads(q, limit=limit)
 
 
 @router.get("/leads/{parcel_row_id}")

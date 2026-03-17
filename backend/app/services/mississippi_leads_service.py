@@ -126,6 +126,8 @@ IMPROVEMENT_CLASSIFICATION_FIELDS = [
     "land_use",
 ]
 DEFAULT_LEAD_SORT_FIELD = "lead_score_total_effective"
+SEARCH_DEFAULT_LIMIT = 10
+SEARCH_MAX_LIMIT = 20
 NEARBY_COMPS_DEFAULT_LIMIT = 8
 NEARBY_COMPS_MAX_LIMIT = 12
 NEARBY_COMPS_RADIUS_TIERS_MILES = (0.5, 1.0, 3.0)
@@ -149,6 +151,17 @@ NEARBY_COMPS_FIELDS = [
     "building_presence_reason",
     "longitude",
     "latitude",
+]
+SEARCH_FIELDS = [
+    "parcel_row_id",
+    "parcel_id",
+    "county_name",
+    "acreage",
+    "owner_name",
+    "longitude",
+    "latitude",
+    "lead_score_total",
+    "lead_score_total_effective",
 ]
 
 PRESET_DEFINITIONS = {
@@ -2462,6 +2475,80 @@ def _nearby_comp_columns_for_runtime() -> list[str]:
     return [column for column in NEARBY_COMPS_FIELDS if column in available]
 
 
+def _search_columns_for_runtime() -> list[str]:
+    if _using_embedded_runtime():
+        available = _embedded_parcel_dataset().schema.names
+    else:
+        available = load_base_frame().columns
+    return [column for column in SEARCH_FIELDS if column in available]
+
+
+def _search_match_candidates(frame: pd.DataFrame, query: str) -> pd.DataFrame:
+    if frame.empty:
+        return frame.head(0).copy()
+
+    normalized_query = query.strip().lower()
+    if not normalized_query:
+        return frame.head(0).copy()
+
+    row_id = _normalize_string(frame.get("parcel_row_id"), index=frame.index).str.lower()
+    parcel_id = _normalize_string(frame.get("parcel_id"), index=frame.index).str.lower()
+    owner_name = _normalize_string(frame.get("owner_name"), index=frame.index).str.lower()
+
+    rank = pd.Series(999, index=frame.index, dtype="int64")
+    match_field = pd.Series(pd.NA, index=frame.index, dtype="string")
+
+    def apply(mask: pd.Series, next_rank: int, field_name: str) -> None:
+        nonlocal rank, match_field
+        eligible = mask.fillna(False) & rank.gt(next_rank)
+        rank = rank.mask(eligible, next_rank)
+        match_field = match_field.mask(eligible, field_name)
+
+    apply(row_id.eq(normalized_query), 0, "parcel_row_id_exact")
+    apply(parcel_id.eq(normalized_query), 1, "parcel_id_exact")
+    apply(row_id.str.startswith(normalized_query, na=False), 2, "parcel_row_id_prefix")
+    apply(parcel_id.str.startswith(normalized_query, na=False), 3, "parcel_id_prefix")
+    apply(row_id.str.contains(normalized_query, na=False, regex=False), 4, "parcel_row_id_partial")
+    apply(parcel_id.str.contains(normalized_query, na=False, regex=False), 5, "parcel_id_partial")
+    if len(normalized_query) >= 3:
+        apply(owner_name.eq(normalized_query), 6, "owner_name_exact")
+        apply(owner_name.str.startswith(normalized_query, na=False), 7, "owner_name_prefix")
+        apply(owner_name.str.contains(normalized_query, na=False, regex=False), 8, "owner_name_partial")
+
+    matched = frame.loc[rank.lt(999)].copy()
+    if matched.empty:
+        return matched
+
+    matched["_match_rank"] = rank.loc[matched.index].astype("int64")
+    matched["_match_field"] = match_field.loc[matched.index]
+    matched["_parcel_id_len"] = _normalize_string(matched.get("parcel_id"), index=matched.index).str.len().fillna(9999)
+    score_field = _lead_sort_field(matched.columns)
+    matched["_score_sort"] = pd.to_numeric(matched.get(score_field), errors="coerce").fillna(-1)
+    matched = matched.sort_values(
+        ["_match_rank", "_parcel_id_len", "_score_sort", "parcel_row_id"],
+        ascending=[True, True, False, True],
+        na_position="last",
+    )
+    return matched
+
+
+def _search_result_item(row: pd.Series) -> dict[str, Any]:
+    longitude = _float_or_none(row.get("longitude"))
+    latitude = _float_or_none(row.get("latitude"))
+    centroid = None
+    if longitude is not None and latitude is not None:
+        centroid = {"type": "Point", "coordinates": [round(longitude, 6), round(latitude, 6)]}
+    return {
+        "parcel_row_id": _serialize_scalar(row.get("parcel_row_id")),
+        "parcel_id": _serialize_scalar(row.get("parcel_id")),
+        "county_name": _serialize_scalar(row.get("county_name")),
+        "acreage": _serialize_scalar(row.get("acreage")),
+        "owner_name": _serialize_scalar(row.get("owner_name")),
+        "centroid": centroid,
+        "match_field": _serialize_scalar(row.get("_match_field")),
+    }
+
+
 def _load_nearby_comp_subject(parcel_row_id: str) -> pd.Series | None:
     columns = _nearby_comp_columns_for_runtime()
     if _using_embedded_runtime():
@@ -2713,6 +2800,38 @@ def get_nearby_comps(parcel_row_id: str, limit: int = NEARBY_COMPS_DEFAULT_LIMIT
             )
     items = [_nearby_comp_item(row) for _, row in selected_frame.iterrows()]
     return {"subject": subject_payload, "methodology": methodology, "items": items}
+
+
+def search_leads(query: str, limit: int = SEARCH_DEFAULT_LIMIT) -> dict[str, Any]:
+    normalized_query = str(query or "").strip()
+    safe_limit = _clamp_limit(limit, default=SEARCH_DEFAULT_LIMIT, max_limit=SEARCH_MAX_LIMIT)
+    if len(normalized_query) < 2:
+        return {"query": normalized_query, "items": []}
+
+    columns = _search_columns_for_runtime()
+    if _using_embedded_runtime():
+        candidate_limit = max(safe_limit * 5, 30)
+        candidates = pd.DataFrame(columns=columns)
+        scanner = _embedded_parcel_dataset().scanner(columns=columns, batch_size=50000)
+        for batch in scanner.to_batches():
+            frame = batch.to_pandas()
+            if frame.empty:
+                continue
+            matched = _search_match_candidates(frame, normalized_query)
+            if matched.empty:
+                continue
+            candidates = pd.concat([candidates, matched], ignore_index=True)
+            candidates = candidates.sort_values(
+                ["_match_rank", "_parcel_id_len", "_score_sort", "parcel_row_id"],
+                ascending=[True, True, False, True],
+                na_position="last",
+            ).head(candidate_limit)
+        matched = candidates.head(safe_limit).copy()
+    else:
+        frame = load_base_frame().loc[:, columns].copy()
+        matched = _search_match_candidates(frame, normalized_query).head(safe_limit).copy()
+
+    return {"query": normalized_query, "items": [_search_result_item(row) for _, row in matched.iterrows()]}
 
 
 def _geometry_table_for_ids(parcel_row_ids: list[str]) -> pd.DataFrame:

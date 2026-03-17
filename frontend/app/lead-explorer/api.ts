@@ -1,4 +1,4 @@
-import type { ExplorerMeta, GeometryPoint, GeometryResponse, LeadRecord, LeadsResponse, NearbyCompsResponse, PresetItem, SortField, Filters } from "./types";
+import type { ExplorerMeta, GeometryPoint, GeometryResponse, LeadRecord, LeadsResponse, NearbyCompsResponse, PresetItem, SearchResponse, SearchResultRecord, SortField, Filters } from "./types";
 
 const DEFAULT_PRODUCTION_API_BASE_URL = "https://landintel-production.up.railway.app";
 const API_BASE_URL =
@@ -281,6 +281,67 @@ export async function fetchLeadDetail(parcelRowId: string): Promise<LeadRecord> 
     console.debug("[lead-explorer] fetchLeadDetail", { parcelRowId });
   }
   return fetchJson<LeadRecord>(`/api/leads/${encodeURIComponent(parcelRowId)}`);
+}
+
+function scoreSearchRecord(record: LeadRecord, rawQuery: string) {
+  const query = rawQuery.trim().toLowerCase();
+  const rowId = (record.parcel_row_id ?? "").trim().toLowerCase();
+  const parcelId = (record.parcel_id ?? "").trim().toLowerCase();
+  const ownerName = (record.owner_name ?? "").trim().toLowerCase();
+
+  if (!query) {
+    return null;
+  }
+  if (rowId === query) return { rank: 0, matchField: "parcel_row_id_exact" };
+  if (parcelId === query) return { rank: 1, matchField: "parcel_id_exact" };
+  if (rowId.startsWith(query)) return { rank: 2, matchField: "parcel_row_id_prefix" };
+  if (parcelId.startsWith(query)) return { rank: 3, matchField: "parcel_id_prefix" };
+  if (rowId.includes(query)) return { rank: 4, matchField: "parcel_row_id_partial" };
+  if (parcelId.includes(query)) return { rank: 5, matchField: "parcel_id_partial" };
+  if (query.length >= 3 && ownerName === query) return { rank: 6, matchField: "owner_name_exact" };
+  if (query.length >= 3 && ownerName.startsWith(query)) return { rank: 7, matchField: "owner_name_prefix" };
+  if (query.length >= 3 && ownerName.includes(query)) return { rank: 8, matchField: "owner_name_partial" };
+  return null;
+}
+
+function toSearchResultRecord(record: LeadRecord, matchField?: string | null): SearchResultRecord {
+  return {
+    parcel_row_id: record.parcel_row_id,
+    parcel_id: record.parcel_id,
+    county_name: record.county_name,
+    acreage: record.acreage,
+    owner_name: record.owner_name,
+    centroid:
+      record.geometry?.centroid && Array.isArray(record.geometry.centroid.coordinates)
+        ? ({ type: "Point", coordinates: record.geometry.centroid.coordinates as [number, number] } satisfies GeometryPoint)
+        : null,
+    match_field: matchField ?? null,
+  };
+}
+
+export async function fetchLeadSearch(q: string, limit = 10): Promise<SearchResponse> {
+  const searchParams = new URLSearchParams();
+  searchParams.set("q", q);
+  searchParams.set("limit", String(limit));
+  try {
+    return await fetchJson<SearchResponse>("/api/leads/search", searchParams, { timeoutMs: 8000 });
+  } catch {
+    const rows = await fetchStaticLeadDetailSource();
+    const normalizedRows = rows.map((row) => normalizeDetailLeadRecord(row));
+    const scored = normalizedRows
+      .map((row) => {
+        const match = scoreSearchRecord(row, q);
+        return match ? { row, ...match } : null;
+      })
+      .filter((value): value is { row: LeadRecord; rank: number; matchField: string } => value !== null)
+      .sort((left, right) => {
+        if (left.rank !== right.rank) return left.rank - right.rank;
+        return left.row.parcel_row_id.localeCompare(right.row.parcel_row_id);
+      })
+      .slice(0, limit)
+      .map(({ row, matchField }) => toSearchResultRecord(row, matchField));
+    return { query: q.trim(), items: scored };
+  }
 }
 
 export async function fetchNearbyComps(parcelRowId: string, limit = 8): Promise<NearbyCompsResponse> {
