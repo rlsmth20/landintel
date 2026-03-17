@@ -359,11 +359,35 @@ def _ensure_intelligence_fields(frame: pd.DataFrame) -> pd.DataFrame:
         ai_building_present = frame["ai_building_present_flag"].astype("boolean")
     else:
         ai_building_present = pd.Series(pd.NA, index=frame.index, dtype="boolean")
+    ai_building_present_probability = _to_float_series(frame, "ai_building_present_probability")
     frame["county_vacant_flag"] = county_vacant
     frame["ai_building_present_flag"] = ai_building_present
+    frame["ai_building_present_probability"] = ai_building_present_probability
     frame["building_present_confidence"] = _to_float_series(frame, "building_present_confidence")
     frame["building_presence_reason"] = _normalize_string(frame.get("building_presence_reason"), index=frame.index)
+    frame["vacancy_model_version"] = _normalize_string(frame.get("vacancy_model_version"), index=frame.index)
     frame["vacancy_confidence_score"] = _to_float_series(frame, "vacancy_confidence_score").fillna(_vacancy_confidence_series(frame))
+    ai_available = (
+        frame["ai_building_present_flag"].notna()
+        | frame["ai_building_present_probability"].notna()
+        | frame["building_present_confidence"].notna()
+        | frame["building_presence_reason"].notna()
+    )
+    frame["ai_vacancy_available_flag"] = pd.Series(ai_available, index=frame.index, dtype="boolean")
+    frame["ai_vacancy_source"] = pd.Series(
+        np.where(ai_available, "precomputed", "unavailable"),
+        index=frame.index,
+        dtype="string",
+    )
+    frame["ai_vacancy_status_note"] = pd.Series(
+        np.where(
+            ai_available,
+            "Precomputed AI vacancy prediction is available for this parcel.",
+            "No precomputed AI vacancy prediction is included in this parcel detail source.",
+        ),
+        index=frame.index,
+        dtype="string",
+    )
     frame = _apply_county_tax_coverage_fields(frame)
     frame = _apply_tax_recency_fields(frame)
     return frame
@@ -612,13 +636,71 @@ def _stabilize_detail_payload(payload: dict[str, Any]) -> None:
     if acreage_bucket is None and acreage is not None:
         acreage_bucket = _serialize_scalar(_acreage_bucket(pd.Series([acreage])).iloc[0])
     payload["acreage_bucket"] = acreage_bucket
+    _apply_ai_detail_defaults(payload)
+    payload["vacancy_confidence_score"] = _float_or_none(payload.get("vacancy_confidence_score"))
+    payload["vacancy_model_version"] = _serialize_scalar(payload.get("vacancy_model_version"))
     payload["building_present_confidence"] = _float_or_none(payload.get("building_present_confidence"))
     payload["building_presence_reason"] = _serialize_scalar(payload.get("building_presence_reason"))
     payload["overall_vacancy_assessment"] = _serialize_scalar(payload.get("overall_vacancy_assessment"))
 
 
+def _apply_ai_detail_defaults(payload: dict[str, Any]) -> None:
+    probability = _float_or_none(payload.get("ai_building_present_probability"))
+    confidence = _float_or_none(payload.get("building_present_confidence"))
+    building_present_flag = _bool_or_none(payload.get("ai_building_present_flag"))
+    if building_present_flag is None and confidence is not None:
+        building_present_flag = confidence >= 60.0
+
+    prediction_present = any(
+        value is not None
+        for value in (
+            probability,
+            confidence,
+            building_present_flag,
+            payload.get("building_presence_reason"),
+        )
+    )
+
+    source = _serialize_scalar(payload.get("ai_vacancy_source"))
+    if source not in {"precomputed", "on_demand", "unavailable"}:
+        source = "precomputed" if prediction_present else "unavailable"
+
+    available_flag = _bool_or_none(payload.get("ai_vacancy_available_flag"))
+    if available_flag is None:
+        available_flag = source in {"precomputed", "on_demand"} and prediction_present
+        if source == "unavailable":
+            available_flag = False
+
+    status_note = _serialize_scalar(payload.get("ai_vacancy_status_note"))
+    if status_note is None:
+        if source == "precomputed":
+            status_note = "Precomputed AI vacancy prediction is available for this parcel."
+        elif source == "on_demand":
+            status_note = "AI vacancy prediction was generated on demand from parcel imagery."
+        else:
+            status_note = "AI vacancy prediction is unavailable in this parcel detail source."
+
+    payload["ai_building_present_probability"] = probability
+    payload["building_present_confidence"] = confidence
+    payload["ai_building_present_flag"] = building_present_flag
+    payload["building_presence_reason"] = _serialize_scalar(payload.get("building_presence_reason"))
+    payload["ai_vacancy_source"] = source
+    payload["ai_vacancy_available_flag"] = available_flag
+    payload["ai_vacancy_status_note"] = status_note
+
+
 def _maybe_apply_on_demand_ai(payload: dict[str, Any], row: pd.Series) -> None:
-    if (not ENABLE_ON_DEMAND_AI_DETAIL) or payload.get("ai_building_present_flag") is not None:
+    if not ENABLE_ON_DEMAND_AI_DETAIL:
+        return
+    if any(
+        payload.get(field) is not None
+        for field in (
+            "ai_building_present_flag",
+            "ai_building_present_probability",
+            "building_present_confidence",
+            "building_presence_reason",
+        )
+    ):
         return
     parcel_row_id = str(payload.get("parcel_row_id") or row.get("parcel_row_id") or "").strip()
     if parcel_row_id and parcel_row_id in ON_DEMAND_AI_DETAIL_CACHE:
@@ -1108,6 +1190,9 @@ def _predict_ai_building_presence(
         "parcel_boundary_crop_ready_flag": False,
         "vacancy_confidence_score": vacancy_confidence_score,
         "vacancy_model_version": params.get("model_version"),
+        "ai_vacancy_available_flag": True,
+        "ai_vacancy_source": "on_demand",
+        "ai_vacancy_status_note": "AI vacancy prediction was generated on demand from parcel imagery.",
     }
 
 

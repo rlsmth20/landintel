@@ -39,7 +39,11 @@ const PARCEL_ID_CANDIDATE_FIELDS = [
 ] as const;
 
 const CANONICAL_DETAIL_NULL_FIELDS = [
+  "ai_building_present_probability",
   "ai_building_present_flag",
+  "ai_vacancy_available_flag",
+  "ai_vacancy_source",
+  "ai_vacancy_status_note",
   "assessed_total_value",
   "building_presence_reason",
   "building_present_confidence",
@@ -74,6 +78,7 @@ const CANONICAL_DETAIL_NULL_FIELDS = [
   "tax_data_upload_date",
   "tax_data_year",
   "vacancy_confidence_score",
+  "vacancy_model_version",
   "wetland_area_sqft",
   "wetland_pct",
 ] as const;
@@ -102,6 +107,22 @@ export function normalizeDetailLeadRecord(record: LeadRecord): LeadRecord {
     if (!(field in normalized)) {
       normalized[field] = null;
     }
+  }
+  const hasAiPrediction =
+    normalized.ai_building_present_flag !== null ||
+    normalized.ai_building_present_probability !== null ||
+    normalized.building_present_confidence !== null ||
+    normalized.building_presence_reason !== null;
+  if (normalized.ai_vacancy_source == null) {
+    normalized.ai_vacancy_source = hasAiPrediction ? "precomputed" : "unavailable";
+  }
+  if (normalized.ai_vacancy_available_flag == null) {
+    normalized.ai_vacancy_available_flag = hasAiPrediction;
+  }
+  if (normalized.ai_vacancy_status_note == null) {
+    normalized.ai_vacancy_status_note = hasAiPrediction
+      ? "Precomputed AI vacancy prediction is available for this parcel."
+      : "AI vacancy prediction is unavailable in this parcel detail source.";
   }
   return normalized;
 }

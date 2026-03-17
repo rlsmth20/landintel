@@ -683,6 +683,15 @@ def build_detail_metrics_runtime(frame: pd.DataFrame) -> pd.DataFrame:
     detail_columns = [
         "parcel_row_id",
         "acreage_bucket",
+        "ai_building_present_probability",
+        "ai_building_present_flag",
+        "building_present_confidence",
+        "building_presence_reason",
+        "ai_vacancy_available_flag",
+        "ai_vacancy_source",
+        "ai_vacancy_status_note",
+        "vacancy_confidence_score",
+        "vacancy_model_version",
         "county_tax_source_configured_flag",
         "county_tax_source_loaded_flag",
         "county_tax_source_name",
@@ -822,16 +831,41 @@ def build_runtime_frame() -> pd.DataFrame:
     frame["recommended_view_bucket"] = frame["recommended_view_bucket"].astype("string").fillna("general_ranked")
     frame["slope_class"] = frame["slope_class"].astype("string")
     frame["county_vacant_flag"] = pd.Series(pd.NA, index=frame.index, dtype="boolean")
+    frame["ai_building_present_probability"] = pd.to_numeric(frame.get("ai_building_present_probability"), errors="coerce")
     frame["ai_building_present_flag"] = (
         frame["ai_building_present_flag"].astype("boolean")
         if "ai_building_present_flag" in frame.columns
         else pd.Series(pd.NA, index=frame.index, dtype="boolean")
     )
+    frame["building_present_confidence"] = pd.to_numeric(frame.get("building_present_confidence"), errors="coerce")
+    frame["building_presence_reason"] = normalize_string(frame.get("building_presence_reason"), frame.index)
+    frame["vacancy_model_version"] = normalize_string(frame.get("vacancy_model_version"), frame.index)
     if "vacancy_confidence_score" in frame.columns:
         vacancy_confidence_series = pd.to_numeric(frame["vacancy_confidence_score"], errors="coerce")
     else:
         vacancy_confidence_series = pd.Series(np.nan, index=frame.index, dtype="float64")
     frame["vacancy_confidence_score"] = vacancy_confidence_series.fillna(vacancy_confidence(frame))
+    ai_available = (
+        frame["ai_building_present_flag"].notna()
+        | frame["ai_building_present_probability"].notna()
+        | frame["building_present_confidence"].notna()
+        | frame["building_presence_reason"].notna()
+    )
+    frame["ai_vacancy_available_flag"] = pd.Series(ai_available, index=frame.index, dtype="boolean")
+    frame["ai_vacancy_source"] = pd.Series(
+        np.where(ai_available, "precomputed", "unavailable"),
+        index=frame.index,
+        dtype="string",
+    )
+    frame["ai_vacancy_status_note"] = pd.Series(
+        np.where(
+            ai_available,
+            "Precomputed AI vacancy prediction is available for this parcel.",
+            "No precomputed AI vacancy prediction is included in this parcel detail source.",
+        ),
+        index=frame.index,
+        dtype="string",
+    )
     frame = apply_tax_freshness_fields(frame)
     frame = apply_county_tax_coverage_fields(frame)
     frame = apply_tax_recency_fields(frame)

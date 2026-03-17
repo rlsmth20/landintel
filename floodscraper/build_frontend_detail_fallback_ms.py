@@ -29,9 +29,14 @@ RUNTIME_COLUMNS = [
     "parcel_row_id",
     "assessed_total_value",
     "county_vacant_flag",
+    "ai_building_present_probability",
     "ai_building_present_flag",
     "building_present_confidence",
     "building_presence_reason",
+    "ai_vacancy_available_flag",
+    "ai_vacancy_source",
+    "ai_vacancy_status_note",
+    "vacancy_model_version",
 ]
 
 
@@ -82,10 +87,6 @@ def main() -> None:
         _apply_tax_detail_defaults(payload)
         _apply_vacancy_assessment(payload)
         _stabilize_detail_payload(payload)
-        if payload.get("ai_building_present_flag") is None and payload.get("building_present_confidence") is not None:
-            payload["ai_building_present_flag"] = bool(float(payload["building_present_confidence"]) >= 60.0)
-        payload.setdefault("ai_building_present_flag", None)
-        payload.setdefault("county_vacant_flag", None)
         records.append(payload)
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)

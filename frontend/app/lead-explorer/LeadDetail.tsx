@@ -93,7 +93,14 @@ function formatVacancyNote(lead: LeadRecord) {
   return lead.vacant_reason ?? lead.building_presence_reason ?? null;
 }
 
+function aiUnavailable(lead: LeadRecord) {
+  return lead.ai_vacancy_available_flag === false || lead.ai_vacancy_source === "unavailable";
+}
+
 function formatAiVacancySignal(lead: LeadRecord) {
+  if (aiUnavailable(lead)) {
+    return "Unavailable";
+  }
   const confidence = lead.building_present_confidence;
   if (confidence !== null && confidence !== undefined) {
     if (confidence >= 65) {
@@ -114,6 +121,9 @@ function formatAiVacancySignal(lead: LeadRecord) {
 }
 
 function formatAiConfidence(lead: LeadRecord) {
+  if (aiUnavailable(lead)) {
+    return null;
+  }
   const confidence = lead.building_present_confidence;
   if (confidence === null || confidence === undefined) {
     return null;
@@ -129,6 +139,9 @@ function formatAiConfidence(lead: LeadRecord) {
 }
 
 function formatAiWhy(lead: LeadRecord) {
+  if (aiUnavailable(lead)) {
+    return lead.ai_vacancy_status_note ?? "AI vacancy prediction is unavailable in this parcel detail source.";
+  }
   const confidence = lead.building_present_confidence;
   if (confidence !== null && confidence !== undefined) {
     if (confidence >= 65) {
@@ -248,10 +261,15 @@ export function LeadDetail({ lead }: { lead: LeadRecord }) {
         <DetailSection title="Vacancy Model Details">
           <DetailRow label="Footprint vacancy signal" value={formatBoolean(lead.parcel_vacant_flag)} />
           <DetailRow label="County vacant flag" value={formatBoolean(lead.county_vacant_flag)} />
+          <DetailRow label="AI availability" value={formatBoolean(lead.ai_vacancy_available_flag)} />
+          <DetailRow label="AI source" value={humanizeValue(lead.ai_vacancy_source)} />
+          <DetailRow label="AI status note" value={lead.ai_vacancy_status_note} />
           <DetailRow label="AI building-present signal" value={formatBoolean(lead.ai_building_present_flag)} />
+          <DetailRow label="AI building probability" value={formatNumber(lead.ai_building_present_probability, 2)} />
           <DetailRow label="Building-present confidence" value={formatNumber(lead.building_present_confidence, 1)} />
           <DetailRow label="Building-presence reason" value={lead.building_presence_reason} />
           <DetailRow label="Vacancy likelihood score" value={formatNumber(lead.vacancy_confidence_score, 1)} />
+          <DetailRow label="Vacancy model version" value={lead.vacancy_model_version} />
         </DetailSection>
 
         <DetailSection title="Ownership Signals">
