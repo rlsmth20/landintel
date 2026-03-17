@@ -9,8 +9,10 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import pyarrow.dataset as ds
 import requests
-from PIL import Image
+from PIL import Image, ImageDraw
+from shapely import wkb
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +32,11 @@ DEFAULT_TILE_URL_TEMPLATE = (
     "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
 )
 MODEL_VERSION = "ms_building_presence_v2_multi_crop"
+DEFAULT_USE_PARCEL_MASK = True
+DEFAULT_OUTSIDE_MASK_FILL = "dim"
+DEFAULT_OUTSIDE_MASK_DIM_FACTOR = 0.15
+DEFAULT_PARCEL_BUFFER_PIXELS = 18
+DEFAULT_PARCEL_MIN_CROP_PIXELS = 72
 
 
 @dataclass
@@ -65,6 +72,24 @@ def load_candidate_frame() -> pd.DataFrame:
     frame["parcel_vacant_flag"] = frame["parcel_vacant_flag"].fillna(False)
     frame = frame.loc[frame["latitude"].notna() & frame["longitude"].notna()].copy()
     return frame
+
+
+def load_parcel_geometry_lookup(parcel_row_ids: list[str] | pd.Series | pd.Index) -> dict[str, bytes]:
+    normalized_ids = pd.Index(parcel_row_ids, dtype="string").dropna().unique()
+    if normalized_ids.empty:
+        return {}
+    dataset = ds.dataset(PARCEL_MASTER_PATH, format="parquet")
+    rows: list[pd.DataFrame] = []
+    chunk_size = 1000
+    for start in range(0, len(normalized_ids), chunk_size):
+        chunk = normalized_ids[start : start + chunk_size].tolist()
+        table = dataset.to_table(columns=["parcel_row_id", "geometry"], filter=ds.field("parcel_row_id").isin(chunk))
+        if table.num_rows:
+            rows.append(table.to_pandas())
+    if not rows:
+        return {}
+    frame = pd.concat(rows, ignore_index=True)
+    return {str(row["parcel_row_id"]): row["geometry"] for _, row in frame.iterrows() if pd.notna(row["geometry"])}
 
 
 def load_app_ready_row_ids() -> pd.Index:
@@ -150,6 +175,173 @@ def crop_specs_for_acreage(acreage: float | None) -> list[tuple[str, tuple[int, 
             ]
         )
     return specs
+
+
+def _tile_pixel(longitude: float, latitude: float, address: TileAddress, tile_size: int = 256) -> tuple[float, float]:
+    lat_rad = math.radians(latitude)
+    n = 2**address.z
+    world_x = ((longitude + 180.0) / 360.0) * n * tile_size
+    world_y = ((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0) * n * tile_size
+    return world_x - (address.x * tile_size), world_y - (address.y * tile_size)
+
+
+def build_parcel_mask(
+    geometry_value: bytes | bytearray | memoryview | None,
+    address: TileAddress,
+    *,
+    tile_size: int = 256,
+) -> Image.Image | None:
+    if geometry_value is None:
+        return None
+    try:
+        shape = wkb.loads(bytes(geometry_value))
+    except Exception:
+        return None
+    mask = Image.new("L", (tile_size, tile_size), 0)
+    draw = ImageDraw.Draw(mask)
+    polygons = getattr(shape, "geoms", [shape]) if shape.geom_type == "MultiPolygon" else [shape]
+    drew_any = False
+    for polygon in polygons:
+        if polygon.is_empty:
+            continue
+        exterior = [_tile_pixel(lng, lat, address, tile_size) for lng, lat in polygon.exterior.coords]
+        if len(exterior) < 3:
+            continue
+        draw.polygon(exterior, fill=255)
+        for ring in polygon.interiors:
+            interior = [_tile_pixel(lng, lat, address, tile_size) for lng, lat in ring.coords]
+            if len(interior) >= 3:
+                draw.polygon(interior, fill=0)
+        drew_any = True
+    if not drew_any or mask.getbbox() is None:
+        return None
+    return mask
+
+
+def apply_outside_mask(
+    image: Image.Image,
+    mask: Image.Image,
+    *,
+    outside_mask_fill: str = DEFAULT_OUTSIDE_MASK_FILL,
+    outside_mask_dim_factor: float = DEFAULT_OUTSIDE_MASK_DIM_FACTOR,
+) -> Image.Image:
+    array = np.asarray(image.convert("RGB"), dtype=np.uint8).copy()
+    mask_array = np.asarray(mask, dtype=np.uint8) > 0
+    if outside_mask_fill == "black":
+        array[~mask_array] = 0
+    else:
+        dim_factor = float(np.clip(outside_mask_dim_factor, 0.0, 1.0))
+        array[~mask_array] = (array[~mask_array].astype(np.float32) * dim_factor).astype(np.uint8)
+    return Image.fromarray(array, mode="RGB")
+
+
+def _expand_crop_box(
+    bbox: tuple[int, int, int, int],
+    *,
+    image_size: tuple[int, int],
+    buffer_pixels: int,
+    min_pixels: int,
+) -> tuple[int, int, int, int]:
+    image_width, image_height = image_size
+    left, top, right, bottom = bbox
+    width = max(right - left, 1)
+    height = max(bottom - top, 1)
+    center_x = (left + right) / 2.0
+    center_y = (top + bottom) / 2.0
+    crop_width = max(width + (buffer_pixels * 2), min_pixels)
+    crop_height = max(height + (buffer_pixels * 2), min_pixels)
+    crop_width = min(int(round(crop_width)), image_width)
+    crop_height = min(int(round(crop_height)), image_height)
+    crop_left = int(round(center_x - (crop_width / 2.0)))
+    crop_top = int(round(center_y - (crop_height / 2.0)))
+    crop_left = max(0, min(crop_left, image_width - crop_width))
+    crop_top = max(0, min(crop_top, image_height - crop_height))
+    return (crop_left, crop_top, crop_left + crop_width, crop_top + crop_height)
+
+
+def parcel_aware_crop_specs(
+    mask_bbox: tuple[int, int, int, int],
+    acreage: float | None,
+    *,
+    image_size: tuple[int, int],
+    parcel_buffer_pixels: int = DEFAULT_PARCEL_BUFFER_PIXELS,
+) -> list[tuple[str, tuple[int, int, int, int]]]:
+    if acreage is None or not np.isfinite(float(acreage)):
+        min_pixels = DEFAULT_PARCEL_MIN_CROP_PIXELS
+        buffer_pixels = parcel_buffer_pixels
+    else:
+        acreage_value = float(acreage)
+        if acreage_value <= 0.25:
+            min_pixels = 64
+            buffer_pixels = max(6, int(parcel_buffer_pixels * 0.5))
+        elif acreage_value <= 1.0:
+            min_pixels = 72
+            buffer_pixels = max(8, int(parcel_buffer_pixels * 0.65))
+        elif acreage_value <= 5.0:
+            min_pixels = 88
+            buffer_pixels = parcel_buffer_pixels
+        else:
+            min_pixels = 112
+            buffer_pixels = parcel_buffer_pixels + 10
+    focus = _expand_crop_box(mask_bbox, image_size=image_size, buffer_pixels=buffer_pixels, min_pixels=min_pixels)
+    context = _expand_crop_box(
+        mask_bbox,
+        image_size=image_size,
+        buffer_pixels=buffer_pixels + 14,
+        min_pixels=min(min_pixels + 36, max(image_size)),
+    )
+    full = (0, 0, image_size[0], image_size[1])
+    return [
+        ("parcel_focus", focus),
+        ("parcel_context", context),
+        ("parcel_mask_full", full),
+    ]
+
+
+def prepare_parcel_aware_image(
+    image_source: Path | Image.Image,
+    *,
+    address: TileAddress,
+    geometry_value: bytes | bytearray | memoryview | None,
+    acreage: float | None,
+    use_parcel_mask: bool = DEFAULT_USE_PARCEL_MASK,
+    outside_mask_fill: str = DEFAULT_OUTSIDE_MASK_FILL,
+    outside_mask_dim_factor: float = DEFAULT_OUTSIDE_MASK_DIM_FACTOR,
+    parcel_buffer_pixels: int = DEFAULT_PARCEL_BUFFER_PIXELS,
+) -> dict[str, Any]:
+    image = load_tile_image(image_source)
+    if not use_parcel_mask:
+        return {
+            "image": image,
+            "crop_specs": crop_specs_for_acreage(acreage),
+            "parcel_boundary_crop_ready_flag": False,
+            "imagery_crop_strategy": "multi_crop_v2",
+        }
+    mask = build_parcel_mask(geometry_value, address, tile_size=image.size[0])
+    if mask is None or mask.getbbox() is None:
+        return {
+            "image": image,
+            "crop_specs": crop_specs_for_acreage(acreage),
+            "parcel_boundary_crop_ready_flag": False,
+            "imagery_crop_strategy": "multi_crop_v2",
+        }
+    masked_image = apply_outside_mask(
+        image,
+        mask,
+        outside_mask_fill=outside_mask_fill,
+        outside_mask_dim_factor=outside_mask_dim_factor,
+    )
+    return {
+        "image": masked_image,
+        "crop_specs": parcel_aware_crop_specs(
+            mask.getbbox(),
+            acreage,
+            image_size=image.size,
+            parcel_buffer_pixels=parcel_buffer_pixels,
+        ),
+        "parcel_boundary_crop_ready_flag": True,
+        "imagery_crop_strategy": "parcel_mask_multi_crop_v1",
+    }
 
 
 def extract_image_features(image_source: Path | Image.Image, crop_box: tuple[int, int, int, int] | None = None) -> dict[str, float]:

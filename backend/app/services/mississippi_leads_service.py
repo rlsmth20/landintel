@@ -17,7 +17,7 @@ import pyarrow.dataset as ds
 import requests
 import mercantile
 import mapbox_vector_tile
-from PIL import Image
+from PIL import Image, ImageDraw
 from shapely import wkb
 from shapely.geometry import mapping
 
@@ -217,6 +217,10 @@ SQFT_PER_ACRE = 43560.0
 ENABLE_ON_DEMAND_AI_DETAIL = os.getenv("MISSISSIPPI_ENABLE_ON_DEMAND_AI_DETAIL", "true").strip().lower() not in {"0", "false", "no", "off"}
 ON_DEMAND_AI_DETAIL_TIMEOUT_SECONDS = float(os.getenv("MISSISSIPPI_ON_DEMAND_AI_DETAIL_TIMEOUT_SECONDS", "4.0"))
 ON_DEMAND_AI_DETAIL_CACHE: dict[str, dict[str, Any]] = {}
+AI_USE_PARCEL_MASK = os.getenv("MISSISSIPPI_AI_USE_PARCEL_MASK", "true").strip().lower() not in {"0", "false", "no", "off"}
+AI_OUTSIDE_MASK_FILL = os.getenv("MISSISSIPPI_AI_OUTSIDE_MASK_FILL", "dim").strip().lower()
+AI_OUTSIDE_MASK_DIM_FACTOR = float(os.getenv("MISSISSIPPI_AI_OUTSIDE_MASK_DIM_FACTOR", "0.15"))
+AI_PARCEL_BUFFER_PIXELS = max(0, int(os.getenv("MISSISSIPPI_AI_PARCEL_BUFFER_PIXELS", "18")))
 
 
 def _normalize_string(series: pd.Series | None, index: pd.Index | None = None) -> pd.Series:
@@ -851,6 +855,7 @@ def _maybe_apply_on_demand_ai(payload: dict[str, Any], row: pd.Series) -> None:
         return
     try:
         ai_payload = _predict_ai_building_presence(
+            parcel_row_id,
             float(longitude),
             float(latitude),
             bool(payload.get("parcel_vacant_flag")),
@@ -1291,7 +1296,12 @@ def _centroid_tile(longitude: float, latitude: float, zoom: int) -> tuple[int, i
 
 
 def _ai_extract_image_features(image_bytes: bytes) -> dict[str, float]:
-    image = Image.open(io.BytesIO(image_bytes)).convert("RGB").resize((128, 128))
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    return _ai_extract_image_features_from_image(image)
+
+
+def _ai_extract_image_features_from_image(image: Image.Image) -> dict[str, float]:
+    image = image.convert("RGB").resize((128, 128))
     array = np.asarray(image, dtype=np.float32) / 255.0
     gray = array.mean(axis=2)
     flattened = array.reshape(-1, 3)
@@ -1340,6 +1350,151 @@ def _ai_crop_specs(acreage: float | None) -> list[tuple[str, tuple[int, int, int
             ]
         )
     return specs
+
+
+def _tile_pixel(longitude: float, latitude: float, tile_x: int, tile_y: int, zoom: int, tile_size: int = 256) -> tuple[float, float]:
+    lat_rad = np.radians(latitude)
+    n = 2**zoom
+    world_x = ((longitude + 180.0) / 360.0) * n * tile_size
+    world_y = ((1.0 - np.arcsinh(np.tan(lat_rad)) / np.pi) / 2.0) * n * tile_size
+    return world_x - (tile_x * tile_size), world_y - (tile_y * tile_size)
+
+
+def _parcel_geometry_bytes(parcel_row_id: str | None) -> bytes | None:
+    if not parcel_row_id:
+        return None
+    try:
+        frame = _geometry_table_for_ids([parcel_row_id])
+    except Exception:
+        return None
+    if frame.empty or "geometry" not in frame.columns:
+        return None
+    geometry_value = frame.iloc[0]["geometry"]
+    if geometry_value is None or isinstance(geometry_value, dict):
+        return None
+    try:
+        return bytes(geometry_value)
+    except Exception:
+        return None
+
+
+def _build_parcel_tile_mask(
+    geometry_bytes: bytes | None,
+    *,
+    tile_x: int,
+    tile_y: int,
+    zoom: int,
+    tile_size: int = 256,
+) -> Image.Image | None:
+    if geometry_bytes is None:
+        return None
+    try:
+        shape = wkb.loads(geometry_bytes)
+    except Exception:
+        return None
+    mask = Image.new("L", (tile_size, tile_size), 0)
+    draw = ImageDraw.Draw(mask)
+    polygons = getattr(shape, "geoms", [shape]) if shape.geom_type == "MultiPolygon" else [shape]
+    drew_any = False
+    for polygon in polygons:
+        if polygon.is_empty:
+            continue
+        exterior = [_tile_pixel(lng, lat, tile_x, tile_y, zoom, tile_size) for lng, lat in polygon.exterior.coords]
+        if len(exterior) < 3:
+            continue
+        draw.polygon(exterior, fill=255)
+        for ring in polygon.interiors:
+            interior = [_tile_pixel(lng, lat, tile_x, tile_y, zoom, tile_size) for lng, lat in ring.coords]
+            if len(interior) >= 3:
+                draw.polygon(interior, fill=0)
+        drew_any = True
+    if not drew_any or mask.getbbox() is None:
+        return None
+    return mask
+
+
+def _apply_outside_mask_to_image(image: Image.Image, mask: Image.Image) -> Image.Image:
+    array = np.asarray(image.convert("RGB"), dtype=np.uint8).copy()
+    mask_array = np.asarray(mask, dtype=np.uint8) > 0
+    if AI_OUTSIDE_MASK_FILL == "black":
+        array[~mask_array] = 0
+    else:
+        dim_factor = float(np.clip(AI_OUTSIDE_MASK_DIM_FACTOR, 0.0, 1.0))
+        array[~mask_array] = (array[~mask_array].astype(np.float32) * dim_factor).astype(np.uint8)
+    return Image.fromarray(array, mode="RGB")
+
+
+def _expand_ai_crop_box(
+    bbox: tuple[int, int, int, int],
+    *,
+    image_size: tuple[int, int],
+    buffer_pixels: int,
+    min_pixels: int,
+) -> tuple[int, int, int, int]:
+    image_width, image_height = image_size
+    left, top, right, bottom = bbox
+    width = max(right - left, 1)
+    height = max(bottom - top, 1)
+    center_x = (left + right) / 2.0
+    center_y = (top + bottom) / 2.0
+    crop_width = min(max(width + (buffer_pixels * 2), min_pixels), image_width)
+    crop_height = min(max(height + (buffer_pixels * 2), min_pixels), image_height)
+    crop_left = int(round(center_x - (crop_width / 2.0)))
+    crop_top = int(round(center_y - (crop_height / 2.0)))
+    crop_left = max(0, min(crop_left, image_width - crop_width))
+    crop_top = max(0, min(crop_top, image_height - crop_height))
+    return (crop_left, crop_top, crop_left + int(crop_width), crop_top + int(crop_height))
+
+
+def _parcel_aware_ai_crop_specs(mask_bbox: tuple[int, int, int, int], acreage: float | None, image_size: tuple[int, int]) -> list[tuple[str, tuple[int, int, int, int]]]:
+    if acreage is None or not np.isfinite(acreage):
+        min_pixels = 72
+        buffer_pixels = AI_PARCEL_BUFFER_PIXELS
+    elif acreage <= 0.25:
+        min_pixels = 64
+        buffer_pixels = max(6, int(AI_PARCEL_BUFFER_PIXELS * 0.5))
+    elif acreage <= 1.0:
+        min_pixels = 72
+        buffer_pixels = max(8, int(AI_PARCEL_BUFFER_PIXELS * 0.65))
+    elif acreage <= 5.0:
+        min_pixels = 88
+        buffer_pixels = AI_PARCEL_BUFFER_PIXELS
+    else:
+        min_pixels = 112
+        buffer_pixels = AI_PARCEL_BUFFER_PIXELS + 10
+    focus = _expand_ai_crop_box(mask_bbox, image_size=image_size, buffer_pixels=buffer_pixels, min_pixels=min_pixels)
+    context = _expand_ai_crop_box(
+        mask_bbox,
+        image_size=image_size,
+        buffer_pixels=buffer_pixels + 14,
+        min_pixels=min(min_pixels + 36, max(image_size)),
+    )
+    full = (0, 0, image_size[0], image_size[1])
+    return [
+        ("parcel_focus", focus),
+        ("parcel_context", context),
+        ("parcel_mask_full", full),
+    ]
+
+
+def _prepare_parcel_aware_ai_image(
+    tile_image: Image.Image,
+    *,
+    parcel_row_id: str | None,
+    tile_x: int,
+    tile_y: int,
+    zoom: int,
+    acreage: float | None,
+) -> tuple[Image.Image, list[tuple[str, tuple[int, int, int, int]]], bool, str]:
+    if not AI_USE_PARCEL_MASK:
+        return tile_image, _ai_crop_specs(acreage), False, "multi_crop_v2"
+    geometry_bytes = _parcel_geometry_bytes(parcel_row_id)
+    mask = _build_parcel_tile_mask(geometry_bytes, tile_x=tile_x, tile_y=tile_y, zoom=zoom, tile_size=tile_image.size[0])
+    if mask is None or mask.getbbox() is None:
+        return tile_image, _ai_crop_specs(acreage), False, "multi_crop_v2"
+    masked_image = _apply_outside_mask_to_image(tile_image, mask)
+    crop_specs = _parcel_aware_ai_crop_specs(mask.getbbox(), acreage, tile_image.size)
+    return masked_image, crop_specs, True, "parcel_mask_multi_crop_v1"
 
 
 def _imagery_context_signals(features: dict[str, float]) -> dict[str, float]:
@@ -1400,6 +1555,7 @@ def _building_presence_confidence(
 
 
 def _predict_ai_building_presence(
+    parcel_row_id: str | None,
     longitude: float,
     latitude: float,
     parcel_vacant_flag: bool,
@@ -1424,12 +1580,18 @@ def _predict_ai_building_presence(
     coef = np.asarray(params["coef"], dtype=np.float64)
     intercept = float(params["intercept"])
     tile_image = Image.open(io.BytesIO(response.content)).convert("RGB")
+    prepared_image, crop_specs, parcel_boundary_crop_ready_flag, crop_strategy = _prepare_parcel_aware_ai_image(
+        tile_image,
+        parcel_row_id=parcel_row_id,
+        tile_x=tile_x,
+        tile_y=tile_y,
+        zoom=zoom,
+        acreage=acreage,
+    )
     crop_predictions: list[dict[str, Any]] = []
-    for crop_label, crop_box in _ai_crop_specs(acreage):
-        crop_image = tile_image.crop(crop_box).resize((128, 128))
-        image_bytes = io.BytesIO()
-        crop_image.save(image_bytes, format="PNG")
-        features = _ai_extract_image_features(image_bytes.getvalue())
+    for crop_label, crop_box in crop_specs:
+        crop_image = prepared_image.crop(crop_box)
+        features = _ai_extract_image_features_from_image(crop_image)
         values = np.asarray([features[column] for column in feature_columns], dtype=np.float64)
         scaled = (values - mean) / scale
         logit = float(np.dot(scaled, coef) + intercept)
@@ -1464,18 +1626,22 @@ def _predict_ai_building_presence(
     footprint_vacancy_score = 58.0 if parcel_vacant_flag else 35.0
     imagery_vacancy_score = 100.0 - building_present_confidence
     vacancy_confidence_score = round((footprint_vacancy_score * 0.15) + (imagery_vacancy_score * 0.85), 2)
-    building_presence_reason = f"Best imagery crop {best_crop['crop_label']} with confidence {building_present_confidence:.1f}."
+    building_presence_reason = (
+        f"Best parcel-aware crop {best_crop['crop_label']} with confidence {building_present_confidence:.1f}."
+        if parcel_boundary_crop_ready_flag
+        else f"Best imagery crop {best_crop['crop_label']} with confidence {building_present_confidence:.1f}."
+    )
     return {
         "ai_building_present_probability": round(probability, 6),
         "building_present_confidence": round(building_present_confidence, 1),
         "ai_building_present_flag": bool(ai_building_present_flag),
         "building_presence_reason": building_presence_reason,
-        "imagery_crop_strategy": "multi_crop_v2",
+        "imagery_crop_strategy": crop_strategy,
         "imagery_best_crop_label": str(best_crop["crop_label"]),
         "imagery_crop_count": len(crop_predictions),
         "imagery_driveway_signal": round(float(best_crop["imagery_driveway_signal"]), 1),
         "imagery_clearing_signal": round(float(best_crop["imagery_clearing_signal"]), 1),
-        "parcel_boundary_crop_ready_flag": False,
+        "parcel_boundary_crop_ready_flag": parcel_boundary_crop_ready_flag,
         "vacancy_confidence_score": vacancy_confidence_score,
         "vacancy_model_version": params.get("model_version"),
         "ai_vacancy_available_flag": True,

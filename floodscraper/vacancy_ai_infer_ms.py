@@ -8,17 +8,21 @@ import joblib
 import pandas as pd
 
 from vacancy_ai_common import (
+    DEFAULT_OUTSIDE_MASK_DIM_FACTOR,
+    DEFAULT_OUTSIDE_MASK_FILL,
+    DEFAULT_PARCEL_BUFFER_PIXELS,
     DEFAULT_TILE_URL_TEMPLATE,
+    DEFAULT_USE_PARCEL_MASK,
     MODEL_PATH,
     PREDICTIONS_PATH,
     combined_vacancy_confidence,
-    crop_specs_for_acreage,
     ensure_tile_image,
     extract_image_features,
     imagery_context_signals,
     load_app_ready_row_ids,
-    load_tile_image,
     load_candidate_frame,
+    load_parcel_geometry_lookup,
+    prepare_parcel_aware_image,
 )
 
 
@@ -31,6 +35,10 @@ def infer_prediction_row(
     zoom: int,
     refresh: bool,
     tile_template: str,
+    use_parcel_mask: bool,
+    outside_mask_fill: str,
+    outside_mask_dim_factor: float,
+    parcel_buffer_pixels: int,
 ) -> dict[str, object]:
     image_path, address = ensure_tile_image(
         parcel_row_id=str(row["parcel_row_id"]),
@@ -41,9 +49,19 @@ def infer_prediction_row(
         refresh=refresh,
         template=tile_template,
     )
-    image = load_tile_image(image_path)
+    prepared = prepare_parcel_aware_image(
+        image_path,
+        address=address,
+        geometry_value=row.get("geometry"),
+        acreage=row.get("acreage"),
+        use_parcel_mask=use_parcel_mask,
+        outside_mask_fill=outside_mask_fill,
+        outside_mask_dim_factor=outside_mask_dim_factor,
+        parcel_buffer_pixels=parcel_buffer_pixels,
+    )
+    image = prepared["image"]
     crop_predictions: list[dict[str, object]] = []
-    for crop_label, crop_box in crop_specs_for_acreage(row.get("acreage")):
+    for crop_label, crop_box in prepared["crop_specs"]:
         features = extract_image_features(image, crop_box)
         feature_frame = pd.DataFrame([{column: features[column] for column in columns}])
         building_probability = float(pipeline.predict_proba(feature_frame)[0, 1])
@@ -68,7 +86,11 @@ def infer_prediction_row(
         1,
     )
     ai_building_present_flag = building_present_confidence >= 60.0
-    building_presence_reason = f"Best crop {best_crop['crop_label']} with imagery confidence {building_present_confidence:.1f}."
+    building_presence_reason = (
+        f"Best parcel-aware crop {best_crop['crop_label']} with imagery confidence {building_present_confidence:.1f}."
+        if prepared["parcel_boundary_crop_ready_flag"]
+        else f"Best crop {best_crop['crop_label']} with imagery confidence {building_present_confidence:.1f}."
+    )
     return {
         "parcel_row_id": str(row["parcel_row_id"]),
         "county_name": row.get("county_name"),
@@ -83,12 +105,12 @@ def infer_prediction_row(
         "ai_vacancy_available_flag": True,
         "ai_vacancy_source": "precomputed",
         "ai_vacancy_status_note": "Precomputed AI vacancy prediction is available for this parcel.",
-        "imagery_crop_strategy": "multi_crop_v2",
+        "imagery_crop_strategy": prepared["imagery_crop_strategy"],
         "imagery_best_crop_label": str(best_crop["crop_label"]),
         "imagery_crop_count": len(crop_predictions),
         "imagery_driveway_signal": round(float(best_crop["imagery_driveway_signal"]), 1),
         "imagery_clearing_signal": round(float(best_crop["imagery_clearing_signal"]), 1),
-        "parcel_boundary_crop_ready_flag": False,
+        "parcel_boundary_crop_ready_flag": bool(prepared["parcel_boundary_crop_ready_flag"]),
         "vacancy_confidence_score": combined_vacancy_confidence(
             bool(row["parcel_vacant_flag"]),
             building_probability,
@@ -112,6 +134,10 @@ def infer_predictions(
     tile_template: str,
     workers: int,
     resume: bool,
+    use_parcel_mask: bool,
+    outside_mask_fill: str,
+    outside_mask_dim_factor: float,
+    parcel_buffer_pixels: int,
 ) -> None:
     model_bundle = joblib.load(model_path)
     pipeline = model_bundle["pipeline"]
@@ -128,6 +154,9 @@ def infer_predictions(
         frame = frame.loc[frame["parcel_vacant_flag"].fillna(False)].copy()
     if limit is not None:
         frame = frame.head(limit).copy()
+    if use_parcel_mask and not frame.empty:
+        geometry_lookup = load_parcel_geometry_lookup(frame["parcel_row_id"].astype("string"))
+        frame["geometry"] = frame["parcel_row_id"].astype("string").map(geometry_lookup)
 
     existing_predictions = pd.DataFrame()
     if resume and pd.io.common.file_exists(output_path):
@@ -151,6 +180,10 @@ def infer_predictions(
                 zoom=zoom,
                 refresh=refresh,
                 tile_template=tile_template,
+                use_parcel_mask=use_parcel_mask,
+                outside_mask_fill=outside_mask_fill,
+                outside_mask_dim_factor=outside_mask_dim_factor,
+                parcel_buffer_pixels=parcel_buffer_pixels,
             ): row["parcel_row_id"]
             for row in records
         }
@@ -185,6 +218,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--tile-template", default=DEFAULT_TILE_URL_TEMPLATE)
+    parser.add_argument("--use-parcel-mask", dest="use_parcel_mask", action="store_true", default=DEFAULT_USE_PARCEL_MASK)
+    parser.add_argument("--no-parcel-mask", dest="use_parcel_mask", action="store_false")
+    parser.add_argument("--outside-mask-fill", choices=["dim", "black"], default=DEFAULT_OUTSIDE_MASK_FILL)
+    parser.add_argument("--outside-mask-dim-factor", type=float, default=DEFAULT_OUTSIDE_MASK_DIM_FACTOR)
+    parser.add_argument("--parcel-buffer-pixels", type=int, default=DEFAULT_PARCEL_BUFFER_PIXELS)
     return parser.parse_args()
 
 
@@ -202,4 +240,8 @@ if __name__ == "__main__":
         tile_template=args.tile_template,
         workers=args.workers,
         resume=args.resume,
+        use_parcel_mask=args.use_parcel_mask,
+        outside_mask_fill=args.outside_mask_fill,
+        outside_mask_dim_factor=args.outside_mask_dim_factor,
+        parcel_buffer_pixels=args.parcel_buffer_pixels,
     )
