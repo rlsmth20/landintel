@@ -593,6 +593,8 @@ tbody td:nth-child(13) {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  grid-column: 1 / -1;
+  min-width: 0;
 }
 
 .comp-table-wrap {
