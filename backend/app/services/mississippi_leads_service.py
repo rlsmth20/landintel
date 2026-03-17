@@ -127,6 +127,13 @@ NEARBY_COMPS_FIELDS = [
     "lead_score_total_effective",
     "investment_score",
     "parcel_vacant_flag",
+    "county_vacant_flag",
+    "building_count",
+    "building_area_total",
+    "ai_building_present_probability",
+    "ai_building_present_flag",
+    "building_present_confidence",
+    "building_presence_reason",
     "longitude",
     "latitude",
 ]
@@ -657,11 +664,16 @@ def _stabilize_detail_payload(payload: dict[str, Any]) -> None:
         acreage_bucket = _serialize_scalar(_acreage_bucket(pd.Series([acreage])).iloc[0])
     payload["acreage_bucket"] = acreage_bucket
     _apply_ai_detail_defaults(payload)
+    _apply_parcel_improvement_classification(payload)
     payload["vacancy_confidence_score"] = _float_or_none(payload.get("vacancy_confidence_score"))
     payload["vacancy_model_version"] = _serialize_scalar(payload.get("vacancy_model_version"))
     payload["building_present_confidence"] = _float_or_none(payload.get("building_present_confidence"))
     payload["building_presence_reason"] = _serialize_scalar(payload.get("building_presence_reason"))
     payload["overall_vacancy_assessment"] = _serialize_scalar(payload.get("overall_vacancy_assessment"))
+    payload["parcel_improvement_status"] = _serialize_scalar(payload.get("parcel_improvement_status"))
+    payload["parcel_improvement_confidence"] = _float_or_none(payload.get("parcel_improvement_confidence"))
+    payload["parcel_improvement_reason"] = _serialize_scalar(payload.get("parcel_improvement_reason"))
+    payload["parcel_improvement_evidence_summary"] = _serialize_scalar(payload.get("parcel_improvement_evidence_summary"))
 
 
 def _apply_ai_detail_defaults(payload: dict[str, Any]) -> None:
@@ -748,6 +760,154 @@ def _maybe_apply_on_demand_ai(payload: dict[str, Any], row: pd.Series) -> None:
         if parcel_row_id:
             ON_DEMAND_AI_DETAIL_CACHE[parcel_row_id] = ai_payload
         payload.update(ai_payload)
+
+
+def _apply_parcel_improvement_classification(payload: dict[str, Any]) -> None:
+    parcel_vacant_flag = _bool_or_none(payload.get("parcel_vacant_flag"))
+    county_vacant_flag = _bool_or_none(payload.get("county_vacant_flag"))
+    ai_building_present_flag = _bool_or_none(payload.get("ai_building_present_flag"))
+    ai_probability = _float_or_none(payload.get("ai_building_present_probability"))
+    building_present_confidence = _float_or_none(payload.get("building_present_confidence"))
+    building_count = _float_or_none(payload.get("building_count")) or 0.0
+    building_area_total = _float_or_none(payload.get("building_area_total")) or 0.0
+    assessed_total_value = _float_or_none(payload.get("assessed_total_value")) or 0.0
+    land_use = (_string_or_none(payload.get("land_use")) or "").lower()
+
+    improved_evidence = 0.0
+    vacant_evidence = 0.0
+    evidence: list[str] = []
+    conflicts: list[str] = []
+
+    if building_count >= 1:
+        improved_evidence += 70.0
+        evidence.append("Mapped building footprints present")
+    if building_area_total >= 400:
+        improved_evidence += 55.0
+        evidence.append("Building area indicates a substantial improvement")
+    elif building_area_total > 0:
+        improved_evidence += 20.0
+        evidence.append("Some mapped building area is present")
+
+    if parcel_vacant_flag is True:
+        vacant_evidence += 32.0
+        evidence.append("Footprint vacancy signal is active")
+    elif parcel_vacant_flag is False:
+        improved_evidence += 10.0
+
+    if county_vacant_flag is True:
+        vacant_evidence += 8.0
+        evidence.append("County vacancy flag suggests vacant land")
+
+    if building_present_confidence is not None:
+        if building_present_confidence >= 80.0:
+            improved_evidence += 72.0
+            evidence.append("AI imagery strongly suggests a structure")
+        elif building_present_confidence >= 65.0:
+            improved_evidence += 50.0
+            evidence.append("AI imagery suggests a structure")
+        elif building_present_confidence >= 50.0:
+            improved_evidence += 22.0
+            evidence.append("AI imagery weakly suggests improvement")
+        elif building_present_confidence <= 25.0:
+            vacant_evidence += 24.0
+            evidence.append("AI imagery strongly suggests no structure")
+        elif building_present_confidence <= 40.0:
+            vacant_evidence += 14.0
+            evidence.append("AI imagery leans vacant")
+    elif ai_probability is not None:
+        if ai_probability >= 0.8:
+            improved_evidence += 62.0
+            evidence.append("AI building probability is high")
+        elif ai_probability >= 0.65:
+            improved_evidence += 42.0
+            evidence.append("AI building probability supports improvement")
+        elif ai_probability <= 0.2:
+            vacant_evidence += 22.0
+            evidence.append("AI building probability is very low")
+        elif ai_probability <= 0.35:
+            vacant_evidence += 12.0
+            evidence.append("AI building probability leans vacant")
+    elif ai_building_present_flag is True:
+        improved_evidence += 40.0
+        evidence.append("AI building-present signal is positive")
+    elif ai_building_present_flag is False:
+        vacant_evidence += 10.0
+        evidence.append("AI building-present signal is negative")
+
+    if assessed_total_value >= 25000:
+        improved_evidence += 34.0
+        evidence.append("Assessed value strongly suggests improvements")
+    elif assessed_total_value >= 10000:
+        improved_evidence += 20.0
+        evidence.append("Assessed value supports improvement")
+    elif assessed_total_value <= 2000 and building_count <= 0 and building_area_total <= 0:
+        vacant_evidence += 8.0
+        evidence.append("Low assessed value does not support improvements")
+
+    if any(token in land_use for token in ("residential", "commercial", "industrial", "mobile", "manufactured")):
+        improved_evidence += 10.0
+        evidence.append("Land use is typically improved")
+    if any(token in land_use for token in ("vacant", "unimproved", "lot")):
+        vacant_evidence += 12.0
+        evidence.append("Land use description leans vacant")
+
+    if building_count <= 0 and building_area_total <= 0 and (
+        (building_present_confidence is not None and building_present_confidence >= 65.0)
+        or (ai_probability is not None and ai_probability >= 0.75)
+        or ai_building_present_flag is True
+    ):
+        conflicts.append("Imagery suggests an improvement, but mapped building footprints are missing")
+    if parcel_vacant_flag is True and assessed_total_value >= 25000:
+        conflicts.append("Vacancy flag conflicts with assessed value that suggests improvements")
+
+    strong_improved = (
+        building_count >= 1
+        or building_area_total >= 400
+        or (building_present_confidence is not None and building_present_confidence >= 65.0)
+        or (ai_probability is not None and ai_probability >= 0.75)
+        or assessed_total_value >= 25000
+    )
+    strong_vacant = (
+        parcel_vacant_flag is True
+        and building_count <= 0
+        and building_area_total <= 0
+        and (
+            (building_present_confidence is not None and building_present_confidence <= 35.0)
+            or (ai_probability is not None and ai_probability <= 0.35)
+            or ai_building_present_flag is False
+        )
+        and assessed_total_value < 10000
+    )
+    evidence_gap = improved_evidence - vacant_evidence
+
+    if strong_improved and evidence_gap >= 12.0:
+        status = "likely_improved"
+        confidence = float(np.clip(58.0 + evidence_gap * 0.7 - (8.0 if conflicts else 0.0), 58.0, 98.0))
+        if conflicts:
+            reason = "Improvement evidence is stronger than vacancy signals, but footprint and imagery signals conflict."
+        elif building_count >= 1 or building_area_total > 0:
+            reason = "Mapped building evidence indicates the parcel is improved."
+        elif building_present_confidence is not None or ai_probability is not None or ai_building_present_flag is True:
+            reason = "Imagery and parcel evidence indicate a structure or improvement is present."
+        else:
+            reason = "Available parcel signals indicate the parcel is improved."
+    elif strong_vacant and evidence_gap <= -12.0:
+        status = "likely_vacant"
+        confidence = float(np.clip(58.0 + abs(evidence_gap) * 0.7, 58.0, 96.0))
+        reason = "Footprint, imagery, and assessment signals consistently support a vacant-land classification."
+    else:
+        status = "needs_review"
+        confidence = float(np.clip(42.0 + abs(evidence_gap) * 0.35, 35.0, 72.0))
+        if conflicts:
+            reason = conflicts[0]
+        else:
+            reason = "Improvement and vacancy signals are incomplete or conflict, so this parcel should be reviewed."
+
+    summary_parts = evidence[:4] + conflicts[:2]
+    payload["parcel_improvement_status"] = status
+    payload["parcel_improvement_confidence"] = round(confidence, 1)
+    payload["parcel_improvement_reason"] = reason
+    payload["parcel_improvement_evidence_summary"] = "; ".join(summary_parts) if summary_parts else None
 
 
 def _apply_county_tax_coverage_fields(frame: pd.DataFrame) -> pd.DataFrame:
@@ -2246,8 +2406,24 @@ def _nearby_comp_item(row: pd.Series) -> dict[str, Any]:
         "lead_score_total": lead_score,
         "investment_score": _serialize_scalar(row.get("investment_score")),
         "parcel_vacant_flag": _serialize_scalar(row.get("parcel_vacant_flag")),
+        "parcel_improvement_status": _serialize_scalar(row.get("parcel_improvement_status")),
+        "parcel_improvement_confidence": _serialize_scalar(row.get("parcel_improvement_confidence")),
+        "parcel_improvement_reason": _serialize_scalar(row.get("parcel_improvement_reason")),
+        "parcel_improvement_evidence_summary": _serialize_scalar(row.get("parcel_improvement_evidence_summary")),
         "similarity_score": _serialize_scalar(row.get("similarity_score")),
         "centroid": centroid,
+    }
+
+
+def _nearby_comp_classification(row: pd.Series) -> dict[str, Any]:
+    payload = {key: _serialize_scalar(value) for key, value in row.to_dict().items()}
+    _apply_ai_detail_defaults(payload)
+    _apply_parcel_improvement_classification(payload)
+    return {
+        "parcel_improvement_status": payload.get("parcel_improvement_status"),
+        "parcel_improvement_confidence": payload.get("parcel_improvement_confidence"),
+        "parcel_improvement_reason": payload.get("parcel_improvement_reason"),
+        "parcel_improvement_evidence_summary": payload.get("parcel_improvement_evidence_summary"),
     }
 
 
@@ -2257,6 +2433,10 @@ def get_nearby_comps(parcel_row_id: str, limit: int = NEARBY_COMPS_DEFAULT_LIMIT
         return None
 
     safe_limit = _clamp_limit(limit, default=NEARBY_COMPS_DEFAULT_LIMIT, max_limit=NEARBY_COMPS_MAX_LIMIT)
+    subject_payload_for_classification = {key: _serialize_scalar(value) for key, value in subject.to_dict().items()}
+    _maybe_apply_on_demand_ai(subject_payload_for_classification, subject)
+    _apply_ai_detail_defaults(subject_payload_for_classification)
+    _apply_parcel_improvement_classification(subject_payload_for_classification)
     subject_longitude = _float_or_none(subject.get("longitude"))
     subject_latitude = _float_or_none(subject.get("latitude"))
     subject_acreage = _float_or_none(subject.get("acreage"))
@@ -2270,6 +2450,7 @@ def get_nearby_comps(parcel_row_id: str, limit: int = NEARBY_COMPS_DEFAULT_LIMIT
         pd.Series(
             {
                 **subject.to_dict(),
+                **subject_payload_for_classification,
                 "distance_to_subject_miles": 0.0,
                 "radius_bucket": "subject",
                 "value_per_acre": subject_value_per_acre,
@@ -2281,9 +2462,13 @@ def get_nearby_comps(parcel_row_id: str, limit: int = NEARBY_COMPS_DEFAULT_LIMIT
         "radius_tiers_miles": list(NEARBY_COMPS_RADIUS_TIERS_MILES),
         "acreage_similarity_floor": 0.2,
         "prioritize_same_land_use": True,
-        "prefer_same_vacancy_signal": True,
+        "prefer_same_improvement_status": True,
         "value_signal": "assessed_total_value_per_acre_when_available",
         "limit": safe_limit,
+        "comp_filtering_mode": "prefer_same_improvement_status_then_review_then_mixed",
+        "mixed_status_included_flag": False,
+        "uncertain_status_included_flag": False,
+        "quality_note": None,
     }
     if subject_longitude is None or subject_latitude is None:
         return {"subject": subject_payload, "methodology": methodology, "items": []}
@@ -2311,6 +2496,9 @@ def get_nearby_comps(parcel_row_id: str, limit: int = NEARBY_COMPS_DEFAULT_LIMIT
     if candidates.empty:
         return {"subject": subject_payload, "methodology": methodology, "items": []}
 
+    classification_frame = candidates.apply(lambda row: pd.Series(_nearby_comp_classification(row)), axis=1)
+    candidates = pd.concat([candidates.reset_index(drop=True), classification_frame.reset_index(drop=True)], axis=1)
+
     candidate_acreage = pd.to_numeric(candidates["acreage"], errors="coerce")
     if subject_acreage is not None and subject_acreage > 0:
         min_acres = np.minimum(candidate_acreage, subject_acreage)
@@ -2324,11 +2512,21 @@ def get_nearby_comps(parcel_row_id: str, limit: int = NEARBY_COMPS_DEFAULT_LIMIT
     candidate_land_use = candidates["land_use"].astype("string").fillna("").str.strip().str.lower()
     candidates["same_land_use_flag"] = candidate_land_use.eq(subject_land_use) if subject_land_use else pd.Series(False, index=candidates.index)
 
-    subject_vacant = _bool_or_none(subject.get("parcel_vacant_flag"))
-    if subject_vacant is None:
-        candidates["same_vacancy_flag"] = pd.Series(False, index=candidates.index)
+    subject_improvement_status = str(subject_payload_for_classification.get("parcel_improvement_status") or "needs_review")
+    candidates["parcel_improvement_status"] = candidates["parcel_improvement_status"].astype("string")
+    candidates["same_improvement_status_flag"] = candidates["parcel_improvement_status"].eq(subject_improvement_status)
+    if subject_improvement_status == "likely_vacant":
+        candidates["improvement_alignment_rank"] = candidates["parcel_improvement_status"].map(
+            {"likely_vacant": 3, "needs_review": 2, "likely_improved": 0}
+        ).fillna(1)
+    elif subject_improvement_status == "likely_improved":
+        candidates["improvement_alignment_rank"] = candidates["parcel_improvement_status"].map(
+            {"likely_improved": 3, "needs_review": 2, "likely_vacant": 0}
+        ).fillna(1)
     else:
-        candidates["same_vacancy_flag"] = candidates["parcel_vacant_flag"].fillna(False).astype(bool).eq(subject_vacant)
+        candidates["improvement_alignment_rank"] = candidates["parcel_improvement_status"].map(
+            {"needs_review": 3, "likely_vacant": 2, "likely_improved": 2}
+        ).fillna(1)
 
     candidates["value_per_acre"] = _value_per_acre_series(candidates["assessed_total_value"], candidates["acreage"])
     if subject_value_per_acre is not None and subject_value_per_acre > 0:
@@ -2361,27 +2559,55 @@ def get_nearby_comps(parcel_row_id: str, limit: int = NEARBY_COMPS_DEFAULT_LIMIT
         distance_similarity * 0.45
         + candidates["acreage_similarity"] * 0.25
         + candidates["same_land_use_flag"].astype(float) * 0.15
-        + candidates["same_vacancy_flag"].astype(float) * 0.05
+        + (candidates["improvement_alignment_rank"].fillna(0) / 3.0) * 0.10
         + candidates["value_similarity"] * 0.10
     ).round(4)
 
     selected: list[pd.DataFrame] = []
     remaining = safe_limit
-    for bucket in ["0.5 mi", "1 mi", "3 mi"]:
+    if subject_improvement_status == "likely_vacant":
+        status_groups = [["likely_vacant"], ["needs_review"], ["likely_improved"]]
+    elif subject_improvement_status == "likely_improved":
+        status_groups = [["likely_improved"], ["needs_review"], ["likely_vacant"]]
+    else:
+        status_groups = [["needs_review"], ["likely_vacant", "likely_improved"]]
+
+    for allowed_statuses in status_groups:
         if remaining <= 0:
             break
-        tier = candidates.loc[candidates["radius_bucket"].eq(bucket)].copy()
-        if tier.empty:
-            continue
-        tier = tier.sort_values(
-            ["same_land_use_flag", "similarity_score", "distance_to_subject_miles", "acreage_similarity"],
-            ascending=[False, False, True, False],
-            na_position="last",
-        ).head(remaining)
-        selected.append(tier)
-        remaining -= len(tier)
+        for bucket in ["0.5 mi", "1 mi", "3 mi"]:
+            if remaining <= 0:
+                break
+            tier = candidates.loc[
+                candidates["radius_bucket"].eq(bucket)
+                & candidates["parcel_improvement_status"].isin(allowed_statuses)
+            ].copy()
+            if tier.empty:
+                continue
+            tier = tier.sort_values(
+                ["same_land_use_flag", "improvement_alignment_rank", "similarity_score", "distance_to_subject_miles", "acreage_similarity"],
+                ascending=[False, False, False, True, False],
+                na_position="last",
+            ).head(remaining)
+            selected.append(tier)
+            remaining -= len(tier)
 
     selected_frame = pd.concat(selected, ignore_index=True) if selected else pd.DataFrame(columns=candidates.columns)
+    if not selected_frame.empty:
+        methodology["mixed_status_included_flag"] = bool(selected_frame["parcel_improvement_status"].ne(subject_improvement_status).any())
+        methodology["uncertain_status_included_flag"] = bool(selected_frame["parcel_improvement_status"].eq("needs_review").any())
+        if methodology["mixed_status_included_flag"]:
+            methodology["quality_note"] = (
+                "Comp set includes mixed improvement statuses because nearby same-status parcels were limited. Review structure evidence before using value-per-acre as a vacant-land signal."
+            )
+        elif methodology["uncertain_status_included_flag"]:
+            methodology["quality_note"] = (
+                "Comp set includes parcels that still need improvement review because structure evidence is incomplete or conflicting."
+            )
+        else:
+            methodology["quality_note"] = (
+                "Comp set is aligned to the subject parcel's improvement status using fused footprint, imagery, and assessment evidence."
+            )
     items = [_nearby_comp_item(row) for _, row in selected_frame.iterrows()]
     return {"subject": subject_payload, "methodology": methodology, "items": items}
 

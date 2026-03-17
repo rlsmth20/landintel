@@ -63,6 +63,10 @@ export type LeadRecord = {
   vacancy_confidence_score: number | null;
   vacancy_model_version: string | null;
   overall_vacancy_assessment: string | null;
+  parcel_improvement_status?: string | null;
+  parcel_improvement_confidence?: number | null;
+  parcel_improvement_reason?: string | null;
+  parcel_improvement_evidence_summary?: string | null;
   building_count: number | null;
   building_area_total: number | null;
   nearby_building_count_1km: number | null;
@@ -204,6 +208,10 @@ export type NearbyCompRecord = {
   lead_score_total: number | null;
   investment_score: number | null;
   parcel_vacant_flag: boolean | null;
+  parcel_improvement_status: string | null;
+  parcel_improvement_confidence: number | null;
+  parcel_improvement_reason: string | null;
+  parcel_improvement_evidence_summary: string | null;
   similarity_score: number | null;
   centroid: GeometryPoint | null;
 };
@@ -214,9 +222,13 @@ export type NearbyCompsResponse = {
     radius_tiers_miles: number[];
     acreage_similarity_floor: number;
     prioritize_same_land_use: boolean;
-    prefer_same_vacancy_signal: boolean;
+    prefer_same_improvement_status: boolean;
     value_signal: string;
     limit: number;
+    comp_filtering_mode: string;
+    mixed_status_included_flag: boolean;
+    uncertain_status_included_flag: boolean;
+    quality_note: string | null;
   };
   items: NearbyCompRecord[];
 };

@@ -181,6 +181,16 @@ function formatFloodRisk(lead: LeadRecord) {
   return formatNumber(lead.flood_risk_score, 1);
 }
 
+function improvementTone(status: string | null | undefined) {
+  if (status === "likely_improved") {
+    return "good";
+  }
+  if (status === "likely_vacant") {
+    return "warn";
+  }
+  return "neutral";
+}
+
 function NearbyCompsSection({
   comps,
   loading,
@@ -196,9 +206,20 @@ function NearbyCompsSection({
     <DetailSection title="Nearby Comps">
       <div className="detail-section-block">
         <p className="field-note">
-          Similar parcels prioritized within 0.5, 1, and 3 miles using distance, acreage similarity, land use, and
-          value-per-acre when available.
+          Similar parcels prioritized within 0.5, 1, and 3 miles using distance, acreage similarity, land use,
+          improvement status, and value-per-acre when available.
         </p>
+        {comps?.subject?.parcel_improvement_status ? (
+          <div className="inline-badges">
+            <LeadBadge
+              label={`Subject: ${humanizeValue(comps.subject.parcel_improvement_status) ?? comps.subject.parcel_improvement_status}`}
+              tone={improvementTone(comps.subject.parcel_improvement_status)}
+            />
+            {comps.methodology.mixed_status_included_flag ? <LeadBadge label="Mixed-status comps" tone="warn" /> : null}
+            {comps.methodology.uncertain_status_included_flag ? <LeadBadge label="Review comps included" tone="neutral" /> : null}
+          </div>
+        ) : null}
+        {!loading && !error && comps?.methodology.quality_note ? <p className="field-note">{comps.methodology.quality_note}</p> : null}
         {loading ? <p className="muted">Loading nearby comps...</p> : null}
         {!loading && error ? <p className="error-text">{error}</p> : null}
         {!loading && !error && comps && comps.items.length === 0 ? (
@@ -221,6 +242,12 @@ function NearbyCompsSection({
                   <div className="inline-badges">
                     {item.radius_bucket ? <LeadBadge label={item.radius_bucket} tone="neutral" /> : null}
                     {item.land_use ? <LeadBadge label={item.land_use} tone="good" /> : null}
+                    {item.parcel_improvement_status ? (
+                      <LeadBadge
+                        label={humanizeValue(item.parcel_improvement_status) ?? item.parcel_improvement_status}
+                        tone={improvementTone(item.parcel_improvement_status)}
+                      />
+                    ) : null}
                   </div>
                 </div>
                 <div className="comp-metrics">
@@ -230,6 +257,7 @@ function NearbyCompsSection({
                   <span>$ / acre: {formatValuePerAcre(item.value_per_acre) ?? "-"}</span>
                   <span>Lead score: {formatNumber(item.lead_score_total, 1) ?? "-"}</span>
                 </div>
+                {item.parcel_improvement_reason ? <p className="field-note">{item.parcel_improvement_reason}</p> : null}
               </button>
             ))}
           </div>
