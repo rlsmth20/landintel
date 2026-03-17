@@ -26,6 +26,9 @@ data/tax_published/*
 !data/tax_published/ms/
 data/tax_published/ms/*
 !data/tax_published/ms/app_ready_mississippi_leads.parquet
+!data/buildings_processed/
+data/buildings_processed/*
+!data/buildings_processed/ai_building_presence_predictions_ms.parquet
 
 storage/
 

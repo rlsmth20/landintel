@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PARCEL_MASTER_PATH = ROOT / "data" / "parcels" / "mississippi_parcels_master.parquet"
 BUILDING_METRICS_PATH = ROOT / "data" / "buildings_processed" / "parcel_building_metrics.parquet"
 AI_DATA_DIR = ROOT / "data" / "buildings_processed"
+APP_READY_PATH = ROOT / "data" / "tax_published" / "ms" / "app_ready_mississippi_leads.parquet"
 BACKEND_RUNTIME_DIR = ROOT / "backend" / "runtime" / "mississippi"
 TRAINING_MANIFEST_PATH = AI_DATA_DIR / "ai_building_presence_training_manifest_ms.parquet"
 MODEL_PATH = AI_DATA_DIR / "ai_building_presence_model_ms.joblib"
@@ -64,6 +65,13 @@ def load_candidate_frame() -> pd.DataFrame:
     frame["parcel_vacant_flag"] = frame["parcel_vacant_flag"].fillna(False)
     frame = frame.loc[frame["latitude"].notna() & frame["longitude"].notna()].copy()
     return frame
+
+
+def load_app_ready_row_ids() -> pd.Index:
+    if not APP_READY_PATH.exists():
+        return pd.Index([], dtype="string")
+    frame = pd.read_parquet(APP_READY_PATH, columns=["parcel_row_id"], engine="pyarrow")
+    return frame["parcel_row_id"].astype("string")
 
 
 def weak_label_frame(frame: pd.DataFrame) -> pd.DataFrame:
