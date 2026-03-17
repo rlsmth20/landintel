@@ -1,6 +1,6 @@
 "use client";
 
-import type { LeadRecord } from "./types";
+import type { LeadRecord, NearbyCompsResponse } from "./types";
 import { badgeTone, formatBoolean, formatCurrency, formatNumber } from "./utils";
 
 function formatDateValue(value: string | null | undefined) {
@@ -61,6 +61,16 @@ function DetailRow({ label, value }: { label: string; value: string | null | und
 function formatRoadDistance(value: number | null | undefined) {
   const formatted = formatNumber(value, 0);
   return formatted ? `${formatted} ft` : null;
+}
+
+function formatDistanceMiles(value: number | null | undefined) {
+  const formatted = formatNumber(value, 2);
+  return formatted ? `${formatted} mi` : null;
+}
+
+function formatValuePerAcre(value: number | null | undefined) {
+  const formatted = formatCurrency(value);
+  return formatted ? `${formatted}/ac` : null;
 }
 
 function formatTaxDelinquency(lead: LeadRecord) {
@@ -171,7 +181,77 @@ function formatFloodRisk(lead: LeadRecord) {
   return formatNumber(lead.flood_risk_score, 1);
 }
 
-export function LeadDetail({ lead }: { lead: LeadRecord }) {
+function NearbyCompsSection({
+  comps,
+  loading,
+  error,
+  onSelectComp,
+}: {
+  comps: NearbyCompsResponse | null;
+  loading: boolean;
+  error: string | null;
+  onSelectComp?: ((parcelRowId: string) => void) | null;
+}) {
+  return (
+    <DetailSection title="Nearby Comps">
+      <div className="detail-section-block">
+        <p className="field-note">
+          Similar parcels prioritized within 0.5, 1, and 3 miles using distance, acreage similarity, land use, and
+          value-per-acre when available.
+        </p>
+        {loading ? <p className="muted">Loading nearby comps...</p> : null}
+        {!loading && error ? <p className="error-text">{error}</p> : null}
+        {!loading && !error && comps && comps.items.length === 0 ? (
+          <p className="muted">No nearby comps found within 3 miles using the current parcel similarity rules.</p>
+        ) : null}
+        {!loading && !error && comps && comps.items.length > 0 ? (
+          <div className="comp-list">
+            {comps.items.map((item) => (
+              <button
+                key={item.parcel_row_id}
+                type="button"
+                className="comp-card"
+                onClick={() => onSelectComp?.(item.parcel_row_id)}
+              >
+                <div className="comp-card-top">
+                  <div>
+                    <strong>{item.parcel_id ?? item.parcel_row_id}</strong>
+                    <p className="muted">{item.county_name}</p>
+                  </div>
+                  <div className="inline-badges">
+                    {item.radius_bucket ? <LeadBadge label={item.radius_bucket} tone="neutral" /> : null}
+                    {item.land_use ? <LeadBadge label={item.land_use} tone="good" /> : null}
+                  </div>
+                </div>
+                <div className="comp-metrics">
+                  <span>Distance: {formatDistanceMiles(item.distance_to_subject_miles) ?? "-"}</span>
+                  <span>Acreage: {formatNumber(item.acreage, 2) ?? "-"}</span>
+                  <span>Assessed: {formatCurrency(item.assessed_total_value) ?? "-"}</span>
+                  <span>$ / acre: {formatValuePerAcre(item.value_per_acre) ?? "-"}</span>
+                  <span>Lead score: {formatNumber(item.lead_score_total, 1) ?? "-"}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </DetailSection>
+  );
+}
+
+export function LeadDetail({
+  lead,
+  nearbyComps = null,
+  nearbyCompsLoading = false,
+  nearbyCompsError = null,
+  onSelectComp = null,
+}: {
+  lead: LeadRecord;
+  nearbyComps?: NearbyCompsResponse | null;
+  nearbyCompsLoading?: boolean;
+  nearbyCompsError?: string | null;
+  onSelectComp?: ((parcelRowId: string) => void) | null;
+}) {
   const parcelIdValue = lead.parcel_id ?? "Not available";
   const leadTier = humanizeValue(lead.lead_score_tier) ?? "-";
   const taxFreshness = formatTaxFreshness(lead);
@@ -234,6 +314,13 @@ export function LeadDetail({ lead }: { lead: LeadRecord }) {
         <DetailRow label="Investment score" value={formatNumber(lead.investment_score, 1)} />
         <DetailRow label="Development pressure" value={humanizeValue(lead.growth_pressure_bucket)} />
       </DetailSection>
+
+      <NearbyCompsSection
+        comps={nearbyComps}
+        loading={nearbyCompsLoading}
+        error={nearbyCompsError}
+        onSelectComp={onSelectComp}
+      />
 
       <DetailDisclosure title="Advanced details">
         <DetailSection title="Identifiers & Tax Data">

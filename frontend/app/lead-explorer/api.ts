@@ -1,4 +1,4 @@
-import type { ExplorerMeta, GeometryPoint, GeometryResponse, LeadRecord, LeadsResponse, PresetItem, SortField, Filters } from "./types";
+import type { ExplorerMeta, GeometryPoint, GeometryResponse, LeadRecord, LeadsResponse, NearbyCompsResponse, PresetItem, SortField, Filters } from "./types";
 
 const DEFAULT_PRODUCTION_API_BASE_URL = "https://landintel-production.up.railway.app";
 const API_BASE_URL =
@@ -276,6 +276,15 @@ export async function fetchLeadDetail(parcelRowId: string): Promise<LeadRecord> 
     console.debug("[lead-explorer] fetchLeadDetail", { parcelRowId });
   }
   return fetchJson<LeadRecord>(`/api/leads/${encodeURIComponent(parcelRowId)}`);
+}
+
+export async function fetchNearbyComps(parcelRowId: string, limit = 8): Promise<NearbyCompsResponse> {
+  const searchParams = new URLSearchParams();
+  searchParams.set("limit", String(limit));
+  if (process.env.NODE_ENV !== "production") {
+    console.debug("[lead-explorer] nearby comps request", { parcelRowId, limit });
+  }
+  return fetchJson<NearbyCompsResponse>(`/api/leads/${encodeURIComponent(parcelRowId)}/nearby-comps`, searchParams, { timeoutMs: 10000 });
 }
 
 export async function fetchParcelGeometryById(parcelRowId: string, zoom = 14): Promise<GeometryResponse> {

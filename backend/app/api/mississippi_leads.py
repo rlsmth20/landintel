@@ -8,6 +8,7 @@ from fastapi.responses import Response
 from app.services.mississippi_leads_service import (
     get_lead_detail,
     get_leads,
+    get_nearby_comps,
     get_parcel_geometry,
     get_parcel_tile,
     get_presets,
@@ -72,6 +73,14 @@ def leads(
 @router.get("/leads/{parcel_row_id}")
 def lead_detail(parcel_row_id: str):
     result = get_lead_detail(parcel_row_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    return result
+
+
+@router.get("/leads/{parcel_row_id}/nearby-comps")
+def nearby_comps(parcel_row_id: str, limit: int = 8):
+    result = get_nearby_comps(parcel_row_id, limit=limit)
     if result is None:
         raise HTTPException(status_code=404, detail="Lead not found")
     return result

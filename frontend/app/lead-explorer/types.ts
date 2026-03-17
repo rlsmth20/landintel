@@ -191,6 +191,36 @@ export type LeadsResponse = {
   items: LeadRecord[];
 };
 
+export type NearbyCompRecord = {
+  parcel_row_id: string;
+  parcel_id: string | null;
+  county_name: string | null;
+  acreage: number | null;
+  land_use: string | null;
+  distance_to_subject_miles: number | null;
+  radius_bucket: string | null;
+  assessed_total_value: number | null;
+  value_per_acre: number | null;
+  lead_score_total: number | null;
+  investment_score: number | null;
+  parcel_vacant_flag: boolean | null;
+  similarity_score: number | null;
+  centroid: GeometryPoint | null;
+};
+
+export type NearbyCompsResponse = {
+  subject: NearbyCompRecord | null;
+  methodology: {
+    radius_tiers_miles: number[];
+    acreage_similarity_floor: number;
+    prioritize_same_land_use: boolean;
+    prefer_same_vacancy_signal: boolean;
+    value_signal: string;
+    limit: number;
+  };
+  items: NearbyCompRecord[];
+};
+
 export type Filters = {
   countyName: string;
   leadScoreTier: string[];

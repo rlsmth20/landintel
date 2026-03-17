@@ -113,6 +113,23 @@ TAX_INTERPRETATION_FIELDS = [
     "lead_score_total_effective",
 ]
 DEFAULT_LEAD_SORT_FIELD = "lead_score_total_effective"
+NEARBY_COMPS_DEFAULT_LIMIT = 8
+NEARBY_COMPS_MAX_LIMIT = 12
+NEARBY_COMPS_RADIUS_TIERS_MILES = (0.5, 1.0, 3.0)
+NEARBY_COMPS_FIELDS = [
+    "parcel_row_id",
+    "parcel_id",
+    "county_name",
+    "acreage",
+    "land_use",
+    "assessed_total_value",
+    "lead_score_total",
+    "lead_score_total_effective",
+    "investment_score",
+    "parcel_vacant_flag",
+    "longitude",
+    "latitude",
+]
 
 PRESET_DEFINITIONS = {
     "safest_early_investor_use": {
@@ -1217,6 +1234,13 @@ def _float_or_none(value: Any) -> float | None:
     return number
 
 
+def _string_or_none(value: Any) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _apply_vacancy_assessment(payload: dict[str, Any]) -> None:
     parcel_vacant_flag = _bool_or_none(payload.get("parcel_vacant_flag"))
     ai_building_present_flag = _bool_or_none(payload.get("ai_building_present_flag"))
@@ -2127,6 +2151,239 @@ def _detail_geometry(parcel_row_id: str) -> dict[str, Any] | None:
         "centroid": {"type": "Point", "coordinates": [round(float(centroid.x), 6), round(float(centroid.y), 6)]},
         "bounds": [round(float(value), 6) for value in bounds],
     }
+
+
+def _miles_bbox(longitude: float, latitude: float, radius_miles: float) -> tuple[float, float, float, float]:
+    lat_delta = radius_miles / 69.0
+    cos_lat = max(abs(float(np.cos(np.radians(latitude)))), 0.2)
+    lon_delta = radius_miles / (69.172 * cos_lat)
+    return (
+        longitude - lon_delta,
+        latitude - lat_delta,
+        longitude + lon_delta,
+        latitude + lat_delta,
+    )
+
+
+def _haversine_miles_series(
+    subject_longitude: float,
+    subject_latitude: float,
+    longitude: pd.Series,
+    latitude: pd.Series,
+) -> pd.Series:
+    lon1 = np.radians(subject_longitude)
+    lat1 = np.radians(subject_latitude)
+    lon2 = np.radians(pd.to_numeric(longitude, errors="coerce"))
+    lat2 = np.radians(pd.to_numeric(latitude, errors="coerce"))
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    a = np.sin(dlat / 2.0) ** 2 + np.cos(lat1) * np.cos(lat2) * (np.sin(dlon / 2.0) ** 2)
+    c = 2.0 * np.arcsin(np.sqrt(a))
+    return pd.Series(3958.7613 * c, index=longitude.index, dtype="float64")
+
+
+def _value_per_acre_series(assessed_total_value: pd.Series, acreage: pd.Series) -> pd.Series:
+    assessed = pd.to_numeric(assessed_total_value, errors="coerce")
+    acres = pd.to_numeric(acreage, errors="coerce")
+    result = pd.Series(np.nan, index=assessed.index, dtype="float64")
+    valid = assessed.gt(0) & acres.gt(0)
+    result.loc[valid] = assessed.loc[valid] / acres.loc[valid]
+    return result
+
+
+def _nearby_comp_columns_for_runtime() -> list[str]:
+    if _using_embedded_runtime():
+        available = _embedded_parcel_dataset().schema.names
+    else:
+        available = load_base_frame().columns
+    return [column for column in NEARBY_COMPS_FIELDS if column in available]
+
+
+def _load_nearby_comp_subject(parcel_row_id: str) -> pd.Series | None:
+    columns = _nearby_comp_columns_for_runtime()
+    if _using_embedded_runtime():
+        frame = _embedded_to_pandas(columns, ds.field("parcel_row_id") == parcel_row_id)
+    else:
+        frame = load_base_frame()
+        frame = frame.loc[frame["parcel_row_id"].astype("string").eq(parcel_row_id), columns].copy()
+    if frame.empty:
+        return None
+    return frame.iloc[0]
+
+
+def _load_nearby_comp_candidates(bounds: tuple[float, float, float, float]) -> pd.DataFrame:
+    columns = _nearby_comp_columns_for_runtime()
+    if _using_embedded_runtime():
+        expression = _embedded_filter_expression(bounds=bounds)
+        return _embedded_to_pandas(columns, expression)
+    frame = load_base_frame()
+    mask = (
+        pd.to_numeric(frame["longitude"], errors="coerce").between(bounds[0], bounds[2]).fillna(False)
+        & pd.to_numeric(frame["latitude"], errors="coerce").between(bounds[1], bounds[3]).fillna(False)
+    )
+    return frame.loc[mask, columns].copy()
+
+
+def _nearby_comp_item(row: pd.Series) -> dict[str, Any]:
+    longitude = _float_or_none(row.get("longitude"))
+    latitude = _float_or_none(row.get("latitude"))
+    centroid = None
+    if longitude is not None and latitude is not None:
+        centroid = {"type": "Point", "coordinates": [round(longitude, 6), round(latitude, 6)]}
+    lead_score = _serialize_scalar(row.get("lead_score_total_effective"))
+    if lead_score is None:
+        lead_score = _serialize_scalar(row.get("lead_score_total"))
+    return {
+        "parcel_row_id": _serialize_scalar(row.get("parcel_row_id")),
+        "parcel_id": _serialize_scalar(row.get("parcel_id")),
+        "county_name": _serialize_scalar(row.get("county_name")),
+        "acreage": _serialize_scalar(row.get("acreage")),
+        "land_use": _serialize_scalar(row.get("land_use")),
+        "distance_to_subject_miles": _serialize_scalar(row.get("distance_to_subject_miles")),
+        "radius_bucket": _serialize_scalar(row.get("radius_bucket")),
+        "assessed_total_value": _serialize_scalar(row.get("assessed_total_value")),
+        "value_per_acre": _serialize_scalar(row.get("value_per_acre")),
+        "lead_score_total": lead_score,
+        "investment_score": _serialize_scalar(row.get("investment_score")),
+        "parcel_vacant_flag": _serialize_scalar(row.get("parcel_vacant_flag")),
+        "similarity_score": _serialize_scalar(row.get("similarity_score")),
+        "centroid": centroid,
+    }
+
+
+def get_nearby_comps(parcel_row_id: str, limit: int = NEARBY_COMPS_DEFAULT_LIMIT) -> dict[str, Any] | None:
+    subject = _load_nearby_comp_subject(parcel_row_id)
+    if subject is None:
+        return None
+
+    safe_limit = _clamp_limit(limit, default=NEARBY_COMPS_DEFAULT_LIMIT, max_limit=NEARBY_COMPS_MAX_LIMIT)
+    subject_longitude = _float_or_none(subject.get("longitude"))
+    subject_latitude = _float_or_none(subject.get("latitude"))
+    subject_acreage = _float_or_none(subject.get("acreage"))
+    subject_assessed_value = _float_or_none(subject.get("assessed_total_value"))
+    subject_value_per_acre = (
+        (subject_assessed_value / subject_acreage)
+        if subject_assessed_value is not None and subject_acreage is not None and subject_acreage > 0
+        else None
+    )
+    subject_payload = _nearby_comp_item(
+        pd.Series(
+            {
+                **subject.to_dict(),
+                "distance_to_subject_miles": 0.0,
+                "radius_bucket": "subject",
+                "value_per_acre": subject_value_per_acre,
+                "similarity_score": 1.0,
+            }
+        )
+    )
+    methodology = {
+        "radius_tiers_miles": list(NEARBY_COMPS_RADIUS_TIERS_MILES),
+        "acreage_similarity_floor": 0.2,
+        "prioritize_same_land_use": True,
+        "prefer_same_vacancy_signal": True,
+        "value_signal": "assessed_total_value_per_acre_when_available",
+        "limit": safe_limit,
+    }
+    if subject_longitude is None or subject_latitude is None:
+        return {"subject": subject_payload, "methodology": methodology, "items": []}
+
+    bounds = _miles_bbox(subject_longitude, subject_latitude, NEARBY_COMPS_RADIUS_TIERS_MILES[-1])
+    candidates = _load_nearby_comp_candidates(bounds)
+    if candidates.empty:
+        return {"subject": subject_payload, "methodology": methodology, "items": []}
+
+    candidates = candidates.loc[candidates["parcel_row_id"].astype("string").ne(parcel_row_id)].copy()
+    if candidates.empty:
+        return {"subject": subject_payload, "methodology": methodology, "items": []}
+
+    candidates["distance_to_subject_miles"] = _haversine_miles_series(
+        subject_longitude,
+        subject_latitude,
+        candidates["longitude"],
+        candidates["latitude"],
+    )
+    candidates = candidates.loc[
+        pd.to_numeric(candidates["distance_to_subject_miles"], errors="coerce")
+        .le(NEARBY_COMPS_RADIUS_TIERS_MILES[-1])
+        .fillna(False)
+    ].copy()
+    if candidates.empty:
+        return {"subject": subject_payload, "methodology": methodology, "items": []}
+
+    candidate_acreage = pd.to_numeric(candidates["acreage"], errors="coerce")
+    if subject_acreage is not None and subject_acreage > 0:
+        min_acres = np.minimum(candidate_acreage, subject_acreage)
+        max_acres = np.maximum(candidate_acreage, subject_acreage)
+        acreage_similarity = (min_acres / max_acres).replace([np.inf, -np.inf], np.nan)
+    else:
+        acreage_similarity = pd.Series(0.5, index=candidates.index, dtype="float64")
+    candidates["acreage_similarity"] = acreage_similarity.fillna(0.0)
+
+    subject_land_use = (_string_or_none(subject.get("land_use")) or "").lower()
+    candidate_land_use = candidates["land_use"].astype("string").fillna("").str.strip().str.lower()
+    candidates["same_land_use_flag"] = candidate_land_use.eq(subject_land_use) if subject_land_use else pd.Series(False, index=candidates.index)
+
+    subject_vacant = _bool_or_none(subject.get("parcel_vacant_flag"))
+    if subject_vacant is None:
+        candidates["same_vacancy_flag"] = pd.Series(False, index=candidates.index)
+    else:
+        candidates["same_vacancy_flag"] = candidates["parcel_vacant_flag"].fillna(False).astype(bool).eq(subject_vacant)
+
+    candidates["value_per_acre"] = _value_per_acre_series(candidates["assessed_total_value"], candidates["acreage"])
+    if subject_value_per_acre is not None and subject_value_per_acre > 0:
+        min_value = np.minimum(candidates["value_per_acre"], subject_value_per_acre)
+        max_value = np.maximum(candidates["value_per_acre"], subject_value_per_acre)
+        value_similarity = (min_value / max_value).replace([np.inf, -np.inf], np.nan)
+    else:
+        value_similarity = pd.Series(0.5, index=candidates.index, dtype="float64")
+    candidates["value_similarity"] = value_similarity.fillna(0.5)
+
+    candidates = candidates.loc[candidates["same_land_use_flag"] | candidates["acreage_similarity"].ge(0.2)].copy()
+    if candidates.empty:
+        return {"subject": subject_payload, "methodology": methodology, "items": []}
+
+    distance = pd.to_numeric(candidates["distance_to_subject_miles"], errors="coerce")
+    candidates["radius_bucket"] = pd.Series(pd.NA, index=candidates.index, dtype="string")
+    candidates.loc[distance.le(NEARBY_COMPS_RADIUS_TIERS_MILES[0]).fillna(False), "radius_bucket"] = "0.5 mi"
+    candidates.loc[
+        distance.gt(NEARBY_COMPS_RADIUS_TIERS_MILES[0]).fillna(False)
+        & distance.le(NEARBY_COMPS_RADIUS_TIERS_MILES[1]).fillna(False),
+        "radius_bucket",
+    ] = "1 mi"
+    candidates.loc[
+        distance.gt(NEARBY_COMPS_RADIUS_TIERS_MILES[1]).fillna(False)
+        & distance.le(NEARBY_COMPS_RADIUS_TIERS_MILES[2]).fillna(False),
+        "radius_bucket",
+    ] = "3 mi"
+    distance_similarity = (1.0 - (distance / NEARBY_COMPS_RADIUS_TIERS_MILES[-1])).clip(lower=0.0, upper=1.0).fillna(0.0)
+    candidates["similarity_score"] = (
+        distance_similarity * 0.45
+        + candidates["acreage_similarity"] * 0.25
+        + candidates["same_land_use_flag"].astype(float) * 0.15
+        + candidates["same_vacancy_flag"].astype(float) * 0.05
+        + candidates["value_similarity"] * 0.10
+    ).round(4)
+
+    selected: list[pd.DataFrame] = []
+    remaining = safe_limit
+    for bucket in ["0.5 mi", "1 mi", "3 mi"]:
+        if remaining <= 0:
+            break
+        tier = candidates.loc[candidates["radius_bucket"].eq(bucket)].copy()
+        if tier.empty:
+            continue
+        tier = tier.sort_values(
+            ["same_land_use_flag", "similarity_score", "distance_to_subject_miles", "acreage_similarity"],
+            ascending=[False, False, True, False],
+            na_position="last",
+        ).head(remaining)
+        selected.append(tier)
+        remaining -= len(tier)
+
+    selected_frame = pd.concat(selected, ignore_index=True) if selected else pd.DataFrame(columns=candidates.columns)
+    items = [_nearby_comp_item(row) for _, row in selected_frame.iterrows()]
+    return {"subject": subject_payload, "methodology": methodology, "items": items}
 
 
 def _geometry_table_for_ids(parcel_row_ids: list[str]) -> pd.DataFrame:

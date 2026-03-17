@@ -589,6 +589,52 @@ tbody td:nth-child(13) {
   min-width: 0;
 }
 
+.detail-section-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.comp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.comp-card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.6);
+  padding: 12px 14px;
+  text-align: left;
+  transition: background 160ms ease, border-color 160ms ease;
+}
+
+.comp-card:hover {
+  background: rgba(47, 107, 109, 0.07);
+  border-color: rgba(47, 107, 109, 0.22);
+}
+
+.comp-card-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.comp-card-top p {
+  margin: 4px 0 0;
+}
+
+.comp-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
 .detail-label {
   color: var(--muted);
   font-size: 0.83rem;

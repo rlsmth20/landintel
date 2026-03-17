@@ -2,10 +2,30 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { fetchLeadDetail, fetchLeads, fetchParcelGeometryById, fetchPresets, fetchStaticLeadDetail, fetchSummary, normalizeDetailLeadRecord } from "./lead-explorer/api";
+import {
+  fetchLeadDetail,
+  fetchLeads,
+  fetchNearbyComps,
+  fetchParcelGeometryById,
+  fetchPresets,
+  fetchStaticLeadDetail,
+  fetchSummary,
+  normalizeDetailLeadRecord,
+} from "./lead-explorer/api";
 import { LeadDetail } from "./lead-explorer/LeadDetail";
 import { LeadMap } from "./lead-explorer/LeadMap";
-import type { BasemapMode, ExplorerMeta, Filters, GeometryResponse, LeadRecord, MapOverlayId, MapViewportState, PresetItem, SortField } from "./lead-explorer/types";
+import type {
+  BasemapMode,
+  ExplorerMeta,
+  Filters,
+  GeometryResponse,
+  LeadRecord,
+  MapOverlayId,
+  MapViewportState,
+  NearbyCompsResponse,
+  PresetItem,
+  SortField,
+} from "./lead-explorer/types";
 import {
   INITIAL_FILTERS,
   MAP_OVERLAYS,
@@ -91,6 +111,7 @@ export default function LeadExplorerClient() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedLead, setSelectedLead] = useState<LeadRecord | null>(null);
   const [selectedGeometryResponse, setSelectedGeometryResponse] = useState<GeometryResponse | null>(null);
+  const [nearbyComps, setNearbyComps] = useState<NearbyCompsResponse | null>(null);
   const [fitNonce, setFitNonce] = useState(0);
   const [locateSelectedNonce, setLocateSelectedNonce] = useState(0);
   const [activeOverlays, setActiveOverlays] = useState<MapOverlayId[]>(["parcels", "road_access"]);
@@ -105,6 +126,8 @@ export default function LeadExplorerClient() {
   const [detailError, setDetailError] = useState<string | null>(null);
   const [geometryLoading, setGeometryLoading] = useState(false);
   const [geometryError, setGeometryError] = useState<string | null>(null);
+  const [nearbyCompsLoading, setNearbyCompsLoading] = useState(false);
+  const [nearbyCompsError, setNearbyCompsError] = useState<string | null>(null);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -199,6 +222,35 @@ export default function LeadExplorerClient() {
       }
     }
     void loadSelectedGeometry();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) {
+      setNearbyComps(null);
+      setNearbyCompsError(null);
+      return;
+    }
+    const subjectParcelId = selectedId;
+    let cancelled = false;
+    async function loadNearbyComps() {
+      setNearbyCompsLoading(true);
+      setNearbyCompsError(null);
+      try {
+        const response = await fetchNearbyComps(subjectParcelId, 8);
+        if (cancelled) return;
+        setNearbyComps(response);
+      } catch (error) {
+        if (cancelled) return;
+        setNearbyComps(null);
+        setNearbyCompsError(error instanceof Error ? error.message : "Failed to load nearby comps");
+      } finally {
+        if (!cancelled) setNearbyCompsLoading(false);
+      }
+    }
+    void loadNearbyComps();
     return () => {
       cancelled = true;
     };
@@ -848,7 +900,15 @@ export default function LeadExplorerClient() {
         {detailLoading ? <p className="muted">Loading parcel detail...</p> : null}
         {detailError ? <p className="error-text">{detailError}</p> : null}
         {!detailLoading && !selectedLead ? <p className="empty-detail">Select a parcel to inspect the full lead payload.</p> : null}
-        {selectedLead ? <LeadDetail lead={selectedLead} /> : null}
+        {selectedLead ? (
+          <LeadDetail
+            lead={selectedLead}
+            nearbyComps={nearbyComps}
+            nearbyCompsLoading={nearbyCompsLoading}
+            nearbyCompsError={nearbyCompsError}
+            onSelectComp={(parcelRowId) => handleSelectParcel(parcelRowId, null)}
+          />
+        ) : null}
       </aside>
     </div>
   );
