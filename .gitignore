@@ -33,6 +33,8 @@ data/buildings_processed/*
 storage/
 
 frontend/public/data/*
+!frontend/public/data/ar_lead_explorer_meta.json
+!frontend/public/data/ar_lead_detail_fallback.json
 !frontend/public/data/mississippi_lead_explorer_meta.json
 !frontend/public/data/mississippi_lead_explorer_geometries.json
 !frontend/public/data/mississippi_lead_detail_fallback.json
@@ -49,6 +51,5 @@ Thumbs.db
 
 
 backend/runtime/
-frontend/public/data/
 *.parquet
 *.pmtiles

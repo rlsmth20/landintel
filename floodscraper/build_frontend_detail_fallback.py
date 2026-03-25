@@ -14,10 +14,14 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
 def main() -> None:
     args, passthrough = parse_args()
     state_code = str(args.state_code).strip().lower()
-    if state_code != "ms":
+    module_name = {
+        "ar": "build_frontend_detail_fallback_ar",
+        "ms": "build_frontend_detail_fallback_ms",
+    }.get(state_code)
+    if module_name is None:
         raise NotImplementedError(f"Frontend fallback generation is only implemented for state_code={state_code!r} at this stage.")
-    sys.argv = ["build_frontend_detail_fallback_ms.py", *passthrough]
-    runpy.run_module("build_frontend_detail_fallback_ms", run_name="__main__")
+    sys.argv = [f"{module_name}.py", *passthrough]
+    runpy.run_module(module_name, run_name="__main__")
 
 
 if __name__ == "__main__":

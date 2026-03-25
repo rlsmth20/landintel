@@ -175,6 +175,29 @@ async function fetchStaticJson<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+function buildEmptyMetaSource(stateCode: string): Record<string, unknown> {
+  return {
+    defaultViews: [],
+    fieldReadiness: [],
+    summary: [],
+    rowCount: 0,
+    source: `missing static explorer fallback for ${stateCode}`,
+    geometryMode: null,
+    geometryBounds: null,
+    geometryViewBox: null,
+    geometrySimplifyTolerance: null,
+    warnings: [`Static explorer metadata is unavailable for ${stateCode}.`],
+  };
+}
+
+function logStaticFallbackFailure(stateCode: string, path: string, error: unknown) {
+  console.error("[lead-explorer] static fallback load failed", {
+    stateCode,
+    path,
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
+
 async function fetchStaticMetaSource(stateCode: string) {
   const normalizedStateCode = requireStateCode(stateCode, "fetchStaticMetaSource");
   const cached = staticMetaCache.get(normalizedStateCode);
@@ -186,7 +209,13 @@ async function fetchStaticMetaSource(stateCode: string) {
     stateCode: normalizedStateCode,
     path: config.staticMetaPath,
   });
-  const source = await fetchStaticJson<Record<string, unknown>>(config.staticMetaPath);
+  let source: Record<string, unknown>;
+  try {
+    source = await fetchStaticJson<Record<string, unknown>>(config.staticMetaPath);
+  } catch (error) {
+    logStaticFallbackFailure(normalizedStateCode, config.staticMetaPath, error);
+    source = buildEmptyMetaSource(normalizedStateCode);
+  }
   staticMetaCache.set(normalizedStateCode, source);
   return source;
 }
@@ -213,7 +242,13 @@ async function fetchStaticLeadDetailSource(stateCode: string) {
     stateCode: normalizedStateCode,
     path: config.staticLeadDetailPath,
   });
-  const source = await fetchStaticJson<LeadRecord[]>(config.staticLeadDetailPath);
+  let source: LeadRecord[];
+  try {
+    source = await fetchStaticJson<LeadRecord[]>(config.staticLeadDetailPath);
+  } catch (error) {
+    logStaticFallbackFailure(normalizedStateCode, config.staticLeadDetailPath, error);
+    source = [];
+  }
   staticLeadDetailCache.set(normalizedStateCode, source);
   return source;
 }
