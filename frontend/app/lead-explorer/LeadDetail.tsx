@@ -2,8 +2,11 @@
 
 import { useMemo, useState } from "react";
 
+import parcelIdentity from "./parcelIdentity";
 import type { LeadRecord, NearbyCompsResponse } from "./types";
 import { badgeTone, formatBoolean, formatCurrency, formatNumber } from "./utils";
+
+const { getDisplayedParcelId } = parcelIdentity;
 
 function formatDateValue(value: string | null | undefined) {
   if (!value) {
@@ -337,7 +340,7 @@ function NearbyCompsSection({
                     >
                       <td>
                         <div className="comp-cell-primary">
-                          <strong>{item.parcel_id ?? item.parcel_row_id}</strong>
+                          <strong>{getDisplayedParcelId(item)}</strong>
                           <span className="comp-cell-subtle">{item.county_name ?? "-"}</span>
                           <span className="comp-cell-subtle">
                             {item.radius_bucket ?? "-"} · {humanizeValue(item.parcel_improvement_status) ?? "-"}
@@ -378,7 +381,7 @@ export function LeadDetail({
   nearbyCompsError?: string | null;
   onSelectComp?: ((parcelRowId: string) => void) | null;
 }) {
-  const parcelIdValue = lead.parcel_id ?? "Not available";
+  const parcelIdValue = getDisplayedParcelId(lead);
   const leadTier = humanizeValue(lead.lead_score_tier) ?? "-";
   const taxFreshness = formatTaxFreshness(lead);
 

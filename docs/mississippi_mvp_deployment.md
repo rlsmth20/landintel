@@ -113,6 +113,28 @@ npm run build
 npm run start
 ```
 
+Frontend cache policy:
+
+- HTML and app routes must return `Cache-Control: no-cache`
+- `/_next/static/*` assets must return `Cache-Control: public, max-age=31536000, immutable`
+- `/build-info` must return `Cache-Control: no-store, no-cache, must-revalidate`
+- no service worker should be registered unless it is explicitly audited for bundle caching
+
+Frontend cache verification:
+
+```bash
+npm run build
+npm run verify:cache
+```
+
+That script checks:
+
+- hashed JS/CSS asset filenames exist in the build output
+- the local production server returns `no-cache` on HTML
+- the local production server returns immutable cache headers on `/_next/static/*`
+- the build-info endpoint is uncached
+- an optional prior report can be compared with `node scripts/verify-cache-strategy.mjs --previous-report path/to/old-report.json`
+
 ## Local dev flow
 
 1. Start backend on `http://localhost:8000`
@@ -141,3 +163,16 @@ This is acceptable for the Mississippi MVP because the API is read-only and the 
 - move geometry delivery from JSON support files to tile or viewport-based geometry service for larger scale
 - add structured app logging and request metrics
 - add deployment secrets/config management rather than checked-in example env files
+
+## Frontend deployment checklist
+
+1. Build from a clean working tree or clean CI checkout.
+2. Do not reuse a previous `.next` directory across deployments.
+3. If using Docker, keep `.next` and `node_modules` out of the build context.
+4. Deploy the new build and confirm the console logs the current frontend build version.
+5. In browser devtools, verify:
+   - the HTML document returns `Cache-Control: no-cache`
+   - `/_next/static/*` bundles return `public, max-age=31536000, immutable`
+   - the loaded JS bundle filenames changed from the prior deploy when frontend code changed
+   - no service worker is registered for the app origin
+6. Validate the app in Chrome normal, Chrome incognito, and Edge against the same deployed build.

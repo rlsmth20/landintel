@@ -1,0 +1,58 @@
+{
+  "state_code": "ar",
+  "state_name": "Arkansas",
+  "county_division_label": "county",
+  "artifact_roots": {
+    "parcels": "data/parcels/ar",
+    "runtime": "data/runtime/ar",
+    "review": "data/review/ar",
+    "training": "data/training/ar"
+  },
+  "legacy_paths": {
+    "parcel_master": "data/parcels/ar/ar_parcels_master.parquet",
+    "app_ready_leads": "data/tax_published/ar/app_ready_ar_leads.parquet",
+    "runtime_parcel_index": "data/runtime/ar/parcel_index",
+    "runtime_detail_metrics": "data/runtime/ar/parcel_detail_metrics.parquet",
+    "runtime_summary": "data/runtime/ar/summary.json",
+    "runtime_presets": "data/runtime/ar/presets.json",
+    "runtime_default_leads": "data/runtime/ar/default_leads.json",
+    "runtime_default_geometry": "data/runtime/ar/default_geometry.json",
+    "frontend_detail_fallback": "frontend/public/data/ar_lead_detail_fallback.json",
+    "frontend_meta": "frontend/public/data/ar_lead_explorer_meta.json",
+    "frontend_static_feed": "frontend/public/data/ar_lead_explorer.json",
+    "frontend_parcel_pmtiles": "frontend/public/tiles/ar_parcels.pmtiles",
+    "geometry_quality_artifact": "data/parcels/ar/ar_parcel_geometry_quality.parquet",
+    "geometry_quality_summary": "data/parcels/ar/ar_parcel_geometry_quality_summary.json"
+  },
+  "parcel_tiles": {
+    "build_source": "app_ready",
+    "layer": "parcels",
+    "min_zoom": 6,
+    "max_zoom": 14,
+    "frontend_url": "/tiles/ar_parcels.pmtiles",
+    "geometry_strategy": "live_arcgis_app_ready_geometry_cache",
+    "geometry_cache_path": "data/parcels/ar/ar_app_ready_parcel_tile_features.parquet",
+    "summary_output": "data/runtime/ar/parcel_pmtiles_build_summary.json",
+    "publish_manifest_output": "data/runtime/ar/parcel_pmtiles_publish_manifest.json",
+    "cloudflare_object_key": "tiles/ar_parcels.pmtiles"
+  },
+  "source_registry_paths": {
+    "parcel_source": "floodscraper/state_configs/parcel_source_ar.json",
+    "tax_source": "floodscraper/state_configs/tax_source_ar.json",
+    "tax_linkage": "floodscraper/state_configs/tax_linkage_ar.json"
+  },
+  "schema_mapping_templates": {
+    "parcel_schema_mapping": "config/states/ar_parcel_schema_mapping.json"
+  },
+  "notes": {
+    "bootstrap_status": "mvp_runtime_ready",
+    "reference_state": "ms",
+    "mvp_scope": [
+      "statewide parcel master from Arkansas GIS parcel layer",
+      "ranked app_ready subset for generic backend/frontend serving",
+      "selected parcel geometry fetched live from source ArcGIS layer",
+      "no PMTiles parcel basemap in first Arkansas pass",
+      "no county-hosted tax or vacancy-imagery parity yet"
+    ]
+  }
+}

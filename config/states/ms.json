@@ -1,0 +1,76 @@
+{
+  "state_code": "ms",
+  "state_name": "Mississippi",
+  "county_division_label": "county",
+  "artifact_roots": {
+    "parcels": "data/parcels/ms",
+    "runtime": "data/runtime/ms",
+    "review": "data/review/ms",
+    "training": "data/training/ms"
+  },
+  "legacy_paths": {
+    "parcel_master": "data/parcels/mississippi_parcels_master.parquet",
+    "owner_leads": "data/parcels/mississippi_parcels_owner_leads.parquet",
+    "parcel_building_metrics": "data/buildings_processed/parcel_building_metrics.parquet",
+    "app_ready_leads": "data/tax_published/ms/app_ready_mississippi_leads.parquet",
+    "delinquent_leads_statewide": "data/tax_published/ms/delinquent_leads_statewide.parquet",
+    "tax_distress": "data/parcels/mississippi_parcels_tax_distress.parquet",
+    "county_coverage_matrix": "data/parcels/mississippi_tax_coverage_matrix.parquet",
+    "backend_runtime_dir": "backend/runtime/mississippi",
+    "runtime_parcel_index": "backend/runtime/mississippi/parcel_index",
+    "runtime_geometry_index": "backend/runtime/mississippi/parcel_geometry_index",
+    "runtime_detail_metrics": "backend/runtime/mississippi/parcel_detail_metrics.parquet",
+    "frontend_detail_fallback": "frontend/public/data/mississippi_lead_detail_fallback.json",
+    "frontend_static_feed": "frontend/public/data/mississippi_lead_explorer.json",
+    "frontend_meta": "frontend/public/data/mississippi_lead_explorer_meta.json",
+    "frontend_geometry": "frontend/public/data/mississippi_lead_explorer_geometries.json",
+    "frontend_parcel_pmtiles": "frontend/public/tiles/mississippi_parcels.pmtiles",
+    "runtime_summary": "backend/runtime/mississippi/summary.json",
+    "runtime_presets": "backend/runtime/mississippi/presets.json",
+    "runtime_default_leads": "backend/runtime/mississippi/default_leads.json",
+    "runtime_default_geometry": "backend/runtime/mississippi/default_geometry.json",
+    "review_sample": "data/buildings_processed/ms_vacancy_training_review_sample_300_manual_review_eligible.csv",
+    "review_sample_summary": "data/buildings_processed/ms_vacancy_training_review_sample_300_manual_review_eligible_summary.json",
+    "reviewed_pilot_input": "data/buildings_processed/ms_vacancy_training_review_sample_300_manual_review_eligible_50_Sample.csv",
+    "reviewed_pilot_manifest": "data/buildings_processed/ai_building_presence_training_manifest_ms_reviewed50.parquet",
+    "reviewed_pilot_summary": "data/buildings_processed/ai_building_presence_training_manifest_ms_reviewed50_summary.json",
+    "reviewed_pilot_predictions": "data/buildings_processed/ai_building_presence_reviewed50_cv_predictions.csv",
+    "reviewed_pilot_error_analysis": "data/buildings_processed/ai_building_presence_reviewed50_error_analysis.csv",
+    "reviewed_pilot_error_summary": "data/buildings_processed/ai_building_presence_reviewed50_error_analysis_summary.json",
+    "reviewed_pilot_model": "data/buildings_processed/ai_building_presence_model_ms_reviewed50.joblib",
+    "ai_training_manifest": "data/buildings_processed/ai_building_presence_training_manifest_ms.parquet",
+    "training_feature_manifest": "data/buildings_processed/ai_building_presence_training_manifest_ms_geometry_quality.parquet",
+    "ai_model": "data/buildings_processed/ai_building_presence_model_ms.joblib",
+    "ai_model_metrics": "data/buildings_processed/ai_building_presence_model_metrics_ms.json",
+    "ai_runtime_model_params": "backend/runtime/mississippi/ai_building_presence_model_ms.json",
+    "ai_runtime_model_metrics": "backend/runtime/mississippi/ai_building_presence_model_metrics_ms.json",
+    "ai_predictions": "data/buildings_processed/ai_building_presence_predictions_ms.parquet",
+    "ai_tile_cache_dir": "data/buildings_processed/ai_building_tiles_ms",
+    "geometry_quality_artifact": "data/parcels/mississippi_parcel_geometry_quality.parquet",
+    "geometry_quality_summary": "data/parcels/mississippi_parcel_geometry_quality_summary.json",
+    "marketability_runtime_summary": "backend/runtime/mississippi/summary.json"
+  },
+  "parcel_tiles": {
+    "build_source": "parcel_master",
+    "layer": "parcels",
+    "min_zoom": 6,
+    "max_zoom": 15,
+    "frontend_url": "/tiles/mississippi_parcels.pmtiles",
+    "geometry_strategy": "local_parcel_master_geometry",
+    "summary_output": "backend/runtime/mississippi/parcel_pmtiles_build_summary.json",
+    "publish_manifest_output": "backend/runtime/mississippi/parcel_pmtiles_publish_manifest.json",
+    "cloudflare_object_key": "tiles/mississippi_parcels.pmtiles"
+  },
+  "source_registry_paths": {
+    "parcel_source": "floodscraper/state_configs/parcel_source_ms.json",
+    "tax_source": "floodscraper/state_configs/tax_source_ms.json",
+    "tax_linkage": "floodscraper/state_configs/tax_linkage_ms.json"
+  },
+  "schema_mapping_templates": {
+    "parcel_schema_mapping": "config/states/ms_parcel_schema_mapping.json"
+  },
+  "notes": {
+    "reference_state": true,
+    "compatibility_mode": "legacy_paths_preserved"
+  }
+}

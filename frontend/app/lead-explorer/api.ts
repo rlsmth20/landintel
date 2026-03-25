@@ -1,22 +1,57 @@
 import type { ExplorerMeta, GeometryPoint, GeometryResponse, LeadRecord, LeadsResponse, NearbyCompsResponse, PresetItem, SearchResponse, SearchResultRecord, SortField, Filters } from "./types";
+import stateConfig from "./stateConfig";
 
 const DEFAULT_PRODUCTION_API_BASE_URL = "https://landintel-production.up.railway.app";
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ??
   (process.env.NODE_ENV === "production" ? DEFAULT_PRODUCTION_API_BASE_URL : "");
 
-async function fetchJson<T>(path: string, searchParams?: URLSearchParams, options?: { timeoutMs?: number }): Promise<T> {
-  const url = `${API_BASE_URL}${path}${searchParams && searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
-  if (process.env.NODE_ENV !== "production") {
-    console.debug("[lead-explorer] request", url);
+function requireStateCode(stateCode: string, callSite: string): string {
+  const normalized = typeof stateCode === "string" ? stateCode.trim().toLowerCase() : "";
+  if (!normalized) {
+    const message = `[lead-explorer] missing stateCode for ${callSite}`;
+    console.error(message);
+    throw new Error(message);
   }
+  return normalized;
+}
+
+function buildStateApiPath(stateCode: string, suffix: string) {
+  return stateConfig.buildStateApiPath(requireStateCode(stateCode, "buildStateApiPath"), suffix);
+}
+
+async function fetchJson<T>(
+  path: string,
+  searchParams?: URLSearchParams,
+  options?: { timeoutMs?: number; signal?: AbortSignal; stateCode?: string },
+): Promise<T> {
+  const url = `${API_BASE_URL}${path}${searchParams && searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
+  console.info("[lead-explorer] request", {
+    stateCode: options?.stateCode ?? null,
+    url,
+  });
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), options?.timeoutMs ?? 10000);
+  const timeoutMs = options?.timeoutMs ?? 10000;
+  const abortSignal = options?.signal;
+  const abortListener = () => controller.abort();
+  if (abortSignal) {
+    if (abortSignal.aborted) {
+      controller.abort();
+    } else {
+      abortSignal.addEventListener("abort", abortListener, { once: true });
+    }
+  }
+  const timeout = timeoutMs > 0 ? window.setTimeout(() => controller.abort(), timeoutMs) : null;
   let response: Response;
   try {
     response = await fetch(url, { cache: "no-store", signal: controller.signal });
   } finally {
-    window.clearTimeout(timeout);
+    if (timeout !== null) {
+      window.clearTimeout(timeout);
+    }
+    if (abortSignal) {
+      abortSignal.removeEventListener("abort", abortListener);
+    }
   }
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status} ${response.statusText}`);
@@ -24,9 +59,9 @@ async function fetchJson<T>(path: string, searchParams?: URLSearchParams, option
   return response.json() as Promise<T>;
 }
 
-let staticMetaCache: Record<string, unknown> | null = null;
-let staticLeadCache: LeadRecord[] | null = null;
-let staticLeadDetailCache: LeadRecord[] | null = null;
+const staticMetaCache = new Map<string, Record<string, unknown>>();
+const staticLeadCache = new Map<string, LeadRecord[]>();
+const staticLeadDetailCache = new Map<string, LeadRecord[]>();
 
 const PARCEL_ID_CANDIDATE_FIELDS = [
   "apn",
@@ -140,38 +175,63 @@ async function fetchStaticJson<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-async function fetchStaticMetaSource() {
-  if (!staticMetaCache) {
-    staticMetaCache = await fetchStaticJson<Record<string, unknown>>("/data/mississippi_lead_explorer_meta.json");
+async function fetchStaticMetaSource(stateCode: string) {
+  const normalizedStateCode = requireStateCode(stateCode, "fetchStaticMetaSource");
+  const cached = staticMetaCache.get(normalizedStateCode);
+  if (cached) {
+    return cached;
   }
-  return staticMetaCache;
+  const config = stateConfig.getStateConfig(normalizedStateCode);
+  console.info("[lead-explorer] static meta fallback", {
+    stateCode: normalizedStateCode,
+    path: config.staticMetaPath,
+  });
+  const source = await fetchStaticJson<Record<string, unknown>>(config.staticMetaPath);
+  staticMetaCache.set(normalizedStateCode, source);
+  return source;
 }
 
-async function fetchStaticLeadSource() {
-  if (!staticLeadCache) {
-    staticLeadCache = await fetchStaticLeadDetailSource();
+async function fetchStaticLeadSource(stateCode: string) {
+  const normalizedStateCode = requireStateCode(stateCode, "fetchStaticLeadSource");
+  const cached = staticLeadCache.get(normalizedStateCode);
+  if (cached) {
+    return cached;
   }
-  return staticLeadCache;
+  const source = await fetchStaticLeadDetailSource(normalizedStateCode);
+  staticLeadCache.set(normalizedStateCode, source);
+  return source;
 }
 
-async function fetchStaticLeadDetailSource() {
-  if (!staticLeadDetailCache) {
-    staticLeadDetailCache = await fetchStaticJson<LeadRecord[]>("/data/mississippi_lead_detail_fallback.json");
+async function fetchStaticLeadDetailSource(stateCode: string) {
+  const normalizedStateCode = requireStateCode(stateCode, "fetchStaticLeadDetailSource");
+  const cached = staticLeadDetailCache.get(normalizedStateCode);
+  if (cached) {
+    return cached;
   }
-  return staticLeadDetailCache;
+  const config = stateConfig.getStateConfig(normalizedStateCode);
+  console.info("[lead-explorer] static detail fallback", {
+    stateCode: normalizedStateCode,
+    path: config.staticLeadDetailPath,
+  });
+  const source = await fetchStaticJson<LeadRecord[]>(config.staticLeadDetailPath);
+  staticLeadDetailCache.set(normalizedStateCode, source);
+  return source;
 }
 
-export async function fetchStaticLeadDetail(parcelRowId: string): Promise<LeadRecord | null> {
-  const rows = await fetchStaticLeadDetailSource();
+export async function fetchStaticLeadDetail(stateCode: string, parcelRowId: string): Promise<LeadRecord | null> {
+  const rows = await fetchStaticLeadDetailSource(stateCode);
   const row = rows.find((item) => item.parcel_row_id === parcelRowId) ?? null;
   return row ? normalizeDetailLeadRecord(row) : null;
 }
 
-export async function fetchSummary(): Promise<ExplorerMeta> {
+export async function fetchSummary(stateCode: string): Promise<ExplorerMeta> {
+  const normalizedStateCode = requireStateCode(stateCode, "fetchSummary");
   try {
-    return await fetchJson<ExplorerMeta>("/api/summary");
+    return await fetchJson<ExplorerMeta>(buildStateApiPath(normalizedStateCode, "/summary"), undefined, {
+      stateCode: normalizedStateCode,
+    });
   } catch {
-    const source = await fetchStaticMetaSource();
+    const source = await fetchStaticMetaSource(normalizedStateCode);
     return {
       row_count: Number(source.rowCount ?? 0),
       source: typeof source.source === "string" ? source.source : "static explorer fallback",
@@ -187,12 +247,15 @@ export async function fetchSummary(): Promise<ExplorerMeta> {
   }
 }
 
-export async function fetchPresets(): Promise<PresetItem[]> {
+export async function fetchPresets(stateCode: string): Promise<PresetItem[]> {
+  const normalizedStateCode = requireStateCode(stateCode, "fetchPresets");
   try {
-    const response = await fetchJson<{ items: PresetItem[] }>("/api/presets");
+    const response = await fetchJson<{ items: PresetItem[] }>(buildStateApiPath(normalizedStateCode, "/presets"), undefined, {
+      stateCode: normalizedStateCode,
+    });
     return response.items;
   } catch {
-    const source = await fetchStaticMetaSource();
+    const source = await fetchStaticMetaSource(normalizedStateCode);
     const defaultViews = Array.isArray(source.defaultViews) ? (source.defaultViews as Array<Record<string, string>>) : [];
     const grouped = new Map<string, PresetItem>();
     defaultViews.forEach((item) => {
@@ -249,16 +312,26 @@ export function buildLeadQuery(
 }
 
 export async function fetchLeads(
+  stateCode: string,
   filters: Filters,
   sortField: SortField,
   sortDirection: "asc" | "desc",
   limit: number,
   offset: number,
 ): Promise<LeadsResponse> {
+  const normalizedStateCode = requireStateCode(stateCode, "fetchLeads");
   try {
-    return await fetchJson<LeadsResponse>("/api/leads", buildLeadQuery(filters, sortField, sortDirection, limit, offset));
+    const response = await fetchJson<LeadsResponse>(
+      buildStateApiPath(normalizedStateCode, "/leads"),
+      buildLeadQuery(filters, sortField, sortDirection, limit, offset),
+      { stateCode: normalizedStateCode },
+    );
+    return {
+      ...response,
+      items: response.items.map((item) => normalizeParcelIdentifier(item)),
+    };
   } catch {
-    const rows = await fetchStaticLeadSource();
+    const rows = await fetchStaticLeadSource(normalizedStateCode);
     const sorted = [...rows].sort((left, right) => {
       const leftValue = (left as Record<string, unknown>)[sortField] as number | null | undefined;
       const rightValue = (right as Record<string, unknown>)[sortField] as number | null | undefined;
@@ -271,16 +344,17 @@ export async function fetchLeads(
       total_count: rows.length,
       limit,
       offset,
-      items: paged,
+      items: paged.map((item) => normalizeParcelIdentifier(item)),
     };
   }
 }
 
-export async function fetchLeadDetail(parcelRowId: string): Promise<LeadRecord> {
-  if (process.env.NODE_ENV !== "production") {
-    console.debug("[lead-explorer] fetchLeadDetail", { parcelRowId });
-  }
-  return fetchJson<LeadRecord>(`/api/leads/${encodeURIComponent(parcelRowId)}`);
+export async function fetchLeadDetail(stateCode: string, parcelRowId: string): Promise<LeadRecord> {
+  const normalizedStateCode = requireStateCode(stateCode, "fetchLeadDetail");
+  console.info("[lead-explorer] detail request", { stateCode: normalizedStateCode, parcelRowId });
+  return fetchJson<LeadRecord>(buildStateApiPath(normalizedStateCode, `/leads/${encodeURIComponent(parcelRowId)}`), undefined, {
+    stateCode: normalizedStateCode,
+  });
 }
 
 function scoreSearchRecord(record: LeadRecord, rawQuery: string) {
@@ -319,14 +393,18 @@ function toSearchResultRecord(record: LeadRecord, matchField?: string | null): S
   };
 }
 
-export async function fetchLeadSearch(q: string, limit = 10): Promise<SearchResponse> {
+export async function fetchLeadSearch(stateCode: string, q: string, limit = 10): Promise<SearchResponse> {
+  const normalizedStateCode = requireStateCode(stateCode, "fetchLeadSearch");
   const searchParams = new URLSearchParams();
   searchParams.set("q", q);
   searchParams.set("limit", String(limit));
   try {
-    return await fetchJson<SearchResponse>("/api/leads/search", searchParams, { timeoutMs: 8000 });
+    return await fetchJson<SearchResponse>(buildStateApiPath(normalizedStateCode, "/leads/search"), searchParams, {
+      timeoutMs: 8000,
+      stateCode: normalizedStateCode,
+    });
   } catch {
-    const rows = await fetchStaticLeadDetailSource();
+    const rows = await fetchStaticLeadDetailSource(normalizedStateCode);
     const normalizedRows = rows.map((row) => normalizeDetailLeadRecord(row));
     const scored = normalizedRows
       .map((row) => {
@@ -344,20 +422,31 @@ export async function fetchLeadSearch(q: string, limit = 10): Promise<SearchResp
   }
 }
 
-export async function fetchNearbyComps(parcelRowId: string, limit = 8): Promise<NearbyCompsResponse> {
+export async function fetchNearbyComps(stateCode: string, parcelRowId: string, limit = 8): Promise<NearbyCompsResponse> {
+  const normalizedStateCode = requireStateCode(stateCode, "fetchNearbyComps");
   const searchParams = new URLSearchParams();
   searchParams.set("limit", String(limit));
-  if (process.env.NODE_ENV !== "production") {
-    console.debug("[lead-explorer] nearby comps request", { parcelRowId, limit });
-  }
-  return fetchJson<NearbyCompsResponse>(`/api/leads/${encodeURIComponent(parcelRowId)}/nearby-comps`, searchParams, { timeoutMs: 10000 });
+  console.info("[lead-explorer] nearby comps request", { stateCode: normalizedStateCode, parcelRowId, limit });
+  return fetchJson<NearbyCompsResponse>(
+    buildStateApiPath(normalizedStateCode, `/leads/${encodeURIComponent(parcelRowId)}/nearby-comps`),
+    searchParams,
+    { timeoutMs: 10000, stateCode: normalizedStateCode },
+  );
 }
 
-export async function fetchParcelGeometryById(parcelRowId: string, zoom = 14): Promise<GeometryResponse> {
+export async function fetchParcelGeometryById(
+  stateCode: string,
+  parcelRowId: string,
+  zoom = 14,
+  options?: { signal?: AbortSignal; timeoutMs?: number },
+): Promise<GeometryResponse> {
+  const normalizedStateCode = requireStateCode(stateCode, "fetchParcelGeometryById");
   const searchParams = new URLSearchParams();
   searchParams.set("zoom", String(zoom));
-  if (process.env.NODE_ENV !== "production") {
-    console.debug("[lead-explorer] parcel geometry request", { parcelRowId, zoom });
-  }
-  return fetchJson<GeometryResponse>(`/api/parcels/${encodeURIComponent(parcelRowId)}/geometry`, searchParams, { timeoutMs: 6000 });
+  console.info("[lead-explorer] parcel geometry request", { stateCode: normalizedStateCode, parcelRowId, zoom });
+  return fetchJson<GeometryResponse>(buildStateApiPath(normalizedStateCode, `/parcels/${encodeURIComponent(parcelRowId)}/geometry`), searchParams, {
+    timeoutMs: options?.timeoutMs ?? 120000,
+    signal: options?.signal,
+    stateCode: normalizedStateCode,
+  });
 }

@@ -1,0 +1,10 @@
+{
+  "state_code": "ar",
+  "state_name": "Arkansas",
+  "status": "not_implemented_mvp",
+  "tax_sources": [],
+  "warnings": [
+    "Arkansas tax-source onboarding is deferred in the first state MVP.",
+    "Runtime lead scoring and app_ready selection do not currently use Arkansas county-hosted tax-sale or delinquent-tax sources."
+  ]
+}

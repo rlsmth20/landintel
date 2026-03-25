@@ -1,0 +1,10 @@
+{
+  "state_code": "ar",
+  "state_name": "Arkansas",
+  "status": "not_implemented_mvp",
+  "linkage_rules": [],
+  "warnings": [
+    "No Arkansas tax-linkage rules are active in the first MVP pass.",
+    "Canonical parcel identity is currently derived from countyfips + parcelid, independent of tax-source linkage."
+  ]
+}

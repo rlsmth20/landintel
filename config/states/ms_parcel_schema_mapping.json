@@ -1,0 +1,24 @@
+{
+  "state_code": "ms",
+  "state_name": "Mississippi",
+  "canonical_identity": {
+    "parcel_row_id": "parcel_row_id",
+    "parcel_id": "parcel_id",
+    "state_code": "state_code",
+    "county_name": "county_name",
+    "county_fips": "county_fips",
+    "geometry": "geometry"
+  },
+  "parcel_source_fields": {
+    "latitude": "latitude",
+    "longitude": "longitude",
+    "total_acres": "total_acres",
+    "parcel_area_acres": "parcel_area_acres",
+    "gis_acres": "gis_acres",
+    "tax_acres": "tax_acres"
+  },
+  "notes": {
+    "status": "reference_template",
+    "description": "Mississippi reference mapping for canonical parcel identity."
+  }
+}

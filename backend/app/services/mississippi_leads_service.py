@@ -5,10 +5,11 @@ import logging
 import os
 import time
 import io
+import sys
 from collections import Counter
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
@@ -17,7 +18,7 @@ import pyarrow.dataset as ds
 import requests
 import mercantile
 import mapbox_vector_tile
-from PIL import Image, ImageDraw
+from PIL import Image
 from shapely import wkb
 from shapely.geometry import mapping
 
@@ -46,57 +47,68 @@ def _discover_project_root() -> Path:
 
 PROJECT_ROOT = _discover_project_root()
 BACKEND_DIR = Path(__file__).resolve().parents[2]
-EMBEDDED_RUNTIME_DIR = BACKEND_DIR / "runtime" / "mississippi"
-EMBEDDED_PARCEL_INDEX_ROOT = EMBEDDED_RUNTIME_DIR / "parcel_index"
-EMBEDDED_GEOMETRY_INDEX_ROOT = EMBEDDED_RUNTIME_DIR / "parcel_geometry_index"
-EMBEDDED_SUMMARY_PATH = EMBEDDED_RUNTIME_DIR / "summary.json"
-EMBEDDED_PRESETS_PATH = EMBEDDED_RUNTIME_DIR / "presets.json"
-EMBEDDED_DEFAULT_LEADS_PATH = EMBEDDED_RUNTIME_DIR / "default_leads.json"
-EMBEDDED_DEFAULT_GEOMETRY_PATH = EMBEDDED_RUNTIME_DIR / "default_geometry.json"
-EMBEDDED_DETAIL_METRICS_PATH = EMBEDDED_RUNTIME_DIR / "parcel_detail_metrics.parquet"
-AI_MODEL_PARAMS_PATH = EMBEDDED_RUNTIME_DIR / "ai_building_presence_model_ms.json"
-PARCEL_MASTER_PATH = PROJECT_ROOT / "data" / "parcels" / "mississippi_parcels_master.parquet"
-OWNER_LEADS_PATH = PROJECT_ROOT / "data" / "parcels" / "mississippi_parcels_owner_leads.parquet"
-BUILDING_METRICS_PATH = PROJECT_ROOT / "data" / "buildings_processed" / "parcel_building_metrics.parquet"
-AI_BUILDING_PREDICTIONS_PATH = PROJECT_ROOT / "data" / "buildings_processed" / "ai_building_presence_predictions_ms.parquet"
-LEAD_SIGNALS_PATH = PROJECT_ROOT / "data" / "tax_published" / "ms" / "app_ready_mississippi_leads.parquet"
-DELINQUENT_LEADS_STATEWIDE_PATH = PROJECT_ROOT / "data" / "tax_published" / "ms" / "delinquent_leads_statewide.parquet"
-TAX_DISTRESS_PATH = PROJECT_ROOT / "data" / "parcels" / "mississippi_parcels_tax_distress.parquet"
-EMBEDDED_LEAD_SIGNALS_PATH = EMBEDDED_RUNTIME_DIR / "app_ready_mississippi_leads.parquet"
+FLOODSCRAPER_DIR = PROJECT_ROOT / "floodscraper"
+if str(FLOODSCRAPER_DIR) not in sys.path:
+    sys.path.insert(0, str(FLOODSCRAPER_DIR))
 
-SUMMARY_FIELDS = [
-    "parcel_row_id",
-    "parcel_id",
-    "county_name",
-    "acreage",
-    "owner_name",
-    "lead_score_total",
-    "lead_score_total_effective",
-    "lead_score_tier",
-    "parcel_vacant_flag",
-    "parcel_improvement_status",
-    "building_signal_conflict_flag",
-    "road_access_tier",
-    "growth_pressure_bucket",
-    "best_source_type",
-    "source_confidence_tier",
-    "delinquent_amount",
-    "amount_trust_tier",
-    "parcel_tax_status_label",
-    "parcel_tax_status_category",
-    "parcel_tax_status_confidence",
-    "parcel_tax_actionability",
-    "parcel_tax_data_warning",
-    "parcel_tax_freshness_bucket",
-    "parcel_tax_years_stale",
-    "parcel_tax_is_actionable_current",
-    "parcel_tax_is_historical_only",
-    "parcel_tax_freshness_reason",
-    "recommended_sort_reason",
-    "county_hosted_flag",
-    "high_confidence_link_flag",
-    "recommended_view_bucket",
-]
+from parcel_contract_ms import (  # noqa: E402
+    API_LEADS_SUMMARY_FIELDS,
+    BACKEND_DETAIL_REQUIRED_FIELDS,
+    CANONICAL_PARCEL_FIELDS,
+    GEOMETRY_FEATURE_PROPERTY_FIELDS,
+    GEOMETRY_ITEM_FIELDS,
+    NEARBY_COMP_OUTPUT_FIELDS,
+    NEARBY_COMP_SOURCE_FIELDS,
+    PARCEL_TILE_FEATURE_PROPERTY_FIELDS,
+    PARCEL_TILE_SOURCE_FIELDS,
+    SEARCH_OUTPUT_FIELDS,
+    SEARCH_SOURCE_FIELDS,
+    contract_left_merge,
+    serialize_contract_row,
+    validate_output_records,
+    validate_required_columns,
+)
+from parcel_marketability_ms import (  # noqa: E402
+    add_geometry_marketability_fields,
+    apply_geometry_marketability_score_adjustment,
+    geometry_marketability_diagnostics,
+)
+from state_artifacts import load_state_artifacts  # noqa: E402
+from vacancy_ai_common import (  # noqa: E402
+    TileAddress as SharedTileAddress,
+    adjust_confidence_for_tile_coverage as shared_adjust_confidence_for_tile_coverage,
+    build_ai_vacancy_status_note as shared_build_ai_vacancy_status_note,
+    building_present_confidence_from_probability as shared_building_present_confidence_from_probability,
+    calibrated_building_probability as shared_calibrated_building_probability,
+    centroid_tile as shared_centroid_tile,
+    crop_mask_coverage as shared_crop_mask_coverage,
+    extract_image_features as shared_extract_image_features,
+    imagery_context_signals as shared_imagery_context_signals,
+    imagery_false_positive_risk as shared_imagery_false_positive_risk,
+    parcel_tile_coverage_diagnostics as shared_parcel_tile_coverage_diagnostics,
+    prepare_parcel_aware_image as shared_prepare_parcel_aware_image,
+)
+
+DEFAULT_STATE_ARTIFACTS = load_state_artifacts("ms")
+EMBEDDED_RUNTIME_DIR = DEFAULT_STATE_ARTIFACTS.runtime_root
+EMBEDDED_PARCEL_INDEX_ROOT = DEFAULT_STATE_ARTIFACTS.runtime_parcel_index_root
+EMBEDDED_GEOMETRY_INDEX_ROOT = DEFAULT_STATE_ARTIFACTS.runtime_geometry_index_root
+EMBEDDED_SUMMARY_PATH = DEFAULT_STATE_ARTIFACTS.runtime_summary_path
+EMBEDDED_PRESETS_PATH = DEFAULT_STATE_ARTIFACTS.runtime_presets_path
+EMBEDDED_DEFAULT_LEADS_PATH = DEFAULT_STATE_ARTIFACTS.runtime_default_leads_path
+EMBEDDED_DEFAULT_GEOMETRY_PATH = DEFAULT_STATE_ARTIFACTS.runtime_default_geometry_path
+EMBEDDED_DETAIL_METRICS_PATH = DEFAULT_STATE_ARTIFACTS.runtime_detail_metrics_path
+AI_MODEL_PARAMS_PATH = DEFAULT_STATE_ARTIFACTS.ai_runtime_model_params_path
+PARCEL_MASTER_PATH = DEFAULT_STATE_ARTIFACTS.parcel_master_path
+OWNER_LEADS_PATH = DEFAULT_STATE_ARTIFACTS.owner_leads_path
+BUILDING_METRICS_PATH = DEFAULT_STATE_ARTIFACTS.parcel_building_metrics_path
+AI_BUILDING_PREDICTIONS_PATH = DEFAULT_STATE_ARTIFACTS.ai_predictions_path
+LEAD_SIGNALS_PATH = DEFAULT_STATE_ARTIFACTS.app_ready_path
+DELINQUENT_LEADS_STATEWIDE_PATH = DEFAULT_STATE_ARTIFACTS.delinquent_leads_statewide_path
+TAX_DISTRESS_PATH = DEFAULT_STATE_ARTIFACTS.tax_distress_path
+EMBEDDED_LEAD_SIGNALS_PATH = EMBEDDED_RUNTIME_DIR / LEAD_SIGNALS_PATH.name
+
+SUMMARY_FIELDS = API_LEADS_SUMMARY_FIELDS
 
 TAX_INTERPRETATION_FIELDS = [
     "parcel_tax_status_label",
@@ -131,38 +143,8 @@ SEARCH_MAX_LIMIT = 20
 NEARBY_COMPS_DEFAULT_LIMIT = 8
 NEARBY_COMPS_MAX_LIMIT = 12
 NEARBY_COMPS_RADIUS_TIERS_MILES = (0.5, 1.0, 3.0)
-NEARBY_COMPS_FIELDS = [
-    "parcel_row_id",
-    "parcel_id",
-    "county_name",
-    "acreage",
-    "land_use",
-    "assessed_total_value",
-    "lead_score_total",
-    "lead_score_total_effective",
-    "investment_score",
-    "parcel_vacant_flag",
-    "county_vacant_flag",
-    "building_count",
-    "building_area_total",
-    "ai_building_present_probability",
-    "ai_building_present_flag",
-    "building_present_confidence",
-    "building_presence_reason",
-    "longitude",
-    "latitude",
-]
-SEARCH_FIELDS = [
-    "parcel_row_id",
-    "parcel_id",
-    "county_name",
-    "acreage",
-    "owner_name",
-    "longitude",
-    "latitude",
-    "lead_score_total",
-    "lead_score_total_effective",
-]
+NEARBY_COMPS_FIELDS = NEARBY_COMP_SOURCE_FIELDS
+SEARCH_FIELDS = SEARCH_SOURCE_FIELDS
 
 PRESET_DEFINITIONS = {
     "safest_early_investor_use": {
@@ -218,9 +200,12 @@ ENABLE_ON_DEMAND_AI_DETAIL = os.getenv("MISSISSIPPI_ENABLE_ON_DEMAND_AI_DETAIL",
 ON_DEMAND_AI_DETAIL_TIMEOUT_SECONDS = float(os.getenv("MISSISSIPPI_ON_DEMAND_AI_DETAIL_TIMEOUT_SECONDS", "4.0"))
 ON_DEMAND_AI_DETAIL_CACHE: dict[str, dict[str, Any]] = {}
 AI_USE_PARCEL_MASK = os.getenv("MISSISSIPPI_AI_USE_PARCEL_MASK", "true").strip().lower() not in {"0", "false", "no", "off"}
-AI_OUTSIDE_MASK_FILL = os.getenv("MISSISSIPPI_AI_OUTSIDE_MASK_FILL", "dim").strip().lower()
-AI_OUTSIDE_MASK_DIM_FACTOR = float(os.getenv("MISSISSIPPI_AI_OUTSIDE_MASK_DIM_FACTOR", "0.15"))
-AI_PARCEL_BUFFER_PIXELS = max(0, int(os.getenv("MISSISSIPPI_AI_PARCEL_BUFFER_PIXELS", "18")))
+AI_OUTSIDE_MASK_FILL = os.getenv("MISSISSIPPI_AI_OUTSIDE_MASK_FILL", "black").strip().lower()
+AI_OUTSIDE_MASK_DIM_FACTOR = float(os.getenv("MISSISSIPPI_AI_OUTSIDE_MASK_DIM_FACTOR", "0.0"))
+AI_PARCEL_BUFFER_PIXELS = max(0, int(os.getenv("MISSISSIPPI_AI_PARCEL_BUFFER_PIXELS", "8")))
+AI_BUILDING_PRESENT_CONFIDENCE_THRESHOLD = 82.0
+AI_LOW_COVERAGE_TILE_THRESHOLD = 0.75
+AI_LOW_COVERAGE_BBOX_THRESHOLD = 0.85
 
 
 def _normalize_string(series: pd.Series | None, index: pd.Index | None = None) -> pd.Series:
@@ -258,6 +243,42 @@ def _serialize_scalar(value: Any) -> Any:
         except Exception:
             return value
     return value
+
+
+def _summary_item(row: Mapping[str, Any]) -> dict[str, Any]:
+    return serialize_contract_row(row, SUMMARY_FIELDS, serializer=_serialize_scalar)
+
+
+def _detail_payload_from_row(row: Mapping[str, Any], *, geometry: dict[str, Any] | None) -> dict[str, Any]:
+    payload = {
+        column: _serialize_scalar(value)
+        for column, value in row.items()
+        if column not in {"latitude", "longitude"}
+    }
+    payload["geometry"] = geometry
+    return payload
+
+
+def _geometry_feature_properties(row: Mapping[str, Any], *, selected: bool) -> dict[str, Any]:
+    payload = serialize_contract_row(row, GEOMETRY_FEATURE_PROPERTY_FIELDS, serializer=_serialize_scalar)
+    payload["selected"] = bool(selected)
+    return payload
+
+
+def _geometry_item(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "parcel_row_id": str(row["parcel_row_id"]),
+        "path": None,
+        "lead_score_total": _serialize_scalar(row.get("lead_score_total")),
+    }
+
+
+def _tile_feature_properties(row: Mapping[str, Any]) -> dict[str, Any]:
+    payload = serialize_contract_row(row, PARCEL_TILE_FEATURE_PROPERTY_FIELDS, serializer=_serialize_scalar)
+    payload["parcel_row_id"] = str(row["parcel_row_id"])
+    payload["wetland_flag"] = bool(payload.get("wetland_flag"))
+    payload["county_hosted_flag"] = bool(payload.get("county_hosted_flag"))
+    return payload
 
 
 def _with_improvement_columns(columns: list[str]) -> list[str]:
@@ -336,11 +357,15 @@ def _apply_parcel_improvement_fields_frame(frame: pd.DataFrame) -> pd.DataFrame:
     vacant_evidence += np.where(parcel_vacant, 12.0, 0.0)
     vacant_evidence += np.where(county_vacant, 5.0, 0.0)
 
-    improved_evidence += np.where(ai_confidence.ge(80), 72.0, np.where(ai_confidence.ge(65), 50.0, np.where(ai_confidence.ge(50), 22.0, 0.0)))
+    improved_evidence += np.where(
+        ai_confidence.ge(90),
+        72.0,
+        np.where(ai_confidence.ge(AI_BUILDING_PRESENT_CONFIDENCE_THRESHOLD), 26.0, 0.0),
+    )
     vacant_evidence += np.where(ai_confidence.le(25), 18.0, np.where(ai_confidence.le(40), 8.0, 0.0))
 
     ai_conf_missing = ai_confidence.isna()
-    improved_evidence += np.where(ai_conf_missing & ai_probability.ge(0.8), 62.0, np.where(ai_conf_missing & ai_probability.ge(0.65), 42.0, 0.0))
+    improved_evidence += np.where(ai_conf_missing & ai_probability.ge(0.9), 62.0, np.where(ai_conf_missing & ai_probability.ge(0.82), 20.0, 0.0))
     vacant_evidence += np.where(ai_conf_missing & ai_probability.le(0.2), 14.0, np.where(ai_conf_missing & ai_probability.le(0.35), 6.0, 0.0))
 
     ai_prob_missing = ai_probability.isna()
@@ -358,15 +383,19 @@ def _apply_parcel_improvement_fields_frame(frame: pd.DataFrame) -> pd.DataFrame:
     building_signal_conflict_flag = (
         building_count.le(0)
         & building_area_total.le(0)
-        & (ai_confidence.ge(65).fillna(False) | ai_probability.ge(0.75).fillna(False) | ai_flag.fillna(False))
+        & (
+            ai_confidence.ge(AI_BUILDING_PRESENT_CONFIDENCE_THRESHOLD).fillna(False)
+            | ai_probability.ge(0.82).fillna(False)
+            | ai_flag.fillna(False)
+        )
     )
     value_signal_conflict_flag = parcel_vacant & assessed_total_value.ge(25000)
 
     strong_improved = (
         building_count.ge(1)
         | building_area_total.ge(400)
-        | ai_confidence.ge(65).fillna(False)
-        | ai_probability.ge(0.75).fillna(False)
+        | ai_confidence.ge(AI_BUILDING_PRESENT_CONFIDENCE_THRESHOLD).fillna(False)
+        | ai_probability.ge(0.82).fillna(False)
         | assessed_total_value.ge(25000)
     )
     strong_vacant = (
@@ -393,7 +422,10 @@ def _apply_parcel_improvement_fields_frame(frame: pd.DataFrame) -> pd.DataFrame:
     reason = reason.mask(building_signal_conflict_flag, "Imagery suggests an improvement, but mapped building footprints are missing.")
     reason = reason.mask(value_signal_conflict_flag & ~building_signal_conflict_flag, "Vacancy flag conflicts with assessed value that suggests improvements.")
     reason = reason.mask(status.eq("likely_improved") & building_count.ge(1), "Mapped building evidence indicates the parcel is improved.")
-    reason = reason.mask(status.eq("likely_improved") & building_count.lt(1) & (ai_confidence.ge(65).fillna(False) | ai_flag.fillna(False)), "Imagery and parcel evidence indicate a structure or improvement is present.")
+    reason = reason.mask(
+        status.eq("likely_improved") & building_count.lt(1) & (ai_confidence.ge(AI_BUILDING_PRESENT_CONFIDENCE_THRESHOLD).fillna(False) | ai_flag.fillna(False)),
+        "Imagery and parcel evidence indicate a structure inside the parcel boundary.",
+    )
     reason = reason.mask(status.eq("likely_vacant"), "Available imagery, value, and supporting parcel signals lean toward vacant land.")
 
     frame["parcel_improvement_status"] = status
@@ -500,6 +532,26 @@ def _ensure_intelligence_fields(frame: pd.DataFrame) -> pd.DataFrame:
     frame["building_present_confidence"] = _to_float_series(frame, "building_present_confidence")
     frame["building_presence_reason"] = _normalize_string(frame.get("building_presence_reason"), index=frame.index)
     frame["vacancy_model_version"] = _normalize_string(frame.get("vacancy_model_version"), index=frame.index)
+    frame["parcel_tile_coverage_pct"] = _to_float_series(frame, "parcel_tile_coverage_pct")
+    frame["parcel_bbox_tile_coverage_pct"] = _to_float_series(frame, "parcel_bbox_tile_coverage_pct")
+    frame["parcel_covering_tile_count"] = _to_float_series(frame, "parcel_covering_tile_count").fillna(0).astype(int)
+    frame["tiles_scored_count"] = _to_float_series(frame, "tiles_scored_count").fillna(0).astype(int)
+    frame["tiles_with_building_signal_count"] = _to_float_series(frame, "tiles_with_building_signal_count").fillna(0).astype(int)
+    frame["multi_tile_aggregation_reason"] = _normalize_string(frame.get("multi_tile_aggregation_reason"), index=frame.index)
+    frame["best_tile_label"] = _normalize_string(frame.get("best_tile_label"), index=frame.index)
+    frame["best_tile_confidence"] = _to_float_series(frame, "best_tile_confidence")
+    frame["best_tile_crop_label"] = _normalize_string(frame.get("best_tile_crop_label"), index=frame.index)
+    frame["best_tile_probability"] = _to_float_series(frame, "best_tile_probability")
+    frame["best_tile_parcel_coverage_pct"] = _to_float_series(frame, "best_tile_parcel_coverage_pct")
+    frame["negative_tile_coverage_pct"] = _to_float_series(frame, "negative_tile_coverage_pct")
+    for flag_column in [
+        "full_parcel_visible_flag",
+        "parcel_extent_exceeds_tile_flag",
+        "parcel_tile_low_coverage_flag",
+        "multi_tile_candidate_flag",
+        "multi_tile_inference_used_flag",
+    ]:
+        frame[flag_column] = frame.get(flag_column, pd.Series(False, index=frame.index)).fillna(False).astype(bool)
     ai_available = (
         frame["ai_building_present_flag"].notna()
         | frame["ai_building_present_probability"].notna()
@@ -507,19 +559,25 @@ def _ensure_intelligence_fields(frame: pd.DataFrame) -> pd.DataFrame:
         | frame["building_presence_reason"].notna()
     )
     frame["ai_vacancy_available_flag"] = pd.Series(ai_available, index=frame.index, dtype="boolean")
-    frame["ai_vacancy_source"] = pd.Series(
-        np.where(ai_available, "precomputed", "unavailable"),
-        index=frame.index,
-        dtype="string",
+    existing_ai_source = _normalize_string(frame.get("ai_vacancy_source"), index=frame.index)
+    frame["ai_vacancy_source"] = existing_ai_source.fillna(
+        pd.Series(
+            np.where(ai_available, "precomputed", "unavailable"),
+            index=frame.index,
+            dtype="string",
+        )
     )
-    frame["ai_vacancy_status_note"] = pd.Series(
-        np.where(
-            ai_available,
-            "Precomputed AI vacancy prediction is available for this parcel.",
-            "No precomputed AI vacancy prediction is included in this parcel detail source.",
-        ),
-        index=frame.index,
-        dtype="string",
+    existing_ai_note = _normalize_string(frame.get("ai_vacancy_status_note"), index=frame.index)
+    frame["ai_vacancy_status_note"] = existing_ai_note.fillna(
+        pd.Series(
+            np.where(
+                ai_available,
+                "Precomputed AI vacancy prediction is available for this parcel.",
+                "No precomputed AI vacancy prediction is included in this parcel detail source.",
+            ),
+            index=frame.index,
+            dtype="string",
+        )
     )
     frame = _apply_parcel_improvement_fields_frame(frame)
     frame["vacancy_confidence_score"] = _to_float_series(frame, "vacancy_confidence_score").fillna(_vacancy_confidence_series(frame))
@@ -545,9 +603,26 @@ def _merge_ai_predictions(frame: pd.DataFrame) -> pd.DataFrame:
         "imagery_crop_count",
         "imagery_driveway_signal",
         "imagery_clearing_signal",
+        "parcel_tile_coverage_pct",
+        "parcel_bbox_tile_coverage_pct",
+        "full_parcel_visible_flag",
+        "parcel_extent_exceeds_tile_flag",
+        "parcel_tile_low_coverage_flag",
+        "multi_tile_candidate_flag",
+        "parcel_covering_tile_count",
         "parcel_boundary_crop_ready_flag",
         "vacancy_confidence_score",
         "vacancy_model_version",
+        "tiles_scored_count",
+        "tiles_with_building_signal_count",
+        "multi_tile_inference_used_flag",
+        "multi_tile_aggregation_reason",
+        "best_tile_label",
+        "best_tile_confidence",
+        "best_tile_crop_label",
+        "best_tile_probability",
+        "best_tile_parcel_coverage_pct",
+        "negative_tile_coverage_pct",
     ]
     available_columns = []
     ai_schema = ds.dataset(AI_BUILDING_PREDICTIONS_PATH, format="parquet").schema.names
@@ -558,7 +633,7 @@ def _merge_ai_predictions(frame: pd.DataFrame) -> pd.DataFrame:
         return frame
     ai_predictions = pd.read_parquet(AI_BUILDING_PREDICTIONS_PATH, columns=available_columns, engine="pyarrow")
     ai_predictions["parcel_row_id"] = _normalize_string(ai_predictions.get("parcel_row_id"), index=ai_predictions.index)
-    return frame.merge(ai_predictions, on="parcel_row_id", how="left")
+    return contract_left_merge(frame, ai_predictions, on="parcel_row_id")
 
 
 def _merge_tax_freshness_sources(frame: pd.DataFrame) -> pd.DataFrame:
@@ -780,6 +855,23 @@ def _stabilize_detail_payload(payload: dict[str, Any]) -> None:
     payload["vacancy_model_version"] = _serialize_scalar(payload.get("vacancy_model_version"))
     payload["building_present_confidence"] = _float_or_none(payload.get("building_present_confidence"))
     payload["building_presence_reason"] = _serialize_scalar(payload.get("building_presence_reason"))
+    payload["parcel_tile_coverage_pct"] = _float_or_none(payload.get("parcel_tile_coverage_pct"))
+    payload["parcel_bbox_tile_coverage_pct"] = _float_or_none(payload.get("parcel_bbox_tile_coverage_pct"))
+    payload["parcel_covering_tile_count"] = int(_float_or_none(payload.get("parcel_covering_tile_count")) or 0)
+    payload["tiles_scored_count"] = int(_float_or_none(payload.get("tiles_scored_count")) or 0)
+    payload["tiles_with_building_signal_count"] = int(_float_or_none(payload.get("tiles_with_building_signal_count")) or 0)
+    payload["full_parcel_visible_flag"] = _bool_or_none(payload.get("full_parcel_visible_flag"))
+    payload["parcel_extent_exceeds_tile_flag"] = _bool_or_none(payload.get("parcel_extent_exceeds_tile_flag"))
+    payload["parcel_tile_low_coverage_flag"] = _bool_or_none(payload.get("parcel_tile_low_coverage_flag"))
+    payload["multi_tile_candidate_flag"] = _bool_or_none(payload.get("multi_tile_candidate_flag"))
+    payload["multi_tile_inference_used_flag"] = _bool_or_none(payload.get("multi_tile_inference_used_flag"))
+    payload["multi_tile_aggregation_reason"] = _serialize_scalar(payload.get("multi_tile_aggregation_reason"))
+    payload["best_tile_label"] = _serialize_scalar(payload.get("best_tile_label"))
+    payload["best_tile_confidence"] = _float_or_none(payload.get("best_tile_confidence"))
+    payload["best_tile_crop_label"] = _serialize_scalar(payload.get("best_tile_crop_label"))
+    payload["best_tile_probability"] = _float_or_none(payload.get("best_tile_probability"))
+    payload["best_tile_parcel_coverage_pct"] = _float_or_none(payload.get("best_tile_parcel_coverage_pct"))
+    payload["negative_tile_coverage_pct"] = _float_or_none(payload.get("negative_tile_coverage_pct"))
     payload["overall_vacancy_assessment"] = _serialize_scalar(payload.get("overall_vacancy_assessment"))
     payload["parcel_improvement_status"] = _serialize_scalar(payload.get("parcel_improvement_status"))
     payload["parcel_improvement_confidence"] = _float_or_none(payload.get("parcel_improvement_confidence"))
@@ -792,7 +884,7 @@ def _apply_ai_detail_defaults(payload: dict[str, Any]) -> None:
     confidence = _float_or_none(payload.get("building_present_confidence"))
     building_present_flag = _bool_or_none(payload.get("ai_building_present_flag"))
     if building_present_flag is None and confidence is not None:
-        building_present_flag = confidence >= 60.0
+        building_present_flag = confidence >= AI_BUILDING_PRESENT_CONFIDENCE_THRESHOLD
 
     prediction_present = any(
         value is not None
@@ -853,6 +945,29 @@ def _maybe_apply_on_demand_ai(payload: dict[str, Any], row: pd.Series) -> None:
     latitude = pd.to_numeric(row.get("latitude"), errors="coerce")
     if pd.isna(longitude) or pd.isna(latitude):
         return
+    if parcel_row_id:
+        tile_x, tile_y = _centroid_tile(float(longitude), float(latitude), 19)
+        coverage_diagnostics = _parcel_tile_coverage_diagnostics(
+            _parcel_geometry_bytes(parcel_row_id),
+            tile_x=tile_x,
+            tile_y=tile_y,
+            zoom=19,
+        )
+        payload["parcel_tile_coverage_pct"] = _serialize_scalar(coverage_diagnostics.get("parcel_tile_coverage_pct"))
+        payload["parcel_bbox_tile_coverage_pct"] = _serialize_scalar(coverage_diagnostics.get("parcel_bbox_tile_coverage_pct"))
+        payload["full_parcel_visible_flag"] = _serialize_scalar(coverage_diagnostics.get("full_parcel_visible_flag"))
+        payload["parcel_extent_exceeds_tile_flag"] = _serialize_scalar(coverage_diagnostics.get("parcel_extent_exceeds_tile_flag"))
+        payload["parcel_tile_low_coverage_flag"] = _serialize_scalar(coverage_diagnostics.get("parcel_tile_low_coverage_flag"))
+        payload["multi_tile_candidate_flag"] = _serialize_scalar(coverage_diagnostics.get("multi_tile_candidate_flag"))
+        payload["parcel_covering_tile_count"] = _serialize_scalar(coverage_diagnostics.get("parcel_covering_tile_count"))
+        if coverage_diagnostics.get("multi_tile_candidate_flag") or coverage_diagnostics.get("parcel_extent_exceeds_tile_flag"):
+            payload["ai_vacancy_available_flag"] = False
+            payload["ai_vacancy_source"] = "unavailable"
+            payload["ai_vacancy_status_note"] = _build_ai_vacancy_status_note(
+                "On-demand AI vacancy prediction was skipped because this parcel requires parcel-covering multi-tile inference.",
+                coverage_diagnostics,
+            )
+            return
     try:
         ai_payload = _predict_ai_building_presence(
             parcel_row_id,
@@ -911,15 +1026,14 @@ def _apply_parcel_improvement_classification(payload: dict[str, Any]) -> None:
         evidence.append("County vacancy flag suggests vacant land")
 
     if building_present_confidence is not None:
-        if building_present_confidence >= 80.0:
+        if building_present_confidence >= 90.0:
             improved_evidence += 72.0
-            evidence.append("AI imagery strongly suggests a structure")
-        elif building_present_confidence >= 65.0:
-            improved_evidence += 50.0
-            evidence.append("AI imagery suggests a structure")
+            evidence.append("AI imagery strongly suggests a structure inside the parcel")
+        elif building_present_confidence >= AI_BUILDING_PRESENT_CONFIDENCE_THRESHOLD:
+            improved_evidence += 26.0
+            evidence.append("AI imagery suggests a structure inside the parcel")
         elif building_present_confidence >= 50.0:
-            improved_evidence += 22.0
-            evidence.append("AI imagery weakly suggests improvement")
+            evidence.append("AI imagery is inconclusive after strict parcel masking")
         elif building_present_confidence <= 25.0:
             vacant_evidence += 18.0
             evidence.append("AI imagery strongly suggests no structure")
@@ -927,12 +1041,12 @@ def _apply_parcel_improvement_classification(payload: dict[str, Any]) -> None:
             vacant_evidence += 8.0
             evidence.append("AI imagery leans vacant")
     elif ai_probability is not None:
-        if ai_probability >= 0.8:
+        if ai_probability >= 0.9:
             improved_evidence += 62.0
-            evidence.append("AI building probability is high")
-        elif ai_probability >= 0.65:
-            improved_evidence += 42.0
-            evidence.append("AI building probability supports improvement")
+            evidence.append("AI building probability is very high inside the parcel")
+        elif ai_probability >= 0.82:
+            improved_evidence += 20.0
+            evidence.append("AI building probability supports review for an in-parcel structure")
         elif ai_probability <= 0.2:
             vacant_evidence += 14.0
             evidence.append("AI building probability is very low")
@@ -964,8 +1078,8 @@ def _apply_parcel_improvement_classification(payload: dict[str, Any]) -> None:
         evidence.append("Land use description leans vacant")
 
     if building_count <= 0 and building_area_total <= 0 and (
-        (building_present_confidence is not None and building_present_confidence >= 65.0)
-        or (ai_probability is not None and ai_probability >= 0.75)
+        (building_present_confidence is not None and building_present_confidence >= AI_BUILDING_PRESENT_CONFIDENCE_THRESHOLD)
+        or (ai_probability is not None and ai_probability >= 0.82)
         or ai_building_present_flag is True
     ):
         conflicts.append("Imagery suggests an improvement, but mapped building footprints are missing")
@@ -975,8 +1089,8 @@ def _apply_parcel_improvement_classification(payload: dict[str, Any]) -> None:
     strong_improved = (
         building_count >= 1
         or building_area_total >= 400
-        or (building_present_confidence is not None and building_present_confidence >= 65.0)
-        or (ai_probability is not None and ai_probability >= 0.75)
+        or (building_present_confidence is not None and building_present_confidence >= AI_BUILDING_PRESENT_CONFIDENCE_THRESHOLD)
+        or (ai_probability is not None and ai_probability >= 0.82)
         or assessed_total_value >= 25000
     )
     strong_vacant = (
@@ -1000,7 +1114,7 @@ def _apply_parcel_improvement_classification(payload: dict[str, Any]) -> None:
         elif building_count >= 1 or building_area_total > 0:
             reason = "Mapped building evidence indicates the parcel is improved."
         elif building_present_confidence is not None or ai_probability is not None or ai_building_present_flag is True:
-            reason = "Imagery and parcel evidence indicate a structure or improvement is present."
+            reason = "Imagery and parcel evidence indicate a structure inside the parcel boundary."
         else:
             reason = "Available parcel signals indicate the parcel is improved."
     elif strong_vacant and evidence_gap <= -12.0:
@@ -1288,11 +1402,8 @@ def _ai_model_params() -> dict[str, Any] | None:
 
 
 def _centroid_tile(longitude: float, latitude: float, zoom: int) -> tuple[int, int]:
-    lat_rad = np.radians(latitude)
-    n = 2**zoom
-    x = int((longitude + 180.0) / 360.0 * n)
-    y = int((1.0 - np.arcsinh(np.tan(lat_rad)) / np.pi) / 2.0 * n)
-    return x, y
+    address = shared_centroid_tile(longitude, latitude, zoom)
+    return int(address.x), int(address.y)
 
 
 def _ai_extract_image_features(image_bytes: bytes) -> dict[str, float]:
@@ -1301,63 +1412,20 @@ def _ai_extract_image_features(image_bytes: bytes) -> dict[str, float]:
 
 
 def _ai_extract_image_features_from_image(image: Image.Image) -> dict[str, float]:
-    image = image.convert("RGB").resize((128, 128))
-    array = np.asarray(image, dtype=np.float32) / 255.0
-    gray = array.mean(axis=2)
-    flattened = array.reshape(-1, 3)
-    features: dict[str, float] = {}
+    return shared_extract_image_features(image)
 
-    channel_means = flattened.mean(axis=0)
-    channel_stds = flattened.std(axis=0)
-    for index, channel in enumerate(("r", "g", "b")):
-        features[f"{channel}_mean"] = float(channel_means[index])
-        features[f"{channel}_std"] = float(channel_stds[index])
 
-    brightness_hist, _ = np.histogram(gray, bins=12, range=(0.0, 1.0), density=True)
-    for index, value in enumerate(brightness_hist):
-        features[f"brightness_hist_{index}"] = float(value)
-
-    grad_x = np.abs(np.diff(gray, axis=1)).mean()
-    grad_y = np.abs(np.diff(gray, axis=0)).mean()
-    features["edge_density_x"] = float(grad_x)
-    features["edge_density_y"] = float(grad_y)
-    features["edge_density_total"] = float(grad_x + grad_y)
-    features["gray_variance"] = float(gray.var())
-    features["green_excess"] = float(channel_means[1] - ((channel_means[0] + channel_means[2]) / 2.0))
-    features["roof_tone_pct"] = float(
-        np.mean((array[..., 0] > 0.35) & (array[..., 0] < 0.85) & (array[..., 1] > 0.35) & (array[..., 1] < 0.85))
+def _parcel_tile_coverage_diagnostics(
+    geometry_bytes: bytes | None,
+    *,
+    tile_x: int,
+    tile_y: int,
+    zoom: int,
+) -> dict[str, Any]:
+    return shared_parcel_tile_coverage_diagnostics(
+        geometry_bytes,
+        SharedTileAddress(x=tile_x, y=tile_y, z=zoom),
     )
-    features["dark_shadow_pct"] = float(np.mean(gray < 0.18))
-    return features
-
-
-def _ai_crop_specs(acreage: float | None) -> list[tuple[str, tuple[int, int, int, int]]]:
-    specs = [
-        ("tile_full", (0, 0, 256, 256)),
-        ("center_tight", (48, 48, 208, 208)),
-        ("northwest", (0, 0, 160, 160)),
-        ("northeast", (96, 0, 256, 160)),
-        ("southwest", (0, 96, 160, 256)),
-        ("southeast", (96, 96, 256, 256)),
-    ]
-    if acreage is not None and np.isfinite(acreage) and acreage >= 5:
-        specs.extend(
-            [
-                ("north_center", (48, 0, 208, 160)),
-                ("south_center", (48, 96, 208, 256)),
-                ("west_center", (0, 48, 160, 208)),
-                ("east_center", (96, 48, 256, 208)),
-            ]
-        )
-    return specs
-
-
-def _tile_pixel(longitude: float, latitude: float, tile_x: int, tile_y: int, zoom: int, tile_size: int = 256) -> tuple[float, float]:
-    lat_rad = np.radians(latitude)
-    n = 2**zoom
-    world_x = ((longitude + 180.0) / 360.0) * n * tile_size
-    world_y = ((1.0 - np.arcsinh(np.tan(lat_rad)) / np.pi) / 2.0) * n * tile_size
-    return world_x - (tile_x * tile_size), world_y - (tile_y * tile_size)
 
 
 def _parcel_geometry_bytes(parcel_row_id: str | None) -> bytes | None:
@@ -1378,105 +1446,6 @@ def _parcel_geometry_bytes(parcel_row_id: str | None) -> bytes | None:
         return None
 
 
-def _build_parcel_tile_mask(
-    geometry_bytes: bytes | None,
-    *,
-    tile_x: int,
-    tile_y: int,
-    zoom: int,
-    tile_size: int = 256,
-) -> Image.Image | None:
-    if geometry_bytes is None:
-        return None
-    try:
-        shape = wkb.loads(geometry_bytes)
-    except Exception:
-        return None
-    mask = Image.new("L", (tile_size, tile_size), 0)
-    draw = ImageDraw.Draw(mask)
-    polygons = getattr(shape, "geoms", [shape]) if shape.geom_type == "MultiPolygon" else [shape]
-    drew_any = False
-    for polygon in polygons:
-        if polygon.is_empty:
-            continue
-        exterior = [_tile_pixel(lng, lat, tile_x, tile_y, zoom, tile_size) for lng, lat in polygon.exterior.coords]
-        if len(exterior) < 3:
-            continue
-        draw.polygon(exterior, fill=255)
-        for ring in polygon.interiors:
-            interior = [_tile_pixel(lng, lat, tile_x, tile_y, zoom, tile_size) for lng, lat in ring.coords]
-            if len(interior) >= 3:
-                draw.polygon(interior, fill=0)
-        drew_any = True
-    if not drew_any or mask.getbbox() is None:
-        return None
-    return mask
-
-
-def _apply_outside_mask_to_image(image: Image.Image, mask: Image.Image) -> Image.Image:
-    array = np.asarray(image.convert("RGB"), dtype=np.uint8).copy()
-    mask_array = np.asarray(mask, dtype=np.uint8) > 0
-    if AI_OUTSIDE_MASK_FILL == "black":
-        array[~mask_array] = 0
-    else:
-        dim_factor = float(np.clip(AI_OUTSIDE_MASK_DIM_FACTOR, 0.0, 1.0))
-        array[~mask_array] = (array[~mask_array].astype(np.float32) * dim_factor).astype(np.uint8)
-    return Image.fromarray(array, mode="RGB")
-
-
-def _expand_ai_crop_box(
-    bbox: tuple[int, int, int, int],
-    *,
-    image_size: tuple[int, int],
-    buffer_pixels: int,
-    min_pixels: int,
-) -> tuple[int, int, int, int]:
-    image_width, image_height = image_size
-    left, top, right, bottom = bbox
-    width = max(right - left, 1)
-    height = max(bottom - top, 1)
-    center_x = (left + right) / 2.0
-    center_y = (top + bottom) / 2.0
-    crop_width = min(max(width + (buffer_pixels * 2), min_pixels), image_width)
-    crop_height = min(max(height + (buffer_pixels * 2), min_pixels), image_height)
-    crop_left = int(round(center_x - (crop_width / 2.0)))
-    crop_top = int(round(center_y - (crop_height / 2.0)))
-    crop_left = max(0, min(crop_left, image_width - crop_width))
-    crop_top = max(0, min(crop_top, image_height - crop_height))
-    return (crop_left, crop_top, crop_left + int(crop_width), crop_top + int(crop_height))
-
-
-def _parcel_aware_ai_crop_specs(mask_bbox: tuple[int, int, int, int], acreage: float | None, image_size: tuple[int, int]) -> list[tuple[str, tuple[int, int, int, int]]]:
-    if acreage is None or not np.isfinite(acreage):
-        min_pixels = 72
-        buffer_pixels = AI_PARCEL_BUFFER_PIXELS
-    elif acreage <= 0.25:
-        min_pixels = 64
-        buffer_pixels = max(6, int(AI_PARCEL_BUFFER_PIXELS * 0.5))
-    elif acreage <= 1.0:
-        min_pixels = 72
-        buffer_pixels = max(8, int(AI_PARCEL_BUFFER_PIXELS * 0.65))
-    elif acreage <= 5.0:
-        min_pixels = 88
-        buffer_pixels = AI_PARCEL_BUFFER_PIXELS
-    else:
-        min_pixels = 112
-        buffer_pixels = AI_PARCEL_BUFFER_PIXELS + 10
-    focus = _expand_ai_crop_box(mask_bbox, image_size=image_size, buffer_pixels=buffer_pixels, min_pixels=min_pixels)
-    context = _expand_ai_crop_box(
-        mask_bbox,
-        image_size=image_size,
-        buffer_pixels=buffer_pixels + 14,
-        min_pixels=min(min_pixels + 36, max(image_size)),
-    )
-    full = (0, 0, image_size[0], image_size[1])
-    return [
-        ("parcel_focus", focus),
-        ("parcel_context", context),
-        ("parcel_mask_full", full),
-    ]
-
-
 def _prepare_parcel_aware_ai_image(
     tile_image: Image.Image,
     *,
@@ -1485,73 +1454,105 @@ def _prepare_parcel_aware_ai_image(
     tile_y: int,
     zoom: int,
     acreage: float | None,
-) -> tuple[Image.Image, list[tuple[str, tuple[int, int, int, int]]], bool, str]:
-    if not AI_USE_PARCEL_MASK:
-        return tile_image, _ai_crop_specs(acreage), False, "multi_crop_v2"
+) -> tuple[Image.Image, Image.Image | None, list[tuple[str, tuple[int, int, int, int]]], bool, str, dict[str, Any]]:
     geometry_bytes = _parcel_geometry_bytes(parcel_row_id)
-    mask = _build_parcel_tile_mask(geometry_bytes, tile_x=tile_x, tile_y=tile_y, zoom=zoom, tile_size=tile_image.size[0])
-    if mask is None or mask.getbbox() is None:
-        return tile_image, _ai_crop_specs(acreage), False, "multi_crop_v2"
-    masked_image = _apply_outside_mask_to_image(tile_image, mask)
-    crop_specs = _parcel_aware_ai_crop_specs(mask.getbbox(), acreage, tile_image.size)
-    return masked_image, crop_specs, True, "parcel_mask_multi_crop_v1"
+    prepared = shared_prepare_parcel_aware_image(
+        tile_image,
+        address=SharedTileAddress(x=tile_x, y=tile_y, z=zoom),
+        geometry_value=geometry_bytes,
+        acreage=acreage,
+        use_parcel_mask=AI_USE_PARCEL_MASK,
+        outside_mask_fill=AI_OUTSIDE_MASK_FILL,
+        outside_mask_dim_factor=AI_OUTSIDE_MASK_DIM_FACTOR,
+        parcel_buffer_pixels=AI_PARCEL_BUFFER_PIXELS,
+    )
+    coverage_diagnostics = {
+        "parcel_tile_coverage_pct": prepared.get("parcel_tile_coverage_pct"),
+        "parcel_bbox_tile_coverage_pct": prepared.get("parcel_bbox_tile_coverage_pct"),
+        "full_parcel_visible_flag": bool(prepared.get("full_parcel_visible_flag", False)),
+        "parcel_extent_exceeds_tile_flag": bool(prepared.get("parcel_extent_exceeds_tile_flag", False)),
+        "parcel_tile_low_coverage_flag": bool(prepared.get("parcel_tile_low_coverage_flag", False)),
+        "multi_tile_candidate_flag": bool(prepared.get("multi_tile_candidate_flag", False)),
+        "parcel_covering_tile_count": int(prepared.get("parcel_covering_tile_count", 0) or 0),
+        "parcel_tile_coverage_ratio": prepared.get("parcel_tile_coverage_ratio"),
+        "parcel_bbox_tile_coverage_ratio": prepared.get("parcel_bbox_tile_coverage_ratio"),
+        "parcel_coverage_diagnostics_ready_flag": bool(prepared.get("parcel_coverage_diagnostics_ready_flag", False)),
+    }
+    return (
+        prepared["image"],
+        prepared.get("parcel_mask"),
+        prepared["crop_specs"],
+        bool(prepared.get("parcel_boundary_crop_ready_flag", False)),
+        str(prepared.get("imagery_crop_strategy") or "multi_crop_v2"),
+        coverage_diagnostics,
+    )
 
 
 def _imagery_context_signals(features: dict[str, float]) -> dict[str, float]:
-    driveway_signal = float(
-        np.clip(
-            (features["roof_tone_pct"] * 120.0)
-            + (features["edge_density_total"] * 280.0)
-            + (features["dark_shadow_pct"] * 35.0)
-            - (max(features["green_excess"], 0.0) * 55.0),
-            0.0,
-            100.0,
-        )
+    return shared_imagery_context_signals(features)
+
+
+def _imagery_false_positive_risk(
+    probability: float,
+    *,
+    driveway_signal: float,
+    clearing_signal: float,
+    features: dict[str, float],
+    crop_label: str,
+    parcel_coverage_ratio: float,
+) -> float:
+    return shared_imagery_false_positive_risk(
+        probability,
+        driveway_signal=driveway_signal,
+        clearing_signal=clearing_signal,
+        features=features,
+        crop_label=crop_label,
+        parcel_coverage_ratio=parcel_coverage_ratio,
     )
-    clearing_signal = float(
-        np.clip(
-            (((features["r_mean"] + features["g_mean"] + features["b_mean"]) / 3.0) * 100.0)
-            + (features["roof_tone_pct"] * 40.0)
-            - (max(features["green_excess"], 0.0) * 45.0),
-            0.0,
-            100.0,
-        )
+
+
+def _calibrated_ai_probability(
+    probability: float,
+    *,
+    false_positive_risk: float,
+    crop_label: str,
+    parcel_coverage_ratio: float,
+) -> float:
+    return shared_calibrated_building_probability(
+        probability,
+        false_positive_risk=false_positive_risk,
+        crop_label=crop_label,
+        parcel_coverage_ratio=parcel_coverage_ratio,
     )
-    return {
-        "imagery_driveway_signal": driveway_signal,
-        "imagery_clearing_signal": clearing_signal,
-    }
+
+
+def _adjust_confidence_for_tile_coverage(
+    confidence_score: float,
+    *,
+    parcel_tile_coverage_ratio: float | None,
+    parcel_bbox_tile_coverage_ratio: float | None,
+) -> float:
+    return shared_adjust_confidence_for_tile_coverage(
+        confidence_score,
+        parcel_tile_coverage_ratio=parcel_tile_coverage_ratio,
+        parcel_bbox_tile_coverage_ratio=parcel_bbox_tile_coverage_ratio,
+    )
+
+
+def _build_ai_vacancy_status_note(base_note: str, coverage_diagnostics: dict[str, Any]) -> str:
+    if "parcel_coverage_diagnostics_ready_flag" not in coverage_diagnostics:
+        coverage_diagnostics = {
+            **coverage_diagnostics,
+            "parcel_coverage_diagnostics_ready_flag": True,
+        }
+    return shared_build_ai_vacancy_status_note(base_note, coverage_diagnostics)
 
 
 def _building_presence_confidence(
     *,
     probability: float,
-    building_count: float,
-    building_area_total: float,
-    assessed_total_value: float,
-    road_distance_ft: float | None,
-    nearby_building_density: float,
-    driveway_signal: float,
-    clearing_signal: float,
 ) -> float:
-    confidence = probability * 100.0 * 0.68
-    confidence += driveway_signal * 0.14
-    confidence += clearing_signal * 0.08
-    if building_count >= 1:
-        confidence += 28.0
-    if building_area_total >= 400:
-        confidence += 24.0
-    elif building_area_total > 0:
-        confidence += 10.0
-    if assessed_total_value >= 25000:
-        confidence += 20.0
-    elif assessed_total_value >= 10000:
-        confidence += 12.0
-    if road_distance_ft is not None and np.isfinite(road_distance_ft) and road_distance_ft <= 150:
-        confidence += 8.0
-    if nearby_building_density >= 120:
-        confidence += 6.0
-    return float(np.clip(confidence, 0.0, 100.0))
+    return shared_building_present_confidence_from_probability(probability)
 
 
 def _predict_ai_building_presence(
@@ -1580,7 +1581,7 @@ def _predict_ai_building_presence(
     coef = np.asarray(params["coef"], dtype=np.float64)
     intercept = float(params["intercept"])
     tile_image = Image.open(io.BytesIO(response.content)).convert("RGB")
-    prepared_image, crop_specs, parcel_boundary_crop_ready_flag, crop_strategy = _prepare_parcel_aware_ai_image(
+    prepared_image, parcel_mask, crop_specs, parcel_boundary_crop_ready_flag, crop_strategy, coverage_diagnostics = _prepare_parcel_aware_ai_image(
         tile_image,
         parcel_row_id=parcel_row_id,
         tile_x=tile_x,
@@ -1595,41 +1596,58 @@ def _predict_ai_building_presence(
         values = np.asarray([features[column] for column in feature_columns], dtype=np.float64)
         scaled = (values - mean) / scale
         logit = float(np.dot(scaled, coef) + intercept)
-        probability = 1.0 / (1.0 + np.exp(-logit))
+        raw_probability = 1.0 / (1.0 + np.exp(-logit))
+        context_signals = _imagery_context_signals(features)
+        parcel_coverage_ratio = _crop_mask_coverage(parcel_mask, crop_box)
+        false_positive_risk = _imagery_false_positive_risk(
+            raw_probability,
+            driveway_signal=float(context_signals["imagery_driveway_signal"]),
+            clearing_signal=float(context_signals["imagery_clearing_signal"]),
+            features=features,
+            crop_label=str(crop_label),
+            parcel_coverage_ratio=parcel_coverage_ratio,
+        )
+        probability = _calibrated_ai_probability(
+            raw_probability,
+            false_positive_risk=false_positive_risk,
+            crop_label=str(crop_label),
+            parcel_coverage_ratio=parcel_coverage_ratio,
+        )
         crop_predictions.append(
             {
                 "crop_label": crop_label,
+                "raw_probability": raw_probability,
                 "probability": probability,
-                **_imagery_context_signals(features),
+                "parcel_coverage_ratio": round(parcel_coverage_ratio, 4),
+                "false_positive_risk": round(false_positive_risk, 1),
+                **context_signals,
             }
         )
     best_crop = max(crop_predictions, key=lambda item: float(item["probability"]))
     probability = float(best_crop["probability"])
-    building_count_value = 0.0 if building_count is None or not np.isfinite(building_count) else float(building_count)
-    building_area_value = 0.0 if building_area_total is None or not np.isfinite(building_area_total) else float(building_area_total)
-    assessed_value = 0.0 if assessed_total_value is None or not np.isfinite(assessed_total_value) else float(assessed_total_value)
-    nearby_density = 0.0 if nearby_building_density is None or not np.isfinite(nearby_building_density) else float(nearby_building_density)
     building_present_confidence = _building_presence_confidence(
         probability=probability,
-        building_count=building_count_value,
-        building_area_total=building_area_value,
-        assessed_total_value=assessed_value,
-        road_distance_ft=road_distance_ft,
-        nearby_building_density=nearby_density,
-        driveway_signal=float(best_crop["imagery_driveway_signal"]),
-        clearing_signal=float(best_crop["imagery_clearing_signal"]),
     )
-    if building_count_value >= 1 or building_area_value >= 400:
-        probability = max(probability, 0.75)
-        building_present_confidence = max(building_present_confidence, 80.0)
-    ai_building_present_flag = building_present_confidence >= 60.0
+    ai_building_present_flag = building_present_confidence >= AI_BUILDING_PRESENT_CONFIDENCE_THRESHOLD
     footprint_vacancy_score = 58.0 if parcel_vacant_flag else 35.0
     imagery_vacancy_score = 100.0 - building_present_confidence
     vacancy_confidence_score = round((footprint_vacancy_score * 0.15) + (imagery_vacancy_score * 0.85), 2)
+    vacancy_confidence_score = _adjust_confidence_for_tile_coverage(
+        vacancy_confidence_score,
+        parcel_tile_coverage_ratio=coverage_diagnostics.get("parcel_tile_coverage_ratio"),
+        parcel_bbox_tile_coverage_ratio=coverage_diagnostics.get("parcel_bbox_tile_coverage_ratio"),
+    )
+    penalty_note = ""
+    if float(best_crop["false_positive_risk"]) >= 30.0:
+        penalty_note = " Non-building context penalty applied for road/clearing-style features."
     building_presence_reason = (
-        f"Best parcel-aware crop {best_crop['crop_label']} with confidence {building_present_confidence:.1f}."
+        f"Best strict parcel crop {best_crop['crop_label']} with confidence {building_present_confidence:.1f}.{penalty_note}"
         if parcel_boundary_crop_ready_flag
-        else f"Best imagery crop {best_crop['crop_label']} with confidence {building_present_confidence:.1f}."
+        else f"Best imagery crop {best_crop['crop_label']} with confidence {building_present_confidence:.1f}.{penalty_note}"
+    )
+    ai_vacancy_status_note = _build_ai_vacancy_status_note(
+        "AI vacancy prediction was generated on demand from parcel imagery.",
+        coverage_diagnostics,
     )
     return {
         "ai_building_present_probability": round(probability, 6),
@@ -1641,12 +1659,21 @@ def _predict_ai_building_presence(
         "imagery_crop_count": len(crop_predictions),
         "imagery_driveway_signal": round(float(best_crop["imagery_driveway_signal"]), 1),
         "imagery_clearing_signal": round(float(best_crop["imagery_clearing_signal"]), 1),
+        "imagery_false_positive_risk": round(float(best_crop["false_positive_risk"]), 1),
+        "imagery_parcel_coverage_ratio": round(float(best_crop["parcel_coverage_ratio"]), 4),
+        "parcel_tile_coverage_pct": coverage_diagnostics.get("parcel_tile_coverage_pct"),
+        "parcel_bbox_tile_coverage_pct": coverage_diagnostics.get("parcel_bbox_tile_coverage_pct"),
+        "full_parcel_visible_flag": bool(coverage_diagnostics.get("full_parcel_visible_flag", False)),
+        "parcel_extent_exceeds_tile_flag": bool(coverage_diagnostics.get("parcel_extent_exceeds_tile_flag", False)),
+        "parcel_tile_low_coverage_flag": bool(coverage_diagnostics.get("parcel_tile_low_coverage_flag", False)),
+        "multi_tile_candidate_flag": bool(coverage_diagnostics.get("multi_tile_candidate_flag", False)),
+        "parcel_covering_tile_count": int(coverage_diagnostics.get("parcel_covering_tile_count", 0) or 0),
         "parcel_boundary_crop_ready_flag": parcel_boundary_crop_ready_flag,
         "vacancy_confidence_score": vacancy_confidence_score,
         "vacancy_model_version": params.get("model_version"),
         "ai_vacancy_available_flag": True,
         "ai_vacancy_source": "on_demand",
-        "ai_vacancy_status_note": "AI vacancy prediction was generated on demand from parcel imagery.",
+        "ai_vacancy_status_note": ai_vacancy_status_note,
     }
 
 
@@ -1705,23 +1732,19 @@ def _apply_vacancy_assessment(payload: dict[str, Any]) -> None:
         vacant_evidence += 4.0
 
     if building_present_confidence is not None:
-        if building_present_confidence >= 80.0:
+        if building_present_confidence >= 90.0:
             improved_evidence += 62.0
-        elif building_present_confidence >= 65.0:
-            improved_evidence += 44.0
-        elif building_present_confidence >= 50.0:
+        elif building_present_confidence >= AI_BUILDING_PRESENT_CONFIDENCE_THRESHOLD:
             improved_evidence += 22.0
         elif building_present_confidence <= 25.0:
             vacant_evidence += 10.0
         elif building_present_confidence <= 40.0:
             vacant_evidence += 4.0
     elif ai_probability is not None:
-        if ai_probability >= 0.8:
+        if ai_probability >= 0.9:
             improved_evidence += 55.0
-        elif ai_probability >= 0.65:
-            improved_evidence += 40.0
-        elif ai_probability >= 0.5:
-            improved_evidence += 22.0
+        elif ai_probability >= 0.82:
+            improved_evidence += 18.0
         elif ai_probability <= 0.2:
             vacant_evidence += 12.0
         elif ai_probability <= 0.35:
@@ -1738,22 +1761,15 @@ def _apply_vacancy_assessment(payload: dict[str, Any]) -> None:
     else:
         vacant_evidence += 4.0
 
-    if road_distance_ft is not None and road_distance_ft <= 150:
-        improved_evidence += 8.0
-    if nearby_building_density >= 120 and acreage <= 5:
-        improved_evidence += 8.0
-    elif nearby_building_density <= 10 and acreage >= 5:
-        vacant_evidence += 4.0
-
     vacancy_likelihood = float(np.clip(50.0 + vacant_evidence - improved_evidence, 0.0, 100.0))
 
     if improved_evidence >= vacant_evidence + 25.0:
         payload["overall_vacancy_assessment"] = "Likely improved"
         payload["vacancy_confidence_score"] = round(min(vacancy_likelihood, 25.0), 1)
-        payload["vacant_reason"] = payload.get("building_presence_reason") or "Improvement evidence outweighs vacancy signals based on parcel value, structure context, and imagery."
+        payload["vacant_reason"] = payload.get("building_presence_reason") or "Improvement evidence outweighs vacancy signals based on parcel value, direct structure evidence, and imagery."
         if parcel_vacant_flag is True:
             payload["overall_vacancy_assessment"] = "Likely improved - conflicting signals"
-            payload["vacant_reason"] = "Missing building footprints conflict with stronger imagery, value, or context signals that point to an improved parcel."
+            payload["vacant_reason"] = "Missing building footprints conflict with stronger imagery or parcel signals that point to an improved parcel."
         return
 
     if vacant_evidence >= improved_evidence + 30.0 and assessed_total_value < 10000 and building_count <= 0 and building_area_total <= 0:
@@ -1890,7 +1906,8 @@ def _embedded_filter_expression(
     bounds: tuple[float, float, float, float] | None = None,
 ) -> ds.Expression | None:
     expression: ds.Expression | None = None
-    score_field = _lead_sort_field(_embedded_parcel_dataset().schema.names)
+    schema_names = _embedded_parcel_dataset().schema.names
+    score_field = _lead_sort_field(schema_names)
 
     def combine(next_expression: ds.Expression | None) -> None:
         nonlocal expression
@@ -1930,6 +1947,23 @@ def _embedded_filter_expression(
         combine(ds.field("road_access_tier").isin(road_access_tier))
     if road_distance_ft_max is not None:
         combine(ds.field("road_distance_ft") <= road_distance_ft_max)
+    if "geometry_marketability_default_leads_excluded_flag" in schema_names and not parcel_row_ids:
+        marketability_expression = (ds.field("geometry_marketability_default_leads_excluded_flag") == False) | ds.field(
+            "geometry_marketability_default_leads_excluded_flag"
+        ).is_null()
+        if selected_parcel_id:
+            marketability_expression = marketability_expression | (ds.field("parcel_row_id") == selected_parcel_id)
+        combine(marketability_expression)
+    elif "geometry_marketability_flag" in schema_names and not parcel_row_ids:
+        marketability_expression = ds.field("geometry_marketability_flag") != "unbuildable_candidate"
+        if selected_parcel_id:
+            marketability_expression = marketability_expression | (ds.field("parcel_row_id") == selected_parcel_id)
+        combine(marketability_expression)
+    if "geometry_quality_flag" in schema_names and not parcel_row_ids:
+        geometry_expression = ds.field("geometry_quality_flag") != "access_strip"
+        if selected_parcel_id:
+            geometry_expression = geometry_expression | (ds.field("parcel_row_id") == selected_parcel_id)
+        combine(geometry_expression)
     if parcel_row_ids:
         combine(ds.field("parcel_row_id").isin(parcel_row_ids))
     if bounds is not None:
@@ -2115,43 +2149,206 @@ def _centroids_from_wkb(series: pd.Series) -> tuple[pd.Series, pd.Series]:
     return longitudes, latitudes
 
 
+def _canonical_runtime_available() -> bool:
+    return _embedded_parcel_runtime_available()
+
+
+def _noncanonical_source_rebuild_enabled() -> bool:
+    return os.getenv("MISSISSIPPI_ALLOW_NONCANONICAL_SOURCE_REBUILD", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _finalize_load_base_frame_service_view(frame: pd.DataFrame) -> pd.DataFrame:
+    acreage = _to_float_series(frame, "acreage").fillna(0)
+    computed_size_score = pd.Series(35.0, index=frame.index)
+    computed_size_score = computed_size_score.mask(acreage >= 1, 55.0)
+    computed_size_score = computed_size_score.mask(acreage >= 5, 72.0)
+    computed_size_score = computed_size_score.mask(acreage >= 20, 86.0)
+    frame["size_score"] = pd.to_numeric(frame.get("size_score"), errors="coerce").fillna(computed_size_score)
+
+    road_distance_ft = _to_float_series(frame, "road_distance_ft")
+    computed_access_score = pd.Series(25.0, index=frame.index)
+    computed_access_score = computed_access_score.mask(road_distance_ft.le(250).fillna(False), 92.0)
+    computed_access_score = computed_access_score.mask(road_distance_ft.between(251, 1000).fillna(False), 76.0)
+    computed_access_score = computed_access_score.mask(road_distance_ft.between(1001, 2500).fillna(False), 58.0)
+    computed_access_score = computed_access_score.mask(road_distance_ft.between(2501, 5280).fillna(False), 42.0)
+    frame["access_score"] = pd.to_numeric(frame.get("access_score"), errors="coerce").fillna(computed_access_score)
+
+    frame["buildability_component"] = pd.to_numeric(frame.get("buildability_component"), errors="coerce").fillna(_to_float_series(frame, "buildability_score").fillna(0))
+    frame["environmental_component"] = pd.to_numeric(frame.get("environmental_component"), errors="coerce").fillna(_to_float_series(frame, "environment_score").fillna(0))
+
+    owner_targeting_base = _to_float_series(frame, "mailer_target_score").fillna(25)
+    owner_targeting_base = owner_targeting_base + frame["absentee_owner_flag"].astype(int) * 12 + frame["out_of_state_owner_flag"].astype(int) * 10 + frame["corporate_owner_flag"].astype(int) * 8
+    frame["owner_targeting_component"] = pd.to_numeric(frame.get("owner_targeting_component"), errors="coerce").fillna(owner_targeting_base.clip(0, 100))
+
+    delinquency_base = pd.Series(0.0, index=frame.index)
+    delinquency_base = delinquency_base.mask(frame["delinquent_flag"], 78.0)
+    delinquency_base = delinquency_base.mask(frame["forfeited_flag"], 92.0)
+    frame["delinquency_component"] = pd.to_numeric(frame.get("delinquency_component"), errors="coerce").fillna(delinquency_base)
+
+    source_conf_base = pd.Series(24.0, index=frame.index)
+    source_conf_base = source_conf_base.mask(frame["source_confidence_tier"].eq("high"), 90.0)
+    source_conf_base = source_conf_base.mask(frame["source_confidence_tier"].eq("medium"), 62.0)
+    source_conf_base = source_conf_base.mask(frame["source_confidence_tier"].eq("parcel_master_only"), 38.0)
+    frame["source_confidence_component"] = pd.to_numeric(frame.get("source_confidence_component"), errors="coerce").fillna(source_conf_base)
+
+    improvement_status = _normalize_string(frame.get("parcel_improvement_status"), index=frame.index)
+    vacant_base = pd.Series(22.0, index=frame.index)
+    vacant_base = vacant_base.mask(improvement_status.eq("likely_vacant"), 84.0)
+    vacant_base = vacant_base.mask(improvement_status.eq("needs_review"), 34.0)
+    vacant_base = vacant_base.mask(improvement_status.eq("likely_improved"), 10.0)
+    frame["vacant_land_component"] = pd.to_numeric(frame.get("vacant_land_component"), errors="coerce").fillna(vacant_base)
+
+    growth_map = {"very_low": 20.0, "low": 38.0, "moderate": 68.0, "high": 88.0, "unknown": 28.0}
+    growth_base = frame["growth_pressure_bucket"].map(growth_map).astype("float64")
+    frame["growth_pressure_component"] = pd.to_numeric(frame.get("growth_pressure_component"), errors="coerce").fillna(growth_base.fillna(28.0))
+
+    base_total = (
+        frame["size_score"] * 0.08
+        + frame["access_score"] * 0.10
+        + frame["buildability_component"] * 0.20
+        + frame["environmental_component"] * 0.18
+        + frame["owner_targeting_component"] * 0.16
+        + frame["delinquency_component"] * 0.10
+        + frame["source_confidence_component"] * 0.08
+        + frame["vacant_land_component"] * 0.05
+        + frame["growth_pressure_component"] * 0.05
+    ).round(2)
+    frame["lead_score_total"] = pd.to_numeric(frame.get("lead_score_total"), errors="coerce").fillna(base_total)
+    frame["lead_score_total_effective"] = (
+        pd.to_numeric(frame["lead_score_total"], errors="coerce").fillna(base_total)
+        + pd.to_numeric(frame.get("parcel_tax_score_adjustment"), errors="coerce").fillna(0)
+    ).round(2)
+    frame = add_geometry_marketability_fields(frame)
+    frame = apply_geometry_marketability_score_adjustment(frame)
+    frame["lead_score_tier"] = _score_tier(frame["lead_score_total_effective"])
+
+    component_columns = [
+        "buildability_component",
+        "environmental_component",
+        "owner_targeting_component",
+        "vacant_land_component",
+        "growth_pressure_component",
+        "access_score",
+        "delinquency_component",
+        "source_confidence_component",
+        "size_score",
+    ]
+    driver_frame = pd.DataFrame(_row_top_drivers(frame, component_columns), columns=["driver_1", "driver_2", "driver_3"], index=frame.index)
+    frame["lead_score_driver_1"] = _normalize_string(frame.get("lead_score_driver_1"), index=frame.index).fillna(driver_frame["driver_1"])
+    frame["lead_score_driver_2"] = _normalize_string(frame.get("lead_score_driver_2"), index=frame.index).fillna(driver_frame["driver_2"])
+    frame["lead_score_driver_3"] = _normalize_string(frame.get("lead_score_driver_3"), index=frame.index).fillna(driver_frame["driver_3"])
+    frame["top_score_driver"] = _normalize_string(frame.get("top_score_driver"), index=frame.index).fillna(frame["lead_score_driver_1"])
+    frame["lead_score_explanation"] = _normalize_string(frame.get("lead_score_explanation"), index=frame.index).fillna(
+        frame["lead_score_driver_1"].map(_component_reason).fillna("balanced parcel quality and signal coverage")
+    )
+    frame["recommended_sort_reason"] = _normalize_string(frame.get("recommended_sort_reason"), index=frame.index).fillna(
+        frame["lead_score_driver_1"].str.replace("_component", "", regex=False).str.replace("_score", "", regex=False).str.replace("_", " ", regex=False)
+    )
+    frame["vacant_reason"] = _normalize_string(frame.get("vacant_reason"), index=frame.index).fillna(
+        frame["parcel_vacant_flag"].map(
+            {
+                True: "No mapped building footprints were detected. Verify imagery and local records before treating the parcel as vacant.",
+                False: "Mapped building footprint evidence is present on the parcel.",
+            }
+        )
+    )
+    frame["growth_pressure_reason"] = _normalize_string(frame.get("growth_pressure_reason"), index=frame.index).fillna(
+        frame["growth_pressure_bucket"].map(
+            {
+                "high": "Strong nearby building density suggests active development pressure.",
+                "moderate": "Moderate nearby building density suggests edge growth potential.",
+                "low": "Lower nearby building density suggests slower market growth.",
+                "very_low": "Minimal nearby building density suggests very limited growth pressure.",
+                "unknown": "Growth pressure is not yet classified for this parcel.",
+            }
+        )
+    )
+    frame["recommended_use_case"] = _normalize_string(frame.get("recommended_use_case"), index=frame.index).fillna(
+        frame["recommended_view_bucket"].map(
+            {
+                "safest_outreach": "prioritized outreach",
+                "larger_land_target": "larger land acquisition",
+                "vacant_buildable": "vacant buildable land search",
+                "growth_edge_opportunity": "growth-edge targeting",
+                "general_ranked": "general parcel review",
+            }
+        ).fillna("general parcel review")
+    )
+    frame["caution_flags"] = _normalize_string(frame.get("caution_flags"), index=frame.index).fillna(
+        frame["amount_trust_tier"].map(
+            {
+                "use_with_caution": "Tax amount should be reviewed before outreach.",
+                "not_trusted_for_prominent_display": "Tax amount should not be treated as reliable.",
+                "not_reported": "No reported delinquent amount is currently available.",
+            }
+        )
+    )
+    frame["recommended_view_bucket"] = frame["recommended_view_bucket"].mask(
+        improvement_status.eq("likely_vacant") & frame["buildability_component"].ge(75),
+        "vacant_buildable",
+    )
+    frame["recommended_view_bucket"] = frame["recommended_view_bucket"].mask(
+        frame["growth_pressure_component"].ge(68),
+        "growth_edge_opportunity",
+    )
+    frame["recommended_view_bucket"] = frame["recommended_view_bucket"].mask(
+        acreage.ge(5) & improvement_status.eq("likely_vacant"),
+        "larger_land_target",
+    )
+    return frame
+
+
+def _load_base_frame_from_runtime_artifacts() -> pd.DataFrame:
+    frame = _embedded_parcel_dataset().to_table().to_pandas()
+    frame["county_hosted_flag"] = frame["county_hosted_flag"].fillna(_county_hosted_flag(frame.get("best_source_type")))
+    frame["parcel_vacant_flag"] = frame["parcel_vacant_flag"].fillna(False)
+    frame["corporate_owner_flag"] = frame["corporate_owner_flag"].fillna(False)
+    frame["absentee_owner_flag"] = frame["absentee_owner_flag"].fillna(False)
+    frame["out_of_state_owner_flag"] = frame["out_of_state_owner_flag"].fillna(False)
+    frame["high_confidence_link_flag"] = frame["high_confidence_link_flag"].fillna(False)
+    frame["delinquent_flag"] = frame["delinquent_flag"].fillna(False)
+    frame["forfeited_flag"] = frame["forfeited_flag"].fillna(False)
+    frame["amount_trust_tier"] = _normalize_string(frame.get("amount_trust_tier"), index=frame.index).fillna("not_reported")
+    frame["source_confidence_tier"] = _normalize_string(frame.get("source_confidence_tier"), index=frame.index).fillna("parcel_master_only")
+    frame["county_source_coverage_tier"] = _normalize_string(frame.get("county_source_coverage_tier"), index=frame.index).fillna("statewide_parcel_base")
+    frame["best_source_type"] = _normalize_string(frame.get("best_source_type"), index=frame.index).fillna("parcel_master")
+    frame["best_source_name"] = _normalize_string(frame.get("best_source_name"), index=frame.index).fillna("Mississippi Parcel Runtime")
+    frame["growth_pressure_bucket"] = _normalize_string(frame.get("growth_pressure_bucket"), index=frame.index).fillna("unknown")
+    frame["recommended_view_bucket"] = _normalize_string(frame.get("recommended_view_bucket"), index=frame.index).fillna("general_ranked")
+    frame["owner_type"] = _normalize_string(frame.get("owner_type"), index=frame.index).fillna("unknown")
+    frame["state_code"] = _normalize_string(frame.get("state_code"), index=frame.index).fillna("MS")
+    frame["county_name"] = _normalize_string(frame.get("county_name"), index=frame.index)
+    frame["owner_name"] = _normalize_string(frame.get("owner_name"), index=frame.index)
+    frame["parcel_id"] = _normalize_string(frame.get("parcel_id"), index=frame.index)
+    frame["electric_provider_name"] = _normalize_string(frame.get("electric_provider_name"), index=frame.index)
+    frame = _ensure_intelligence_fields(frame)
+    frame = _apply_tax_interpretation_fields(frame)
+    frame = _finalize_load_base_frame_service_view(frame)
+    validate_required_columns(
+        frame,
+        required_columns=CANONICAL_PARCEL_FIELDS,
+        non_null_columns=["parcel_row_id", "parcel_id", "state_code", "county_name", "county_fips"],
+        context="mississippi_leads_service.load_base_frame[runtime_artifacts]",
+    )
+    return frame
+
+
 @lru_cache(maxsize=1)
 def load_base_frame() -> pd.DataFrame:
     parquet_path = LEAD_SIGNALS_PATH if LEAD_SIGNALS_PATH.exists() else EMBEDDED_LEAD_SIGNALS_PATH
 
-    if not parquet_path.exists() and not MISSISSIPPI_STATIC_FEED_PATH.exists():
+    if _canonical_runtime_available():
+        return _load_base_frame_from_runtime_artifacts()
+
+    if not parquet_path.exists() and not MISSISSIPPI_STATIC_FEED_PATH.exists() and not (_full_runtime_available() and _noncanonical_source_rebuild_enabled()):
+        if _full_runtime_available():
+            raise FileNotFoundError(
+                "Canonical runtime artifacts are unavailable. "
+                "Set MISSISSIPPI_ALLOW_NONCANONICAL_SOURCE_REBUILD=true to enable the non-canonical raw-source rebuild fallback."
+            )
         raise FileNotFoundError(
             f"Lead signals dataset not found: {parquet_path}; static feed not found: {MISSISSIPPI_STATIC_FEED_PATH}"
         )
-
-    if not _full_runtime_available() and _embedded_parcel_runtime_available():
-        frame = ds.dataset(EMBEDDED_PARCEL_INDEX_ROOT, format="parquet").to_table().to_pandas()
-        frame = _merge_tax_freshness_sources(frame)
-        frame["county_hosted_flag"] = frame["county_hosted_flag"].fillna(_county_hosted_flag(frame.get("best_source_type")))
-        frame["parcel_vacant_flag"] = frame["parcel_vacant_flag"].fillna(False)
-        frame["corporate_owner_flag"] = frame["corporate_owner_flag"].fillna(False)
-        frame["absentee_owner_flag"] = frame["absentee_owner_flag"].fillna(False)
-        frame["out_of_state_owner_flag"] = frame["out_of_state_owner_flag"].fillna(False)
-        frame["high_confidence_link_flag"] = frame["high_confidence_link_flag"].fillna(False)
-        frame["delinquent_flag"] = frame["delinquent_flag"].fillna(False)
-        frame["forfeited_flag"] = frame["forfeited_flag"].fillna(False)
-        frame["amount_trust_tier"] = _normalize_string(frame.get("amount_trust_tier"), index=frame.index).fillna("not_reported")
-        frame["source_confidence_tier"] = _normalize_string(frame.get("source_confidence_tier"), index=frame.index).fillna("parcel_master_only")
-        frame["county_source_coverage_tier"] = _normalize_string(frame.get("county_source_coverage_tier"), index=frame.index).fillna("statewide_parcel_base")
-        frame["best_source_type"] = _normalize_string(frame.get("best_source_type"), index=frame.index).fillna("parcel_master")
-        frame["best_source_name"] = _normalize_string(frame.get("best_source_name"), index=frame.index).fillna("Mississippi Parcel Runtime")
-        frame["growth_pressure_bucket"] = _normalize_string(frame.get("growth_pressure_bucket"), index=frame.index).fillna("unknown")
-        frame["recommended_view_bucket"] = _normalize_string(frame.get("recommended_view_bucket"), index=frame.index).fillna("general_ranked")
-        frame["owner_type"] = _normalize_string(frame.get("owner_type"), index=frame.index).fillna("unknown")
-        frame["state_code"] = _normalize_string(frame.get("state_code"), index=frame.index).fillna("MS")
-        frame["county_name"] = _normalize_string(frame.get("county_name"), index=frame.index)
-        frame["owner_name"] = _normalize_string(frame.get("owner_name"), index=frame.index)
-        frame["parcel_id"] = _normalize_string(frame.get("parcel_id"), index=frame.index)
-        frame["electric_provider_name"] = _normalize_string(frame.get("electric_provider_name"), index=frame.index)
-        frame = _merge_ai_predictions(frame)
-        frame = _ensure_intelligence_fields(frame)
-        frame = _apply_tax_interpretation_fields(frame)
-        return frame
 
     if not _full_runtime_available():
         try:
@@ -2189,7 +2386,19 @@ def load_base_frame() -> pd.DataFrame:
         frame = _merge_ai_predictions(frame)
         frame = _ensure_intelligence_fields(frame)
         frame = _apply_tax_interpretation_fields(frame)
+        validate_required_columns(
+            frame,
+            required_columns=CANONICAL_PARCEL_FIELDS,
+            non_null_columns=["parcel_row_id", "parcel_id", "state_code", "county_name", "county_fips"],
+            context="mississippi_leads_service.load_base_frame[static_feed]",
+        )
         return frame
+
+    if not _noncanonical_source_rebuild_enabled():
+        raise FileNotFoundError(
+            "Non-canonical raw-source rebuild is disabled for load_base_frame. "
+            "Enable MISSISSIPPI_ALLOW_NONCANONICAL_SOURCE_REBUILD=true only for explicit fallback/dev use."
+        )
 
     parcel_columns = [
         "parcel_row_id",
@@ -2330,141 +2539,12 @@ def load_base_frame() -> pd.DataFrame:
     frame = _merge_ai_predictions(frame)
     frame = _ensure_intelligence_fields(frame)
     frame = _apply_tax_interpretation_fields(frame)
-
-    acreage = _to_float_series(frame, "acreage").fillna(0)
-    computed_size_score = pd.Series(35.0, index=frame.index)
-    computed_size_score = computed_size_score.mask(acreage >= 1, 55.0)
-    computed_size_score = computed_size_score.mask(acreage >= 5, 72.0)
-    computed_size_score = computed_size_score.mask(acreage >= 20, 86.0)
-    frame["size_score"] = pd.to_numeric(frame.get("size_score"), errors="coerce").fillna(computed_size_score)
-
-    road_distance_ft = _to_float_series(frame, "road_distance_ft")
-    computed_access_score = pd.Series(25.0, index=frame.index)
-    computed_access_score = computed_access_score.mask(road_distance_ft.le(250).fillna(False), 92.0)
-    computed_access_score = computed_access_score.mask(road_distance_ft.between(251, 1000).fillna(False), 76.0)
-    computed_access_score = computed_access_score.mask(road_distance_ft.between(1001, 2500).fillna(False), 58.0)
-    computed_access_score = computed_access_score.mask(road_distance_ft.between(2501, 5280).fillna(False), 42.0)
-    frame["access_score"] = pd.to_numeric(frame.get("access_score"), errors="coerce").fillna(computed_access_score)
-
-    frame["buildability_component"] = pd.to_numeric(frame.get("buildability_component"), errors="coerce").fillna(_to_float_series(frame, "buildability_score").fillna(0))
-    frame["environmental_component"] = pd.to_numeric(frame.get("environmental_component"), errors="coerce").fillna(_to_float_series(frame, "environment_score").fillna(0))
-
-    owner_targeting_base = _to_float_series(frame, "mailer_target_score").fillna(25)
-    owner_targeting_base = owner_targeting_base + frame["absentee_owner_flag"].astype(int) * 12 + frame["out_of_state_owner_flag"].astype(int) * 10 + frame["corporate_owner_flag"].astype(int) * 8
-    frame["owner_targeting_component"] = pd.to_numeric(frame.get("owner_targeting_component"), errors="coerce").fillna(owner_targeting_base.clip(0, 100))
-
-    delinquency_base = pd.Series(0.0, index=frame.index)
-    delinquency_base = delinquency_base.mask(frame["delinquent_flag"], 78.0)
-    delinquency_base = delinquency_base.mask(frame["forfeited_flag"], 92.0)
-    frame["delinquency_component"] = pd.to_numeric(frame.get("delinquency_component"), errors="coerce").fillna(delinquency_base)
-
-    source_conf_base = pd.Series(24.0, index=frame.index)
-    source_conf_base = source_conf_base.mask(frame["source_confidence_tier"].eq("high"), 90.0)
-    source_conf_base = source_conf_base.mask(frame["source_confidence_tier"].eq("medium"), 62.0)
-    source_conf_base = source_conf_base.mask(frame["source_confidence_tier"].eq("parcel_master_only"), 38.0)
-    frame["source_confidence_component"] = pd.to_numeric(frame.get("source_confidence_component"), errors="coerce").fillna(source_conf_base)
-
-    improvement_status = _normalize_string(frame.get("parcel_improvement_status"), index=frame.index)
-    vacant_base = pd.Series(22.0, index=frame.index)
-    vacant_base = vacant_base.mask(improvement_status.eq("likely_vacant"), 84.0)
-    vacant_base = vacant_base.mask(improvement_status.eq("needs_review"), 34.0)
-    vacant_base = vacant_base.mask(improvement_status.eq("likely_improved"), 10.0)
-    frame["vacant_land_component"] = pd.to_numeric(frame.get("vacant_land_component"), errors="coerce").fillna(vacant_base)
-
-    growth_map = {"very_low": 20.0, "low": 38.0, "moderate": 68.0, "high": 88.0, "unknown": 28.0}
-    growth_base = frame["growth_pressure_bucket"].map(growth_map).astype("float64")
-    frame["growth_pressure_component"] = pd.to_numeric(frame.get("growth_pressure_component"), errors="coerce").fillna(growth_base.fillna(28.0))
-
-    base_total = (
-        frame["size_score"] * 0.08
-        + frame["access_score"] * 0.10
-        + frame["buildability_component"] * 0.20
-        + frame["environmental_component"] * 0.18
-        + frame["owner_targeting_component"] * 0.16
-        + frame["delinquency_component"] * 0.10
-        + frame["source_confidence_component"] * 0.08
-        + frame["vacant_land_component"] * 0.05
-        + frame["growth_pressure_component"] * 0.05
-    ).round(2)
-    frame["lead_score_total"] = pd.to_numeric(frame.get("lead_score_total"), errors="coerce").fillna(base_total)
-    frame["lead_score_total_effective"] = (
-        pd.to_numeric(frame["lead_score_total"], errors="coerce").fillna(base_total)
-        + pd.to_numeric(frame.get("parcel_tax_score_adjustment"), errors="coerce").fillna(0)
-    ).round(2)
-    frame["lead_score_tier"] = _normalize_string(frame.get("lead_score_tier"), index=frame.index).fillna(_score_tier(frame["lead_score_total_effective"]))
-
-    component_columns = [
-        "buildability_component",
-        "environmental_component",
-        "owner_targeting_component",
-        "vacant_land_component",
-        "growth_pressure_component",
-        "access_score",
-        "delinquency_component",
-        "source_confidence_component",
-        "size_score",
-    ]
-    driver_frame = pd.DataFrame(_row_top_drivers(frame, component_columns), columns=["driver_1", "driver_2", "driver_3"], index=frame.index)
-    frame["lead_score_driver_1"] = _normalize_string(frame.get("lead_score_driver_1"), index=frame.index).fillna(driver_frame["driver_1"])
-    frame["lead_score_driver_2"] = _normalize_string(frame.get("lead_score_driver_2"), index=frame.index).fillna(driver_frame["driver_2"])
-    frame["lead_score_driver_3"] = _normalize_string(frame.get("lead_score_driver_3"), index=frame.index).fillna(driver_frame["driver_3"])
-    frame["top_score_driver"] = _normalize_string(frame.get("top_score_driver"), index=frame.index).fillna(frame["lead_score_driver_1"])
-    frame["lead_score_explanation"] = _normalize_string(frame.get("lead_score_explanation"), index=frame.index).fillna(
-        frame["lead_score_driver_1"].map(_component_reason).fillna("balanced parcel quality and signal coverage")
-    )
-    frame["recommended_sort_reason"] = _normalize_string(frame.get("recommended_sort_reason"), index=frame.index).fillna(
-        frame["lead_score_driver_1"].str.replace("_component", "", regex=False).str.replace("_score", "", regex=False).str.replace("_", " ", regex=False)
-    )
-    frame["vacant_reason"] = _normalize_string(frame.get("vacant_reason"), index=frame.index).fillna(
-        frame["parcel_vacant_flag"].map(
-            {
-                True: "No mapped building footprints were detected. Verify imagery and local records before treating the parcel as vacant.",
-                False: "Mapped building footprint evidence is present on the parcel.",
-            }
-        )
-    )
-    frame["growth_pressure_reason"] = _normalize_string(frame.get("growth_pressure_reason"), index=frame.index).fillna(
-        frame["growth_pressure_bucket"].map(
-            {
-                "high": "Strong nearby building density suggests active development pressure.",
-                "moderate": "Moderate nearby building density suggests edge growth potential.",
-                "low": "Lower nearby building density suggests slower market growth.",
-                "very_low": "Minimal nearby building density suggests very limited growth pressure.",
-                "unknown": "Growth pressure is not yet classified for this parcel.",
-            }
-        )
-    )
-    frame["recommended_use_case"] = _normalize_string(frame.get("recommended_use_case"), index=frame.index).fillna(
-        frame["recommended_view_bucket"].map(
-            {
-                "safest_outreach": "prioritized outreach",
-                "larger_land_target": "larger land acquisition",
-                "vacant_buildable": "vacant buildable land search",
-                "growth_edge_opportunity": "growth-edge targeting",
-                "general_ranked": "general parcel review",
-            }
-        ).fillna("general parcel review")
-    )
-    frame["caution_flags"] = _normalize_string(frame.get("caution_flags"), index=frame.index).fillna(
-        frame["amount_trust_tier"].map(
-            {
-                "use_with_caution": "Tax amount should be reviewed before outreach.",
-                "not_trusted_for_prominent_display": "Tax amount should not be treated as reliable.",
-                "not_reported": "No reported delinquent amount is currently available.",
-            }
-        )
-    )
-    frame["recommended_view_bucket"] = frame["recommended_view_bucket"].mask(
-        improvement_status.eq("likely_vacant") & frame["buildability_component"].ge(75),
-        "vacant_buildable",
-    )
-    frame["recommended_view_bucket"] = frame["recommended_view_bucket"].mask(
-        frame["growth_pressure_component"].ge(68),
-        "growth_edge_opportunity",
-    )
-    frame["recommended_view_bucket"] = frame["recommended_view_bucket"].mask(
-        acreage.ge(5) & improvement_status.eq("likely_vacant"),
-        "larger_land_target",
+    frame = _finalize_load_base_frame_service_view(frame)
+    validate_required_columns(
+        frame,
+        required_columns=CANONICAL_PARCEL_FIELDS,
+        non_null_columns=["parcel_row_id", "parcel_id", "state_code", "county_name", "county_fips"],
+        context="mississippi_leads_service.load_base_frame[source_parcels]",
     )
     return frame
 
@@ -2497,6 +2577,14 @@ def _apply_filters(
     road_distance_ft_max: float | None = None,
 ) -> pd.DataFrame:
     filtered = frame
+    if "geometry_default_leads_excluded_flag" in filtered.columns:
+        filtered = filtered.loc[~filtered["geometry_default_leads_excluded_flag"].fillna(False).astype(bool)].copy()
+    elif "geometry_quality_flag" in filtered.columns:
+        filtered = filtered.loc[_normalize_string(filtered["geometry_quality_flag"], index=filtered.index).ne("access_strip")].copy()
+    if "geometry_marketability_default_leads_excluded_flag" in filtered.columns:
+        filtered = filtered.loc[~filtered["geometry_marketability_default_leads_excluded_flag"].fillna(False).astype(bool)].copy()
+    elif "geometry_marketability_flag" in filtered.columns:
+        filtered = filtered.loc[_normalize_string(filtered["geometry_marketability_flag"], index=filtered.index).ne("unbuildable_candidate")].copy()
     if county_name:
         filtered = filtered.loc[_normalize_string(filtered["county_name"]).eq(county_name)].copy()
     if lead_score_tier:
@@ -2705,11 +2793,7 @@ def _search_result_item(row: pd.Series) -> dict[str, Any]:
     if longitude is not None and latitude is not None:
         centroid = {"type": "Point", "coordinates": [round(longitude, 6), round(latitude, 6)]}
     return {
-        "parcel_row_id": _serialize_scalar(row.get("parcel_row_id")),
-        "parcel_id": _serialize_scalar(row.get("parcel_id")),
-        "county_name": _serialize_scalar(row.get("county_name")),
-        "acreage": _serialize_scalar(row.get("acreage")),
-        "owner_name": _serialize_scalar(row.get("owner_name")),
+        **serialize_contract_row(row, SEARCH_OUTPUT_FIELDS[:-2], serializer=_serialize_scalar),
         "centroid": centroid,
         "match_field": _serialize_scalar(row.get("_match_field")),
     }
@@ -2749,26 +2833,10 @@ def _nearby_comp_item(row: pd.Series) -> dict[str, Any]:
     lead_score = _serialize_scalar(row.get("lead_score_total_effective"))
     if lead_score is None:
         lead_score = _serialize_scalar(row.get("lead_score_total"))
-    return {
-        "parcel_row_id": _serialize_scalar(row.get("parcel_row_id")),
-        "parcel_id": _serialize_scalar(row.get("parcel_id")),
-        "county_name": _serialize_scalar(row.get("county_name")),
-        "acreage": _serialize_scalar(row.get("acreage")),
-        "land_use": _serialize_scalar(row.get("land_use")),
-        "distance_to_subject_miles": _serialize_scalar(row.get("distance_to_subject_miles")),
-        "radius_bucket": _serialize_scalar(row.get("radius_bucket")),
-        "assessed_total_value": _serialize_scalar(row.get("assessed_total_value")),
-        "value_per_acre": _serialize_scalar(row.get("value_per_acre")),
-        "lead_score_total": lead_score,
-        "investment_score": _serialize_scalar(row.get("investment_score")),
-        "parcel_vacant_flag": _serialize_scalar(row.get("parcel_vacant_flag")),
-        "parcel_improvement_status": _serialize_scalar(row.get("parcel_improvement_status")),
-        "parcel_improvement_confidence": _serialize_scalar(row.get("parcel_improvement_confidence")),
-        "parcel_improvement_reason": _serialize_scalar(row.get("parcel_improvement_reason")),
-        "parcel_improvement_evidence_summary": _serialize_scalar(row.get("parcel_improvement_evidence_summary")),
-        "similarity_score": _serialize_scalar(row.get("similarity_score")),
-        "centroid": centroid,
-    }
+    payload = serialize_contract_row(row, NEARBY_COMP_OUTPUT_FIELDS[:-1], serializer=_serialize_scalar)
+    payload["lead_score_total"] = lead_score
+    payload["centroid"] = centroid
+    return payload
 
 
 def _nearby_comp_classification(row: pd.Series) -> dict[str, Any]:
@@ -2813,6 +2881,13 @@ def get_nearby_comps(parcel_row_id: str, limit: int = NEARBY_COMPS_DEFAULT_LIMIT
                 "similarity_score": 1.0,
             }
         )
+    )
+    validate_output_records(
+        [subject_payload],
+        expected_fields=NEARBY_COMP_OUTPUT_FIELDS,
+        required_fields=["parcel_row_id", "parcel_id", "county_name"],
+        non_null_fields=["parcel_row_id", "parcel_id"],
+        context="mississippi_leads_service.get_nearby_comps.subject",
     )
     methodology = {
         "radius_tiers_miles": list(NEARBY_COMPS_RADIUS_TIERS_MILES),
@@ -2965,6 +3040,13 @@ def get_nearby_comps(parcel_row_id: str, limit: int = NEARBY_COMPS_DEFAULT_LIMIT
                 "Comp set is aligned to the subject parcel's improvement status using fused footprint, imagery, and assessment evidence."
             )
     items = [_nearby_comp_item(row) for _, row in selected_frame.iterrows()]
+    validate_output_records(
+        items,
+        expected_fields=NEARBY_COMP_OUTPUT_FIELDS,
+        required_fields=["parcel_row_id", "parcel_id", "county_name"],
+        non_null_fields=["parcel_row_id", "parcel_id"],
+        context="mississippi_leads_service.get_nearby_comps.items",
+    )
     return {"subject": subject_payload, "methodology": methodology, "items": items}
 
 
@@ -2997,7 +3079,15 @@ def search_leads(query: str, limit: int = SEARCH_DEFAULT_LIMIT) -> dict[str, Any
         frame = load_base_frame().loc[:, columns].copy()
         matched = _search_match_candidates(frame, normalized_query).head(safe_limit).copy()
 
-    return {"query": normalized_query, "items": [_search_result_item(row) for _, row in matched.iterrows()]}
+    items = [_search_result_item(row) for _, row in matched.iterrows()]
+    validate_output_records(
+        items,
+        expected_fields=SEARCH_OUTPUT_FIELDS,
+        required_fields=["parcel_row_id", "parcel_id", "county_name"],
+        non_null_fields=["parcel_row_id", "parcel_id"],
+        context="mississippi_leads_service.search_leads.items",
+    )
+    return {"query": normalized_query, "items": items}
 
 
 def _geometry_table_for_ids(parcel_row_ids: list[str]) -> pd.DataFrame:
@@ -3181,7 +3271,14 @@ def get_leads(
             )
             filtered = _ensure_intelligence_fields(filtered)
         paged = filtered.iloc[safe_offset : safe_offset + safe_limit].copy()
-        items = [{column: _serialize_scalar(row[column]) for column in SUMMARY_FIELDS} for _, row in paged.loc[:, SUMMARY_FIELDS].iterrows()]
+        items = [_summary_item(row) for _, row in paged.loc[:, SUMMARY_FIELDS].iterrows()]
+        validate_output_records(
+            items,
+            expected_fields=SUMMARY_FIELDS,
+            required_fields=["parcel_row_id", "parcel_id", "county_name"],
+            non_null_fields=["parcel_row_id", "parcel_id"],
+            context="mississippi_leads_service.get_leads[embedded_runtime].items",
+        )
         return {"total_count": total_count, "limit": safe_limit, "offset": safe_offset, "items": items}
 
     frame = load_base_frame()
@@ -3212,7 +3309,14 @@ def get_leads(
     safe_limit = _clamp_limit(limit, default=LEADS_DEFAULT_LIMIT, max_limit=LEADS_MAX_LIMIT)
     safe_offset = max(int(offset), 0)
     paged = filtered.iloc[safe_offset : safe_offset + safe_limit].copy()
-    items = [{column: _serialize_scalar(row[column]) for column in SUMMARY_FIELDS} for _, row in paged.loc[:, SUMMARY_FIELDS].iterrows()]
+    items = [_summary_item(row) for _, row in paged.loc[:, SUMMARY_FIELDS].iterrows()]
+    validate_output_records(
+        items,
+        expected_fields=SUMMARY_FIELDS,
+        required_fields=["parcel_row_id", "parcel_id", "county_name"],
+        non_null_fields=["parcel_row_id", "parcel_id"],
+        context="mississippi_leads_service.get_leads.items",
+    )
     return {"total_count": total_count, "limit": safe_limit, "offset": safe_offset, "items": items}
 
 
@@ -3227,13 +3331,18 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
         if frame.empty:
             return None
         row = frame.iloc[0]
-        payload = {column: _serialize_scalar(row[column]) for column in frame.columns if column not in {"latitude", "longitude"}}
-        payload["geometry"] = _detail_geometry(parcel_row_id)
+        payload = _detail_payload_from_row(row, geometry=_detail_geometry(parcel_row_id))
         _maybe_apply_on_demand_ai(payload, row)
         _apply_tax_detail_defaults(payload)
         _apply_tax_interpretation_payload(payload)
         _apply_vacancy_assessment(payload)
         _stabilize_detail_payload(payload)
+        validate_required_columns(
+            pd.DataFrame([payload]),
+            required_columns=BACKEND_DETAIL_REQUIRED_FIELDS,
+            non_null_columns=["parcel_row_id", "parcel_id"],
+            context="mississippi_leads_service.get_lead_detail[embedded_runtime]",
+        )
         return payload
 
     frame = load_base_frame()
@@ -3241,14 +3350,19 @@ def get_lead_detail(parcel_row_id: str) -> dict[str, Any] | None:
     if match.empty:
         return None
     row = match.iloc[0]
-    payload = {column: _serialize_scalar(row[column]) for column in frame.columns if column not in {"latitude", "longitude"}}
+    payload = _detail_payload_from_row(row, geometry=_detail_geometry(parcel_row_id))
     payload.update({key: value for key, value in _lookup_tax_freshness_detail(parcel_row_id).items() if payload.get(key) is None})
-    payload["geometry"] = _detail_geometry(parcel_row_id)
     _maybe_apply_on_demand_ai(payload, row)
     _apply_tax_detail_defaults(payload)
     _apply_tax_interpretation_payload(payload)
     _apply_vacancy_assessment(payload)
     _stabilize_detail_payload(payload)
+    validate_required_columns(
+        pd.DataFrame([payload]),
+        required_columns=BACKEND_DETAIL_REQUIRED_FIELDS,
+        non_null_columns=["parcel_row_id", "parcel_id"],
+        context="mississippi_leads_service.get_lead_detail",
+    )
     return payload
 
 
@@ -3281,18 +3395,7 @@ def get_parcel_tile(z: int, x: int, y: int) -> bytes:
         payload = mapbox_vector_tile.encode({"name": PARCEL_TILE_LAYER, "features": []})
         tile_logger.info("parcel tile skipped z=%s x=%s y=%s reason=outside_state bytes=%s", z, x, y, len(payload))
         return payload
-    tile_columns = [
-        "parcel_row_id",
-        "parcel_id",
-        "county_name",
-        "wetland_flag",
-        "flood_risk_score",
-        "road_access_tier",
-        "county_hosted_flag",
-        "best_source_type",
-        "latitude",
-        "longitude",
-    ]
+    tile_columns = PARCEL_TILE_SOURCE_FIELDS
 
     if _using_embedded_runtime():
         query_started = time.perf_counter()
@@ -3356,21 +3459,20 @@ def get_parcel_tile(z: int, x: int, y: int) -> bytes:
                 {
                     "id": parcel_row_id,
                     "geometry": mapping(rendered_shape),
-                    "properties": {
-                        "parcel_row_id": parcel_row_id,
-                        "parcel_id": _serialize_scalar(row.get("parcel_id")),
-                        "county_name": _serialize_scalar(row.get("county_name")),
-                        "wetland_flag": bool(_serialize_scalar(row.get("wetland_flag"))),
-                        "flood_risk_score": _serialize_scalar(row.get("flood_risk_score")),
-                        "road_access_tier": _serialize_scalar(row.get("road_access_tier")),
-                        "county_hosted_flag": bool(_serialize_scalar(row.get("county_hosted_flag"))),
-                        "best_source_type": _serialize_scalar(row.get("best_source_type")),
-                    },
+                    "properties": _tile_feature_properties(row),
                 }
             )
         except Exception:
             skipped += 1
             tile_logger.exception("parcel tile feature decode failed z=%s x=%s y=%s parcel_row_id=%s", z, x, y, parcel_row_id)
+
+    validate_output_records(
+        [feature["properties"] for feature in features],
+        expected_fields=PARCEL_TILE_FEATURE_PROPERTY_FIELDS,
+        required_fields=["parcel_row_id", "parcel_id", "county_name"],
+        non_null_fields=["parcel_row_id", "parcel_id"],
+        context="mississippi_leads_service.get_parcel_tile.features",
+    )
 
     payload = mapbox_vector_tile.encode(
         {"name": PARCEL_TILE_LAYER, "features": features},
@@ -3555,20 +3657,10 @@ def get_geometry(
                     {
                         "type": "Feature",
                         "geometry": {"type": "Point", "coordinates": [round(float(lng), 6), round(float(lat), 6)]},
-                        "properties": {
-                            "parcel_row_id": str(row["parcel_row_id"]),
-                            "parcel_id": _serialize_scalar(row.get("parcel_id")),
-                            "county_name": _serialize_scalar(row.get("county_name")),
-                            "lead_score_total": _serialize_scalar(row.get("lead_score_total")),
-                            "lead_score_tier": _serialize_scalar(row.get("lead_score_tier")),
-                            "parcel_vacant_flag": _serialize_scalar(row.get("parcel_vacant_flag")),
-                            "wetland_flag": _serialize_scalar(row.get("wetland_flag")),
-                            "flood_risk_score": _serialize_scalar(row.get("flood_risk_score")),
-                            "road_access_tier": _serialize_scalar(row.get("road_access_tier")),
-                            "county_hosted_flag": _serialize_scalar(row.get("county_hosted_flag")),
-                            "best_source_type": _serialize_scalar(row.get("best_source_type")),
-                            "selected": str(row["parcel_row_id"]) == (selected_parcel_id or ""),
-                        },
+                        "properties": _geometry_feature_properties(
+                            row,
+                            selected=str(row["parcel_row_id"]) == (selected_parcel_id or ""),
+                        ),
                     }
                 )
         else:
@@ -3590,20 +3682,10 @@ def get_geometry(
                     {
                         "type": "Feature",
                         "geometry": rendered_geometry,
-                        "properties": {
-                            "parcel_row_id": str(row["parcel_row_id"]),
-                            "parcel_id": _serialize_scalar(row.get("parcel_id")),
-                            "county_name": _serialize_scalar(row.get("county_name")),
-                            "lead_score_total": _serialize_scalar(row.get("lead_score_total")),
-                            "lead_score_tier": _serialize_scalar(row.get("lead_score_tier")),
-                            "parcel_vacant_flag": _serialize_scalar(row.get("parcel_vacant_flag")),
-                            "wetland_flag": _serialize_scalar(row.get("wetland_flag")),
-                            "flood_risk_score": _serialize_scalar(row.get("flood_risk_score")),
-                            "road_access_tier": _serialize_scalar(row.get("road_access_tier")),
-                            "county_hosted_flag": _serialize_scalar(row.get("county_hosted_flag")),
-                            "best_source_type": _serialize_scalar(row.get("best_source_type")),
-                            "selected": str(row["parcel_row_id"]) == (selected_parcel_id or ""),
-                        },
+                        "properties": _geometry_feature_properties(
+                            row,
+                            selected=str(row["parcel_row_id"]) == (selected_parcel_id or ""),
+                        ),
                     }
                 )
 
@@ -3621,10 +3703,21 @@ def get_geometry(
                     round(max(bound[3] for bound in feature_bounds), 6),
                 ]
 
-        items = [
-            {"parcel_row_id": str(row["parcel_row_id"]), "path": None, "lead_score_total": _serialize_scalar(row["lead_score_total"])}
-            for _, row in filtered.iterrows()
-        ]
+        items = [_geometry_item(row) for _, row in filtered.iterrows()]
+        validate_output_records(
+            [feature["properties"] for feature in features],
+            expected_fields=GEOMETRY_FEATURE_PROPERTY_FIELDS,
+            required_fields=["parcel_row_id", "parcel_id", "county_name"],
+            non_null_fields=["parcel_row_id", "parcel_id"],
+            context="mississippi_leads_service.get_geometry[embedded_runtime].features",
+        )
+        validate_output_records(
+            items,
+            expected_fields=GEOMETRY_ITEM_FIELDS,
+            required_fields=["parcel_row_id"],
+            non_null_fields=["parcel_row_id"],
+            context="mississippi_leads_service.get_geometry[embedded_runtime].items",
+        )
         return {
             "geometry_mode": "viewport_geojson",
             "render_mode": render_mode,
@@ -3700,20 +3793,10 @@ def get_geometry(
                 {
                     "type": "Feature",
                     "geometry": {"type": "Point", "coordinates": [round(float(lng), 6), round(float(lat), 6)]},
-                    "properties": {
-                        "parcel_row_id": str(row["parcel_row_id"]),
-                        "parcel_id": _serialize_scalar(row.get("parcel_id")),
-                        "county_name": _serialize_scalar(row.get("county_name")),
-                        "lead_score_total": _serialize_scalar(row.get("lead_score_total")),
-                        "lead_score_tier": _serialize_scalar(row.get("lead_score_tier")),
-                        "parcel_vacant_flag": _serialize_scalar(row.get("parcel_vacant_flag")),
-                        "wetland_flag": _serialize_scalar(row.get("wetland_flag")),
-                        "flood_risk_score": _serialize_scalar(row.get("flood_risk_score")),
-                        "road_access_tier": _serialize_scalar(row.get("road_access_tier")),
-                        "county_hosted_flag": _serialize_scalar(row.get("county_hosted_flag")),
-                        "best_source_type": _serialize_scalar(row.get("best_source_type")),
-                        "selected": str(row["parcel_row_id"]) == (selected_parcel_id or ""),
-                    },
+                    "properties": _geometry_feature_properties(
+                        row,
+                        selected=str(row["parcel_row_id"]) == (selected_parcel_id or ""),
+                    ),
                 }
             )
         bounds_payload = None
@@ -3741,20 +3824,10 @@ def get_geometry(
                     {
                         "type": "Feature",
                         "geometry": geometry_bytes,
-                        "properties": {
-                            "parcel_row_id": parcel_row_id,
-                            "parcel_id": _serialize_scalar(row.get("parcel_id")),
-                            "county_name": _serialize_scalar(row.get("county_name")),
-                            "lead_score_total": _serialize_scalar(row.get("lead_score_total")),
-                            "lead_score_tier": _serialize_scalar(row.get("lead_score_tier")),
-                            "parcel_vacant_flag": _serialize_scalar(row.get("parcel_vacant_flag")),
-                            "wetland_flag": _serialize_scalar(row.get("wetland_flag")),
-                            "flood_risk_score": _serialize_scalar(row.get("flood_risk_score")),
-                            "road_access_tier": _serialize_scalar(row.get("road_access_tier")),
-                            "county_hosted_flag": _serialize_scalar(row.get("county_hosted_flag")),
-                            "best_source_type": _serialize_scalar(row.get("best_source_type")),
-                            "selected": parcel_row_id == (selected_parcel_id or ""),
-                        },
+                        "properties": _geometry_feature_properties(
+                            row,
+                            selected=parcel_row_id == (selected_parcel_id or ""),
+                        ),
                     }
                 )
                 continue
@@ -3766,20 +3839,10 @@ def get_geometry(
                 {
                     "type": "Feature",
                     "geometry": mapping(rendered_shape),
-                    "properties": {
-                        "parcel_row_id": parcel_row_id,
-                        "parcel_id": _serialize_scalar(row.get("parcel_id")),
-                        "county_name": _serialize_scalar(row.get("county_name")),
-                        "lead_score_total": _serialize_scalar(row.get("lead_score_total")),
-                        "lead_score_tier": _serialize_scalar(row.get("lead_score_tier")),
-                        "parcel_vacant_flag": _serialize_scalar(row.get("parcel_vacant_flag")),
-                        "wetland_flag": _serialize_scalar(row.get("wetland_flag")),
-                        "flood_risk_score": _serialize_scalar(row.get("flood_risk_score")),
-                        "road_access_tier": _serialize_scalar(row.get("road_access_tier")),
-                        "county_hosted_flag": _serialize_scalar(row.get("county_hosted_flag")),
-                        "best_source_type": _serialize_scalar(row.get("best_source_type")),
-                        "selected": parcel_row_id == (selected_parcel_id or ""),
-                    },
+                    "properties": _geometry_feature_properties(
+                        row,
+                        selected=parcel_row_id == (selected_parcel_id or ""),
+                    ),
                 }
             )
         bounds_payload = None
@@ -3791,10 +3854,21 @@ def get_geometry(
                 round(max(bound[3] for bound in feature_bounds), 6),
             ]
 
-    items = [
-        {"parcel_row_id": str(row["parcel_row_id"]), "path": None, "lead_score_total": _serialize_scalar(row["lead_score_total"])}
-        for _, row in filtered.iterrows()
-    ]
+    items = [_geometry_item(row) for _, row in filtered.iterrows()]
+    validate_output_records(
+        [feature["properties"] for feature in features],
+        expected_fields=GEOMETRY_FEATURE_PROPERTY_FIELDS,
+        required_fields=["parcel_row_id", "parcel_id", "county_name"],
+        non_null_fields=["parcel_row_id", "parcel_id"],
+        context="mississippi_leads_service.get_geometry.features",
+    )
+    validate_output_records(
+        items,
+        expected_fields=GEOMETRY_ITEM_FIELDS,
+        required_fields=["parcel_row_id"],
+        non_null_fields=["parcel_row_id"],
+        context="mississippi_leads_service.get_geometry.items",
+    )
     return {
         "geometry_mode": "viewport_geojson",
         "render_mode": render_mode,
@@ -3864,25 +3938,37 @@ def get_presets() -> list[dict[str, Any]]:
 
 def get_summary() -> dict[str, Any]:
     if _using_embedded_runtime():
-        summary_columns = _with_improvement_columns([
-            "county_name",
-            "recommended_view_bucket",
-            _lead_sort_field(_embedded_parcel_dataset().schema.names),
-            "parcel_vacant_flag",
-            "parcel_improvement_status",
-            "county_hosted_flag",
-            "parcel_tax_status_category",
-            "parcel_tax_actionability",
-        ])
+        dataset_schema = _embedded_parcel_dataset().schema.names
+        summary_columns = [
+            column
+            for column in _with_improvement_columns([
+                "county_name",
+                "recommended_view_bucket",
+                _lead_sort_field(dataset_schema),
+                "parcel_vacant_flag",
+                "parcel_improvement_status",
+                "county_hosted_flag",
+                "parcel_tax_status_category",
+                "parcel_tax_actionability",
+                "geometry_marketability_base_flag",
+                "geometry_marketability_flag",
+                "geometry_marketability_action",
+                "geometry_marketability_default_leads_excluded_flag",
+            ])
+            if column in dataset_schema
+        ]
         total_rows = 0
         vacant_rows = 0
         county_hosted_rows = 0
+        marketability_excluded_rows = 0
         score_sum = 0.0
         score_count = 0
         county_counts: Counter[str] = Counter()
         recommended_counts: Counter[str] = Counter()
         tax_actionability_counts: Counter[str] = Counter()
         tax_category_counts: Counter[str] = Counter()
+        marketability_counts: Counter[str] = Counter()
+        marketability_action_counts: Counter[str] = Counter()
         scanner = _embedded_parcel_dataset().scanner(columns=summary_columns, batch_size=50000)
         for batch in scanner.to_batches():
             frame = batch.to_pandas()
@@ -3892,6 +3978,7 @@ def get_summary() -> dict[str, Any]:
             total_rows += len(frame)
             vacant_rows += int(_normalize_string(frame.get("parcel_improvement_status"), index=frame.index).eq("likely_vacant").sum())
             county_hosted_rows += int(frame["county_hosted_flag"].fillna(False).sum())
+            marketability_excluded_rows += int(frame.get("geometry_marketability_default_leads_excluded_flag", pd.Series(False, index=frame.index)).fillna(False).sum())
             score_field = _lead_sort_field(frame.columns)
             scores = pd.to_numeric(frame[score_field], errors="coerce")
             score_sum += float(scores.fillna(0).sum())
@@ -3900,6 +3987,8 @@ def get_summary() -> dict[str, Any]:
             recommended_counts.update(frame["recommended_view_bucket"].dropna().astype(str).tolist())
             tax_actionability_counts.update(_normalize_string(frame.get("parcel_tax_actionability"), index=frame.index).dropna().astype(str).tolist())
             tax_category_counts.update(_normalize_string(frame.get("parcel_tax_status_category"), index=frame.index).dropna().astype(str).tolist())
+            marketability_counts.update(_normalize_string(frame.get("geometry_marketability_flag"), index=frame.index).dropna().astype(str).tolist())
+            marketability_action_counts.update(_normalize_string(frame.get("geometry_marketability_action"), index=frame.index).dropna().astype(str).tolist())
         top_counties = county_counts.most_common(20)
         average_score = (score_sum / score_count) if score_count else 0.0
         return {
@@ -3913,6 +4002,8 @@ def get_summary() -> dict[str, Any]:
                     {"section": "statewide", "metric": "likely_vacant_count", "value": str(vacant_rows)},
                     {"section": "statewide", "metric": "vacant_share_pct", "value": f"{(vacant_rows / total_rows * 100) if total_rows else 0:.1f}"},
                     {"section": "statewide", "metric": "county_hosted_share_pct", "value": f"{(county_hosted_rows / total_rows * 100) if total_rows else 0:.1f}"},
+                    {"section": "statewide", "metric": "default_leads_marketability_excluded_count", "value": str(marketability_excluded_rows)},
+                    {"section": "statewide", "metric": "default_leads_marketability_excluded_pct", "value": f"{(marketability_excluded_rows / total_rows * 100) if total_rows else 0:.2f}"},
                 ],
                 "top_counties": [
                     {"section": "top_counties", "key": county, "metric": "parcel_count", "value": str(int(count))}
@@ -3921,6 +4012,14 @@ def get_summary() -> dict[str, Any]:
                 "recommended_view_bucket": [
                     {"section": "recommended_view_bucket", "key": bucket, "metric": "parcel_count", "value": str(int(count))}
                     for bucket, count in recommended_counts.most_common()
+                ],
+                "geometry_marketability_flag": [
+                    {"section": "geometry_marketability_flag", "key": bucket, "metric": "parcel_count", "value": str(int(count))}
+                    for bucket, count in marketability_counts.most_common()
+                ],
+                "geometry_marketability_action": [
+                    {"section": "geometry_marketability_action", "key": bucket, "metric": "parcel_count", "value": str(int(count))}
+                    for bucket, count in marketability_action_counts.most_common()
                 ],
                 "tax_status": [
                     {"section": "tax_status", "metric": "actionable_tax_distress_count", "value": str(int(tax_actionability_counts.get("actionable", 0)))},
@@ -3935,12 +4034,13 @@ def get_summary() -> dict[str, Any]:
     county_counts = frame.groupby("county_name", dropna=True).size().sort_values(ascending=False).head(20)
     recommended_counts = frame.groupby("recommended_view_bucket", dropna=True).size().sort_values(ascending=False)
     average_score = pd.to_numeric(frame[_lead_sort_field(frame.columns)], errors="coerce").mean()
+    marketability_diagnostics = geometry_marketability_diagnostics(frame)
     source_label = (
-        "mississippi_parcels_master + owner leads + building metrics + motivation signals"
-        if _full_runtime_available()
+        "mississippi parcel runtime dataset"
+        if _canonical_runtime_available()
         else (
-            "mississippi parcel runtime dataset"
-            if _embedded_parcel_runtime_available()
+            "mississippi_parcels_master + owner leads + building metrics + motivation signals (non-canonical fallback)"
+            if _full_runtime_available() and _noncanonical_source_rebuild_enabled()
             else ("mississippi lead dataset" if LEAD_SIGNALS_PATH.exists() or EMBEDDED_LEAD_SIGNALS_PATH.exists() else "mississippi explorer static feed")
         )
     )
@@ -3955,6 +4055,8 @@ def get_summary() -> dict[str, Any]:
                 {"section": "statewide", "metric": "likely_vacant_count", "value": str(int(_normalize_string(frame.get("parcel_improvement_status"), index=frame.index).eq("likely_vacant").sum()))},
                 {"section": "statewide", "metric": "vacant_share_pct", "value": f"{_normalize_string(frame.get('parcel_improvement_status'), index=frame.index).eq('likely_vacant').mean() * 100:.1f}"},
                 {"section": "statewide", "metric": "county_hosted_share_pct", "value": f"{frame['county_hosted_flag'].fillna(False).mean() * 100:.1f}"},
+                {"section": "statewide", "metric": "default_leads_marketability_excluded_count", "value": str(marketability_diagnostics["default_leads_excluded_count"])},
+                {"section": "statewide", "metric": "default_leads_marketability_excluded_pct", "value": f"{marketability_diagnostics['default_leads_excluded_pct']:.2f}"},
             ],
             "top_counties": [
                 {"section": "top_counties", "key": county, "metric": "parcel_count", "value": str(int(count))}
@@ -3963,6 +4065,14 @@ def get_summary() -> dict[str, Any]:
             "recommended_view_bucket": [
                 {"section": "recommended_view_bucket", "key": bucket, "metric": "parcel_count", "value": str(int(count))}
                 for bucket, count in recommended_counts.items()
+            ],
+            "geometry_marketability_flag": [
+                {"section": "geometry_marketability_flag", "key": key, "metric": "parcel_count", "value": str(int(value))}
+                for key, value in marketability_diagnostics["geometry_marketability_flag_counts"].items()
+            ],
+            "geometry_marketability_action": [
+                {"section": "geometry_marketability_action", "key": key, "metric": "parcel_count", "value": str(int(value))}
+                for key, value in marketability_diagnostics["geometry_marketability_action_counts"].items()
             ],
             "tax_status": _tax_summary_section(frame),
         },

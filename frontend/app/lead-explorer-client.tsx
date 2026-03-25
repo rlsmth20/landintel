@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import {
   fetchLeadDetail,
@@ -15,6 +15,9 @@ import {
 } from "./lead-explorer/api";
 import { LeadDetail } from "./lead-explorer/LeadDetail";
 import { LeadMap } from "./lead-explorer/LeadMap";
+import parcelIdentity from "./lead-explorer/parcelIdentity";
+import requestLifecycle from "./lead-explorer/requestLifecycle";
+import stateConfig from "./lead-explorer/stateConfig";
 import type {
   BasemapMode,
   ExplorerMeta,
@@ -40,16 +43,48 @@ import {
   toggleSelection,
 } from "./lead-explorer/utils";
 
+const {
+  getDisplayedParcelId,
+  getLeadSelectionParcelRowId,
+  getSearchSelectionParcelRowId,
+} = parcelIdentity;
+const { isAbortLikeError } = requestLifecycle;
+
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 250;
 const FILTER_DEBOUNCE_MS = 250;
 const SEARCH_DEBOUNCE_MS = 200;
 const SEARCH_MIN_QUERY_LENGTH = 2;
-const DEFAULT_VIEWPORT: MapViewportState = {
-  center: [-89.6787, 32.7416],
-  zoom: 6.1,
-  bounds: [-91.65, 30.15, -88.0, 35.1],
-};
+
+function buildDefaultViewport(stateCode: string): MapViewportState {
+  const activeState = stateConfig.getStateConfig(stateCode);
+  const [minLng, minLat, maxLng, maxLat] = activeState.defaultBounds;
+  return {
+    center: [(minLng + maxLng) / 2, (minLat + maxLat) / 2],
+    zoom: 6.1,
+    bounds: activeState.defaultBounds,
+  };
+}
+
+function resolveRuntimeStateCode(initialStateCode: string): string {
+  if (typeof window === "undefined") {
+    return stateConfig.normalizeStateCode(initialStateCode);
+  }
+  return stateConfig.readStateCodeFromSearch(window.location.search, initialStateCode);
+}
+
+function replaceUrlState(stateCode: string, parcelRowId: string | null) {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  url.searchParams.set("state_code", stateCode);
+  if (parcelRowId) {
+    url.searchParams.set("parcel_row_id", parcelRowId);
+  } else {
+    url.searchParams.delete("parcel_row_id");
+  }
+  const query = url.searchParams.toString();
+  window.history.replaceState({}, "", `${url.pathname}${query ? `?${query}` : ""}${url.hash}`);
+}
 
 function LeadBadge({ label, tone }: { label: string; tone?: string }) {
   return <span className={`badge badge-${tone ?? "neutral"}`}>{label}</span>;
@@ -106,7 +141,17 @@ function vacancyCellLabel(status: string | null | undefined) {
   return "-";
 }
 
-export default function LeadExplorerClient() {
+export default function LeadExplorerClient({
+  initialStateCode = stateConfig.DEFAULT_STATE_CODE,
+  initialParcelRowId = null,
+}: {
+  initialStateCode?: string;
+  initialParcelRowId?: string | null;
+}) {
+  const normalizedInitialStateCode = stateConfig.normalizeStateCode(initialStateCode);
+  const [selectedStateCode, setSelectedStateCode] = useState(() => resolveRuntimeStateCode(normalizedInitialStateCode));
+  const activeState = useMemo(() => stateConfig.getStateConfig(selectedStateCode), [selectedStateCode]);
+  const availableStates = useMemo(() => stateConfig.getKnownStateConfigs(), []);
   const [summary, setSummary] = useState<ExplorerMeta | null>(null);
   const [presets, setPresets] = useState<PresetItem[]>([]);
   const [filters, setFilters] = useState<Filters>(INITIAL_FILTERS);
@@ -119,7 +164,7 @@ export default function LeadExplorerClient() {
 
   const [leads, setLeads] = useState<LeadRecord[]>([]);
   const [totalCount, setTotalCount] = useState(0);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedParcelRowId, setSelectedParcelRowId] = useState<string | null>(initialParcelRowId);
   const [selectedLead, setSelectedLead] = useState<LeadRecord | null>(null);
   const [selectedGeometryResponse, setSelectedGeometryResponse] = useState<GeometryResponse | null>(null);
   const [nearbyComps, setNearbyComps] = useState<NearbyCompsResponse | null>(null);
@@ -127,7 +172,7 @@ export default function LeadExplorerClient() {
   const [locateSelectedNonce, setLocateSelectedNonce] = useState(0);
   const [activeOverlays, setActiveOverlays] = useState<MapOverlayId[]>(["parcels", "road_access"]);
   const [basemapMode, setBasemapMode] = useState<BasemapMode>("street");
-  const [viewport, setViewport] = useState<MapViewportState>(DEFAULT_VIEWPORT);
+  const [viewport, setViewport] = useState<MapViewportState>(() => buildDefaultViewport(normalizedInitialStateCode));
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResultRecord[]>([]);
@@ -145,6 +190,22 @@ export default function LeadExplorerClient() {
   const [nearbyCompsError, setNearbyCompsError] = useState<string | null>(null);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const hasInitializedStateRef = useRef(false);
+
+  useEffect(() => {
+    setSelectedStateCode(resolveRuntimeStateCode(initialStateCode));
+  }, [initialStateCode]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const syncStateFromUrl = () => {
+      const nextStateCode = stateConfig.readStateCodeFromSearch(window.location.search, selectedStateCode);
+      setSelectedStateCode((current) => (current === nextStateCode ? current : nextStateCode));
+    };
+    syncStateFromUrl();
+    window.addEventListener("popstate", syncStateFromUrl);
+    return () => window.removeEventListener("popstate", syncStateFromUrl);
+  }, [selectedStateCode]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -162,11 +223,52 @@ export default function LeadExplorerClient() {
   }, [searchQuery]);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const deepLinkedParcelId = params.get("parcel_row_id") ?? params.get("parcel");
-    if (!deepLinkedParcelId) return;
-    setSelectedId((current) => current ?? deepLinkedParcelId);
-  }, []);
+    if (process.env.NODE_ENV !== "production") {
+      console.debug("[lead-explorer] state selection", {
+        stateCode: selectedStateCode,
+        displayName: activeState.displayName,
+        apiPrefix: activeState.apiPrefix,
+        staticMetaPath: activeState.staticMetaPath,
+        staticLeadDetailPath: activeState.staticLeadDetailPath,
+        parcelPmtilesUrl: activeState.parcelPmtilesUrl,
+      });
+    }
+  }, [activeState, selectedStateCode]);
+
+  useEffect(() => {
+    setViewport(buildDefaultViewport(selectedStateCode));
+    if (!hasInitializedStateRef.current) {
+      hasInitializedStateRef.current = true;
+      return;
+    }
+    setSummary(null);
+    setPresets([]);
+    setLeads([]);
+    setTotalCount(0);
+    setSelectedParcelRowId(null);
+    setSelectedLead(null);
+    setSelectedGeometryResponse(null);
+    setNearbyComps(null);
+    setActivePreset(null);
+    setOffset(0);
+    setFilters(INITIAL_FILTERS);
+    setDebouncedFilters(INITIAL_FILTERS);
+    setSearchQuery("");
+    setDebouncedSearchQuery("");
+    setSearchResults([]);
+    setSearchActiveIndex(0);
+    setSummaryError(null);
+    setLeadsError(null);
+    setDetailError(null);
+    setGeometryError(null);
+    setNearbyCompsError(null);
+    setSearchError(null);
+    setFitNonce((current) => current + 1);
+  }, [selectedStateCode]);
+
+  useEffect(() => {
+    replaceUrlState(selectedStateCode, selectedParcelRowId);
+  }, [selectedParcelRowId, selectedStateCode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -174,7 +276,10 @@ export default function LeadExplorerClient() {
       setSummaryLoading(true);
       setSummaryError(null);
       try {
-        const [summaryResponse, presetsResponse] = await Promise.all([fetchSummary(), fetchPresets()]);
+        const [summaryResponse, presetsResponse] = await Promise.all([
+          fetchSummary(selectedStateCode),
+          fetchPresets(selectedStateCode),
+        ]);
         if (cancelled) return;
         setSummary(summaryResponse);
         setPresets(presetsResponse);
@@ -189,7 +294,7 @@ export default function LeadExplorerClient() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [selectedStateCode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -198,6 +303,7 @@ export default function LeadExplorerClient() {
       setLeadsError(null);
       try {
         const response = await fetchLeads(
+          selectedStateCode,
           debouncedFilters,
           sortField,
           sortDirection,
@@ -218,24 +324,30 @@ export default function LeadExplorerClient() {
     return () => {
       cancelled = true;
     };
-  }, [debouncedFilters, limit, offset, sortDirection, sortField]);
+  }, [debouncedFilters, limit, offset, selectedStateCode, sortDirection, sortField]);
 
   useEffect(() => {
-    if (!selectedId) {
+    if (!selectedParcelRowId) {
       setSelectedGeometryResponse(null);
+      setGeometryLoading(false);
       return;
     }
-    const selectedParcelId = selectedId;
+    const selectedParcelId = selectedParcelRowId;
     let cancelled = false;
+    const controller = new AbortController();
     async function loadSelectedGeometry() {
       setGeometryLoading(true);
       setGeometryError(null);
+      setSelectedGeometryResponse(null);
       try {
-        const response = await fetchParcelGeometryById(selectedParcelId, 14);
+        const response = await fetchParcelGeometryById(selectedStateCode, selectedParcelId, 14, { signal: controller.signal });
         if (cancelled) return;
         setSelectedGeometryResponse(response);
       } catch (error) {
         if (cancelled) return;
+        if (isAbortLikeError(error)) {
+          return;
+        }
         if (process.env.NODE_ENV !== "production") {
           console.debug("[lead-explorer] selected geometry failed", { selectedParcelId, error });
         }
@@ -248,22 +360,23 @@ export default function LeadExplorerClient() {
     void loadSelectedGeometry();
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [selectedId]);
+  }, [selectedParcelRowId, selectedStateCode]);
 
   useEffect(() => {
-    if (!selectedId) {
+    if (!selectedParcelRowId) {
       setNearbyComps(null);
       setNearbyCompsError(null);
       return;
     }
-    const subjectParcelId = selectedId;
+    const subjectParcelId = selectedParcelRowId;
     let cancelled = false;
     async function loadNearbyComps() {
       setNearbyCompsLoading(true);
       setNearbyCompsError(null);
       try {
-        const response = await fetchNearbyComps(subjectParcelId, 8);
+        const response = await fetchNearbyComps(selectedStateCode, subjectParcelId, 8);
         if (cancelled) return;
         setNearbyComps(response);
       } catch (error) {
@@ -278,15 +391,15 @@ export default function LeadExplorerClient() {
     return () => {
       cancelled = true;
     };
-  }, [selectedId]);
+  }, [selectedParcelRowId, selectedStateCode]);
 
   useEffect(() => {
-    if (!selectedId) {
+    if (!selectedParcelRowId) {
       setSelectedLead(null);
       setDetailError(null);
       return;
     }
-    const detailId = selectedId;
+    const detailId = selectedParcelRowId;
     const summaryFallback = leads.find((item) => item.parcel_row_id === detailId) ?? null;
     let cancelled = false;
     async function loadDetail() {
@@ -297,16 +410,16 @@ export default function LeadExplorerClient() {
       }
       try {
         if (process.env.NODE_ENV !== "production") {
-          console.debug("[lead-explorer] detail request", { parcelRowId: detailId });
+          console.debug("[lead-explorer] detail request", { stateCode: selectedStateCode, parcelRowId: detailId });
         }
-        const response = await fetchLeadDetail(detailId);
+        const response = await fetchLeadDetail(selectedStateCode, detailId);
         if (cancelled) return;
         setSelectedLead(normalizeDetailLeadRecord(response));
       } catch (error) {
         if (cancelled) return;
         let staticFallback: LeadRecord | null = null;
         try {
-          staticFallback = await fetchStaticLeadDetail(detailId);
+          staticFallback = await fetchStaticLeadDetail(selectedStateCode, detailId);
         } catch {
           staticFallback = null;
         }
@@ -329,7 +442,7 @@ export default function LeadExplorerClient() {
     return () => {
       cancelled = true;
     };
-  }, [selectedId]);
+  }, [leads, selectedParcelRowId, selectedStateCode]);
 
   useEffect(() => {
     if (debouncedSearchQuery.length < SEARCH_MIN_QUERY_LENGTH) {
@@ -344,7 +457,7 @@ export default function LeadExplorerClient() {
       setSearchLoading(true);
       setSearchError(null);
       try {
-        const response = await fetchLeadSearch(debouncedSearchQuery, 10);
+        const response = await fetchLeadSearch(selectedStateCode, debouncedSearchQuery, 10);
         if (cancelled) return;
         setSearchResults(response.items);
         setSearchActiveIndex(0);
@@ -360,7 +473,7 @@ export default function LeadExplorerClient() {
     return () => {
       cancelled = true;
     };
-  }, [debouncedSearchQuery]);
+  }, [debouncedSearchQuery, selectedStateCode]);
 
   const countySuggestions = useMemo(
     () => summary?.sections?.top_counties?.map((item) => item.key).filter(Boolean) ?? [],
@@ -378,6 +491,7 @@ export default function LeadExplorerClient() {
   );
   const currentPage = Math.floor(offset / limit) + 1;
   const pageCount = Math.max(1, Math.ceil(totalCount / limit));
+  const datasetStatusLabel = activeState.parcelPmtilesUrl ? "Base tiles live" : "On-demand geometry live";
 
   function updateFilter<K extends keyof Filters>(key: K, value: Filters[K]) {
     setFilters((current) => ({ ...current, [key]: value }));
@@ -392,20 +506,22 @@ export default function LeadExplorerClient() {
 
   const handleSelectParcel = useCallback((parcelRowId: string, lead?: LeadRecord | null) => {
     if (process.env.NODE_ENV !== "production") {
-      console.debug("[lead-explorer] row-or-map selection", { parcelRowId });
+      console.debug("[lead-explorer] row-or-map selection", { stateCode: selectedStateCode, parcelRowId });
     }
     setDetailError(null);
     setSelectedLead(lead ? normalizeDetailLeadRecord(lead) : null);
-    setSelectedId(parcelRowId);
+    setSelectedParcelRowId(parcelRowId);
     setFitNonce((current) => current + 1);
-  }, []);
+  }, [selectedStateCode]);
 
   const handleSearchSelect = useCallback(
     (result: SearchResultRecord) => {
       setSearchQuery("");
       setSearchResults([]);
       setSearchActiveIndex(0);
-      handleSelectParcel(result.parcel_row_id, null);
+      const parcelRowId = getSearchSelectionParcelRowId(result);
+      if (!parcelRowId) return;
+      handleSelectParcel(parcelRowId, null);
       setLocateSelectedNonce((current) => current + 1);
     },
     [handleSelectParcel],
@@ -492,9 +608,24 @@ export default function LeadExplorerClient() {
         <section className="panel-section">
           <h2>Dataset</h2>
           <div className="inline-badges">
-            <LeadBadge label="Dataset: Mississippi" tone="neutral" />
+            <LeadBadge label={`Dataset: ${activeState.displayName}`} tone="neutral" />
             <LeadBadge label="Platform-ready" tone="good" />
           </div>
+          <label>
+            State
+            <select
+              value={selectedStateCode}
+              onChange={(event) => {
+                setSelectedStateCode(stateConfig.normalizeStateCode(event.target.value));
+              }}
+            >
+              {availableStates.map((state) => (
+                <option key={state.stateCode} value={state.stateCode}>
+                  {state.displayName}
+                </option>
+              ))}
+            </select>
+          </label>
           <label>
             County name
             <input
@@ -848,11 +979,11 @@ export default function LeadExplorerClient() {
             </p>
           </div>
           <div className="hero-badges">
-            <LeadBadge label={`Dataset: Mississippi`} tone="neutral" />
+            <LeadBadge label={`Dataset: ${activeState.displayName}`} tone="neutral" />
             <LeadBadge label={`${totalCount.toLocaleString()} parcels`} tone="good" />
             <LeadBadge label={`${visibleLeads.length} loaded`} tone="neutral" />
             <LeadBadge label={`${visibleVacantCount.toLocaleString()} likely vacant in view`} tone="warn" />
-            <LeadBadge label={geometryLoading ? "Selected overlay loading" : "Base tiles live"} tone={geometryLoading ? "warn" : "good"} />
+            <LeadBadge label={geometryLoading ? "Selected overlay loading" : datasetStatusLabel} tone={geometryLoading ? "warn" : "good"} />
           </div>
         </section>
 
@@ -875,7 +1006,7 @@ export default function LeadExplorerClient() {
                 <button type="button" className="chip" onClick={() => setFitNonce((current) => current + 1)}>
                   Reset map view
                 </button>
-                <button type="button" className="chip" disabled={!selectedId} onClick={() => setLocateSelectedNonce((current) => current + 1)}>
+                <button type="button" className="chip" disabled={!selectedParcelRowId} onClick={() => setLocateSelectedNonce((current) => current + 1)}>
                   Locate selected parcel
                 </button>
                 {selectedGeometryResponse?.feature_count ? <LeadBadge label={`${selectedGeometryResponse.feature_count} selected feature`} tone="neutral" /> : null}
@@ -883,8 +1014,10 @@ export default function LeadExplorerClient() {
             </div>
             {geometryError ? <p className="error-text">{geometryError}</p> : null}
             <LeadMap
+              key={selectedStateCode}
+              stateCode={selectedStateCode}
               geometryResponse={selectedGeometryResponse}
-              selectedId={selectedId}
+              selectedParcelRowId={selectedParcelRowId}
               onSelect={handleSelectParcel}
               fitNonce={fitNonce}
               locateSelectedNonce={locateSelectedNonce}
@@ -983,7 +1116,7 @@ export default function LeadExplorerClient() {
                             }}
                             onMouseEnter={() => setSearchActiveIndex(index)}
                           >
-                            <strong>{result.parcel_id ?? result.parcel_row_id}</strong>
+                            <strong>{getDisplayedParcelId(result)}</strong>
                             <span>{result.county_name ?? "-"}</span>
                             <span>{formatNumber(result.acreage, 2)} ac</span>
                             <span>{result.owner_name ?? "-"}</span>
@@ -1016,11 +1149,15 @@ export default function LeadExplorerClient() {
                   {visibleLeads.map((lead) => (
                     <tr
                       key={lead.parcel_row_id}
-                      className={selectedId === lead.parcel_row_id ? "is-selected" : ""}
-                      onClick={() => handleSelectParcel(lead.parcel_row_id, lead)}
+                      className={selectedParcelRowId === lead.parcel_row_id ? "is-selected" : ""}
+                      onClick={() => {
+                        const parcelRowId = getLeadSelectionParcelRowId(lead);
+                        if (!parcelRowId) return;
+                        handleSelectParcel(parcelRowId, lead);
+                      }}
                     >
                       <td>{lead.county_name ?? "-"}</td>
-                      <td>{lead.parcel_id ?? lead.parcel_row_id}</td>
+                      <td>{getDisplayedParcelId(lead)}</td>
                       <td>{formatNumber(lead.acreage, 2)}</td>
                       <td>{lead.owner_name ?? "-"}</td>
                       <td>{formatNumber(lead.lead_score_total, 1)}</td>

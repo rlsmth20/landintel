@@ -46,3 +46,9 @@ tmp_*
 # OS/editor noise
 .DS_Store
 Thumbs.db
+
+
+backend/runtime/
+frontend/public/data/
+*.parquet
+*.pmtiles

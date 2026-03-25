@@ -1,0 +1,12 @@
+{
+  "states": {
+    "ms": {
+      "config_path": "config/states/ms.json",
+      "status": "active_reference"
+    },
+    "ar": {
+      "config_path": "config/states/ar.json",
+      "status": "bootstrapped"
+    }
+  }
+}

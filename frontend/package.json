@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "verify:cache": "node scripts/verify-cache-strategy.mjs"
   },
   "dependencies": {
     "maplibre-gl": "^5.20.0",

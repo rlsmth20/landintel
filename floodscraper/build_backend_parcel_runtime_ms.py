@@ -10,21 +10,41 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 from shapely import wkb
 
+from parcel_geometry_quality_ms import (
+    filter_default_leads_geometry_frame,
+    geometry_quality_diagnostics,
+    load_geometry_quality_frame,
+)
+from parcel_marketability_ms import (
+    add_geometry_marketability_fields,
+    apply_geometry_marketability_score_adjustment,
+    filter_default_marketability_frame,
+    geometry_marketability_diagnostics,
+)
+from state_artifacts import load_state_artifacts
+from parcel_contract_ms import (
+    CANONICAL_PARCEL_FIELDS_WITH_GEOMETRY,
+    CANONICAL_REQUIRED_NON_NULL_FIELDS,
+    DETAIL_METRICS_REQUIRED_COLUMNS,
+    contract_left_merge,
+    validate_required_columns,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
-PARCEL_MASTER_PATH = ROOT / "data" / "parcels" / "mississippi_parcels_master.parquet"
-OWNER_LEADS_PATH = ROOT / "data" / "parcels" / "mississippi_parcels_owner_leads.parquet"
-BUILDING_METRICS_PATH = ROOT / "data" / "buildings_processed" / "parcel_building_metrics.parquet"
-AI_BUILDING_PREDICTIONS_PATH = ROOT / "data" / "buildings_processed" / "ai_building_presence_predictions_ms.parquet"
-LEAD_SIGNALS_PATH = ROOT / "data" / "tax_published" / "ms" / "app_ready_mississippi_leads.parquet"
-DELINQUENT_LEADS_PATH = ROOT / "data" / "tax_published" / "ms" / "delinquent_leads_statewide.parquet"
-TAX_DISTRESS_PATH = ROOT / "data" / "parcels" / "mississippi_parcels_tax_distress.parquet"
-COUNTY_COVERAGE_MATRIX_PATH = ROOT / "data" / "parcels" / "mississippi_tax_coverage_matrix.parquet"
-OUTPUT_ROOT = ROOT / "backend" / "runtime" / "mississippi" / "parcel_index"
-RUNTIME_ROOT = ROOT / "backend" / "runtime" / "mississippi"
-GEOMETRY_OUTPUT_ROOT = RUNTIME_ROOT / "parcel_geometry_index"
-DETAIL_METRICS_OUTPUT_PATH = RUNTIME_ROOT / "parcel_detail_metrics.parquet"
-COUNTY_COVERAGE_MATRIX_RUNTIME_PATH = RUNTIME_ROOT / "tax_coverage_matrix.parquet"
+DEFAULT_STATE_ARTIFACTS = load_state_artifacts("ms")
+PARCEL_MASTER_PATH = DEFAULT_STATE_ARTIFACTS.parcel_master_path
+OWNER_LEADS_PATH = DEFAULT_STATE_ARTIFACTS.owner_leads_path
+BUILDING_METRICS_PATH = DEFAULT_STATE_ARTIFACTS.parcel_building_metrics_path
+AI_BUILDING_PREDICTIONS_PATH = DEFAULT_STATE_ARTIFACTS.ai_predictions_path
+LEAD_SIGNALS_PATH = DEFAULT_STATE_ARTIFACTS.app_ready_path
+DELINQUENT_LEADS_PATH = DEFAULT_STATE_ARTIFACTS.delinquent_leads_statewide_path
+TAX_DISTRESS_PATH = DEFAULT_STATE_ARTIFACTS.tax_distress_path
+COUNTY_COVERAGE_MATRIX_PATH = DEFAULT_STATE_ARTIFACTS.county_coverage_matrix_path
+OUTPUT_ROOT = DEFAULT_STATE_ARTIFACTS.runtime_parcel_index_root
+RUNTIME_ROOT = DEFAULT_STATE_ARTIFACTS.runtime_root
+GEOMETRY_OUTPUT_ROOT = DEFAULT_STATE_ARTIFACTS.runtime_geometry_index_root
+DETAIL_METRICS_OUTPUT_PATH = DEFAULT_STATE_ARTIFACTS.runtime_detail_metrics_path
+COUNTY_COVERAGE_MATRIX_RUNTIME_PATH = DEFAULT_STATE_ARTIFACTS.runtime_tax_coverage_matrix_path
 SQFT_PER_ACRE = 43560.0
 
 
@@ -681,8 +701,33 @@ def derive_shape_metrics(frame: pd.DataFrame) -> pd.DataFrame:
 
 def build_detail_metrics_runtime(frame: pd.DataFrame) -> pd.DataFrame:
     detail_columns = [
-        "parcel_row_id",
+        *DETAIL_METRICS_REQUIRED_COLUMNS,
         "acreage_bucket",
+        "area_acres",
+        "perimeter_meters",
+        "bounding_box_width_meters",
+        "bounding_box_height_meters",
+        "aspect_ratio",
+        "compactness",
+        "is_multipart",
+        "part_count",
+        "geometry_quality_flag",
+        "geometry_review_excluded_flag",
+        "geometry_training_excluded_flag",
+        "geometry_default_leads_excluded_flag",
+        "geometry_estimated_frontage_feet",
+        "geometry_estimated_width_feet",
+        "geometry_min_dimension_feet",
+        "geometry_max_dimension_feet",
+        "geometry_frontage_to_width_ratio",
+        "geometry_effective_buildable_flag",
+        "geometry_marketability_base_flag",
+        "geometry_marketability_flag",
+        "geometry_marketability_context",
+        "geometry_marketability_action",
+        "geometry_penalty_points",
+        "geometry_penalty_reason",
+        "geometry_marketability_default_leads_excluded_flag",
         "ai_building_present_probability",
         "ai_building_present_flag",
         "building_present_confidence",
@@ -692,6 +737,16 @@ def build_detail_metrics_runtime(frame: pd.DataFrame) -> pd.DataFrame:
         "ai_vacancy_status_note",
         "vacancy_confidence_score",
         "vacancy_model_version",
+        "tiles_scored_count",
+        "tiles_with_building_signal_count",
+        "multi_tile_inference_used_flag",
+        "multi_tile_aggregation_reason",
+        "best_tile_label",
+        "best_tile_confidence",
+        "best_tile_crop_label",
+        "best_tile_probability",
+        "best_tile_parcel_coverage_pct",
+        "negative_tile_coverage_pct",
         "county_tax_source_configured_flag",
         "county_tax_source_loaded_flag",
         "county_tax_source_name",
@@ -743,11 +798,24 @@ def build_detail_metrics_runtime(frame: pd.DataFrame) -> pd.DataFrame:
         "flood_risk_score",
     ]
     available = [column for column in detail_columns if column in frame.columns]
-    return frame.loc[:, available].copy()
+    detail = frame.loc[:, available].copy()
+    validate_required_columns(
+        detail,
+        required_columns=DETAIL_METRICS_REQUIRED_COLUMNS,
+        non_null_columns=DETAIL_METRICS_REQUIRED_COLUMNS,
+        context="build_backend_parcel_runtime_ms.build_detail_metrics_runtime",
+    )
+    return detail
 
 
 def build_runtime_frame() -> pd.DataFrame:
     parcels = pd.read_parquet(PARCEL_MASTER_PATH, columns=PARCEL_COLUMNS, engine="pyarrow")
+    validate_required_columns(
+        parcels,
+        required_columns=CANONICAL_PARCEL_FIELDS_WITH_GEOMETRY,
+        non_null_columns=CANONICAL_REQUIRED_NON_NULL_FIELDS + ["geometry"],
+        context="build_backend_parcel_runtime_ms.parcels",
+    )
     parcels["acreage"] = coalesce_numeric(parcels, ["total_acres", "parcel_area_acres", "gis_acres", "tax_acres"])
     parcels["acreage_bucket"] = acreage_bucket(parcels["acreage"])
     parcels["land_use"] = parcels["land_use_raw"].astype("string").str.strip()
@@ -759,6 +827,12 @@ def build_runtime_frame() -> pd.DataFrame:
     parcels["primary_fema_zone"] = parcels.get("flood_zone_primary", pd.Series(pd.NA, index=parcels.index)).astype("string").str.strip()
     parcels["elevation_mean_ft"] = pd.to_numeric(parcels.get("elevation_mean_ft"), errors="coerce")
     parcels = derive_shape_metrics(parcels)
+    geometry_quality = load_geometry_quality_frame(
+        parcels["parcel_row_id"].astype("string"),
+        build_artifact_if_missing=True,
+    )
+    if not geometry_quality.empty:
+        parcels = contract_left_merge(parcels, geometry_quality, on="parcel_row_id")
     parcels["geometry"] = parcels["geometry"].map(point_geometry_from_wkb)
     parcels["parcel_id"] = choose_canonical_external_parcel_id(parcels)
     parcels["apn"] = normalize_string(parcels.get("apn"), parcels.index).fillna(normalize_string(parcels.get("source_parcel_id_raw"), parcels.index))
@@ -785,9 +859,9 @@ def build_runtime_frame() -> pd.DataFrame:
     buildings = pd.read_parquet(BUILDING_METRICS_PATH, columns=BUILDING_COLUMNS, engine="pyarrow")
     signals = pd.read_parquet(LEAD_SIGNALS_PATH, columns=SIGNAL_COLUMNS, engine="pyarrow")
 
-    frame = parcels.merge(owners, on="parcel_row_id", how="left")
-    frame = frame.merge(buildings, on="parcel_row_id", how="left")
-    frame = frame.merge(signals, on="parcel_row_id", how="left")
+    frame = contract_left_merge(parcels, owners, on="parcel_row_id")
+    frame = contract_left_merge(frame, buildings, on="parcel_row_id")
+    frame = contract_left_merge(frame, signals, on="parcel_row_id")
     if DELINQUENT_LEADS_PATH.exists():
         delinquent_leads = pd.read_parquet(DELINQUENT_LEADS_PATH, columns=DELINQUENT_LEAD_COLUMNS, engine="pyarrow")
         frame = frame.merge(delinquent_leads, on="parcel_row_id", how="left", suffixes=("", "_delinq"))
@@ -809,12 +883,32 @@ def build_runtime_frame() -> pd.DataFrame:
             "imagery_crop_count",
             "imagery_driveway_signal",
             "imagery_clearing_signal",
+            "parcel_tile_coverage_pct",
+            "parcel_bbox_tile_coverage_pct",
+            "full_parcel_visible_flag",
+            "parcel_extent_exceeds_tile_flag",
+            "parcel_tile_low_coverage_flag",
+            "multi_tile_candidate_flag",
+            "parcel_covering_tile_count",
             "parcel_boundary_crop_ready_flag",
             "vacancy_confidence_score",
             "vacancy_model_version",
+            "tiles_scored_count",
+            "tiles_with_building_signal_count",
+            "multi_tile_inference_used_flag",
+            "multi_tile_aggregation_reason",
+            "best_tile_label",
+            "best_tile_confidence",
+            "best_tile_crop_label",
+            "best_tile_probability",
+            "best_tile_parcel_coverage_pct",
+            "negative_tile_coverage_pct",
         ]
-        ai_predictions = pd.read_parquet(AI_BUILDING_PREDICTIONS_PATH, columns=ai_columns, engine="pyarrow")
-        frame = frame.merge(ai_predictions, on="parcel_row_id", how="left")
+        ai_schema = ds.dataset(AI_BUILDING_PREDICTIONS_PATH, format="parquet").schema.names
+        available_ai_columns = [column for column in ai_columns if column in ai_schema]
+        if "parcel_row_id" in available_ai_columns:
+            ai_predictions = pd.read_parquet(AI_BUILDING_PREDICTIONS_PATH, columns=available_ai_columns, engine="pyarrow")
+            frame = contract_left_merge(frame, ai_predictions, on="parcel_row_id")
 
     for column in ["parcel_vacant_flag", "corporate_owner_flag", "absentee_owner_flag", "out_of_state_owner_flag", "high_confidence_link_flag", "county_hosted_flag", "delinquent_flag", "forfeited_flag"]:
         if column in frame.columns:
@@ -843,6 +937,28 @@ def build_runtime_frame() -> pd.DataFrame:
     frame["building_present_confidence"] = pd.to_numeric(frame.get("building_present_confidence"), errors="coerce")
     frame["building_presence_reason"] = normalize_string(frame.get("building_presence_reason"), frame.index)
     frame["vacancy_model_version"] = normalize_string(frame.get("vacancy_model_version"), frame.index)
+    frame["parcel_tile_coverage_pct"] = pd.to_numeric(frame.get("parcel_tile_coverage_pct"), errors="coerce")
+    frame["parcel_bbox_tile_coverage_pct"] = pd.to_numeric(frame.get("parcel_bbox_tile_coverage_pct"), errors="coerce")
+    frame["parcel_covering_tile_count"] = pd.to_numeric(frame.get("parcel_covering_tile_count"), errors="coerce").fillna(0).astype(int)
+    frame["tiles_scored_count"] = pd.to_numeric(frame.get("tiles_scored_count"), errors="coerce").fillna(0).astype(int)
+    frame["tiles_with_building_signal_count"] = (
+        pd.to_numeric(frame.get("tiles_with_building_signal_count"), errors="coerce").fillna(0).astype(int)
+    )
+    frame["multi_tile_aggregation_reason"] = normalize_string(frame.get("multi_tile_aggregation_reason"), frame.index)
+    frame["best_tile_label"] = normalize_string(frame.get("best_tile_label"), frame.index)
+    frame["best_tile_confidence"] = pd.to_numeric(frame.get("best_tile_confidence"), errors="coerce")
+    frame["best_tile_crop_label"] = normalize_string(frame.get("best_tile_crop_label"), frame.index)
+    frame["best_tile_probability"] = pd.to_numeric(frame.get("best_tile_probability"), errors="coerce")
+    frame["best_tile_parcel_coverage_pct"] = pd.to_numeric(frame.get("best_tile_parcel_coverage_pct"), errors="coerce")
+    frame["negative_tile_coverage_pct"] = pd.to_numeric(frame.get("negative_tile_coverage_pct"), errors="coerce")
+    for flag_column in [
+        "full_parcel_visible_flag",
+        "parcel_extent_exceeds_tile_flag",
+        "parcel_tile_low_coverage_flag",
+        "multi_tile_candidate_flag",
+        "multi_tile_inference_used_flag",
+    ]:
+        frame[flag_column] = frame.get(flag_column, pd.Series(False, index=frame.index)).fillna(False).astype(bool)
     if "vacancy_confidence_score" in frame.columns:
         vacancy_confidence_series = pd.to_numeric(frame["vacancy_confidence_score"], errors="coerce")
     else:
@@ -855,25 +971,39 @@ def build_runtime_frame() -> pd.DataFrame:
         | frame["building_presence_reason"].notna()
     )
     frame["ai_vacancy_available_flag"] = pd.Series(ai_available, index=frame.index, dtype="boolean")
-    frame["ai_vacancy_source"] = pd.Series(
-        np.where(ai_available, "precomputed", "unavailable"),
-        index=frame.index,
-        dtype="string",
+    existing_ai_source = normalize_string(frame.get("ai_vacancy_source"), frame.index)
+    frame["ai_vacancy_source"] = existing_ai_source.fillna(
+        pd.Series(
+            np.where(ai_available, "precomputed", "unavailable"),
+            index=frame.index,
+            dtype="string",
+        )
     )
-    frame["ai_vacancy_status_note"] = pd.Series(
-        np.where(
-            ai_available,
-            "Precomputed AI vacancy prediction is available for this parcel.",
-            "No precomputed AI vacancy prediction is included in this parcel detail source.",
-        ),
-        index=frame.index,
-        dtype="string",
+    existing_ai_note = normalize_string(frame.get("ai_vacancy_status_note"), frame.index)
+    frame["ai_vacancy_status_note"] = existing_ai_note.fillna(
+        pd.Series(
+            np.where(
+                ai_available,
+                "Precomputed AI vacancy prediction is available for this parcel.",
+                "No precomputed AI vacancy prediction is included in this parcel detail source.",
+            ),
+            index=frame.index,
+            dtype="string",
+        )
     )
     frame = apply_tax_freshness_fields(frame)
     frame = apply_county_tax_coverage_fields(frame)
     frame = apply_tax_recency_fields(frame)
     frame = apply_tax_interpretation_fields(frame)
-    frame["lead_score_tier"] = frame["lead_score_tier"].astype("string").fillna(score_tier(frame["lead_score_total_effective"]))
+    frame = add_geometry_marketability_fields(frame)
+    frame = apply_geometry_marketability_score_adjustment(frame)
+    frame["lead_score_tier"] = score_tier(frame["lead_score_total_effective"])
+    validate_required_columns(
+        frame,
+        required_columns=["parcel_row_id", "parcel_id", "state_code", "county_name", "county_fips"],
+        non_null_columns=["parcel_row_id", "parcel_id", "state_code", "county_name", "county_fips"],
+        context="build_backend_parcel_runtime_ms.build_runtime_frame",
+    )
 
     return frame
 
@@ -889,10 +1019,14 @@ def build_summary_payload(frame: pd.DataFrame) -> dict[str, object]:
     recommended_counts = frame.groupby("recommended_view_bucket", dropna=True).size().sort_values(ascending=False)
     average_score = pd.to_numeric(frame[DEFAULT_LEAD_SORT_FIELD], errors="coerce").mean()
     vacant_count = int(frame["parcel_vacant_flag"].fillna(False).sum())
+    geometry_diagnostics = geometry_quality_diagnostics(frame)
+    marketability_diagnostics = geometry_marketability_diagnostics(frame)
     return {
         "row_count": int(len(frame)),
         "source": "mississippi parcel runtime dataset",
         "geometry_mode": "viewport_geojson",
+        "geometry_quality_diagnostics": geometry_diagnostics,
+        "geometry_marketability_diagnostics": marketability_diagnostics,
         "sections": {
             "statewide": [
                 {"section": "statewide", "metric": "lead_count", "value": str(len(frame))},
@@ -900,6 +1034,10 @@ def build_summary_payload(frame: pd.DataFrame) -> dict[str, object]:
                 {"section": "statewide", "metric": "likely_vacant_count", "value": str(vacant_count)},
                 {"section": "statewide", "metric": "vacant_share_pct", "value": f"{frame['parcel_vacant_flag'].fillna(False).mean() * 100:.1f}"},
                 {"section": "statewide", "metric": "county_hosted_share_pct", "value": f"{frame['county_hosted_flag'].fillna(False).mean() * 100:.1f}"},
+                {"section": "statewide", "metric": "default_leads_geometry_excluded_count", "value": str(geometry_diagnostics["default_leads_excluded_count"])},
+                {"section": "statewide", "metric": "default_leads_geometry_excluded_pct", "value": f"{geometry_diagnostics['default_leads_excluded_pct']:.2f}"},
+                {"section": "statewide", "metric": "default_leads_marketability_excluded_count", "value": str(marketability_diagnostics["default_leads_excluded_count"])},
+                {"section": "statewide", "metric": "default_leads_marketability_excluded_pct", "value": f"{marketability_diagnostics['default_leads_excluded_pct']:.2f}"},
             ],
             "top_counties": [
                 {"section": "top_counties", "key": county, "metric": "parcel_count", "value": str(int(count))}
@@ -909,12 +1047,34 @@ def build_summary_payload(frame: pd.DataFrame) -> dict[str, object]:
                 {"section": "recommended_view_bucket", "key": bucket, "metric": "parcel_count", "value": str(int(count))}
                 for bucket, count in recommended_counts.items()
             ],
+            "geometry_quality_flag": [
+                {"section": "geometry_quality_flag", "key": key, "metric": "parcel_count", "value": str(int(value))}
+                for key, value in geometry_diagnostics["geometry_quality_flag_counts"].items()
+            ],
+            "geometry_marketability_flag": [
+                {"section": "geometry_marketability_flag", "key": key, "metric": "parcel_count", "value": str(int(value))}
+                for key, value in marketability_diagnostics["geometry_marketability_flag_counts"].items()
+            ],
+            "geometry_marketability_action": [
+                {"section": "geometry_marketability_action", "key": key, "metric": "parcel_count", "value": str(int(value))}
+                for key, value in marketability_diagnostics["geometry_marketability_action_counts"].items()
+            ],
+            "default_leads_marketability_excluded_by_flag": [
+                {"section": "default_leads_marketability_excluded_by_flag", "key": key, "metric": "parcel_count", "value": str(int(value))}
+                for key, value in marketability_diagnostics["default_leads_excluded_by_flag"].items()
+            ],
+            "geometry_marketability_top_counties_affected": [
+                {"section": "geometry_marketability_top_counties_affected", "key": key, "metric": "parcel_count", "value": str(int(value))}
+                for key, value in marketability_diagnostics["top_counties_affected"].items()
+            ],
             "tax_status": tax_summary_section(frame),
         },
     }
 
 
 def build_presets_payload(frame: pd.DataFrame) -> list[dict[str, str]]:
+    frame = filter_default_leads_geometry_frame(frame)
+    frame = filter_default_marketability_frame(frame)
     definitions = {
         "safest_early_investor_use": {
             "description": "High-confidence county-hosted parcels with stronger amount reliability, no wetlands, and vacancy preference.",
@@ -975,9 +1135,11 @@ def build_presets_payload(frame: pd.DataFrame) -> list[dict[str, str]]:
 
 
 def build_default_leads_payload(frame: pd.DataFrame) -> dict[str, object]:
-    top = frame.sort_values(DEFAULT_LEAD_SORT_FIELD, ascending=False, na_position="last").head(250)
+    eligible = filter_default_leads_geometry_frame(frame)
+    eligible = filter_default_marketability_frame(eligible)
+    top = eligible.sort_values(DEFAULT_LEAD_SORT_FIELD, ascending=False, na_position="last").head(250)
     return {
-        "total_count": int(len(frame)),
+        "total_count": int(len(eligible)),
         "limit": 200,
         "offset": 0,
         "items": [{key: json_scalar(value) for key, value in record.items()} for record in top.loc[:, SUMMARY_FIELDS].to_dict(orient="records")],
@@ -985,7 +1147,9 @@ def build_default_leads_payload(frame: pd.DataFrame) -> dict[str, object]:
 
 
 def build_default_geometry_payload(frame: pd.DataFrame) -> dict[str, object]:
-    top = frame.sort_values(["county_name", DEFAULT_LEAD_SORT_FIELD], ascending=[True, False], na_position="last").groupby("county_name", dropna=True).head(3)
+    eligible = filter_default_leads_geometry_frame(frame)
+    eligible = filter_default_marketability_frame(eligible)
+    top = eligible.sort_values(["county_name", DEFAULT_LEAD_SORT_FIELD], ascending=[True, False], na_position="last").groupby("county_name", dropna=True).head(3)
     features = []
     for _, row in top.iterrows():
         geometry = row.get("geometry")

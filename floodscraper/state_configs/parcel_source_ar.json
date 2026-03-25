@@ -1,0 +1,41 @@
+{
+  "state_code": "ar",
+  "state_name": "Arkansas",
+  "status": "mvp_active",
+  "parcel_sources": [
+    {
+      "source_name": "arkansas_gis_office_statewide_parcels",
+      "primary": true,
+      "service_type": "arcgis_feature_layer",
+      "service_url": "https://gis.arkansas.gov/arcgis/rest/services/AGFC/AGFC_Cadastre_Viewer/FeatureServer/2",
+      "object_id_field": "objectid",
+      "max_object_ids_per_query": 200,
+      "query_mode": "ordered_pagination",
+      "geometry_out_fields": "objectid,countyfips,county,parcelid",
+      "attribute_out_fields": [
+        "objectid",
+        "countyfips",
+        "county",
+        "parcelid",
+        "ownername",
+        "adrlabel",
+        "parceltype",
+        "assessvalue",
+        "impvalue",
+        "landvalue",
+        "totalvalue",
+        "subdivision",
+        "Shape__Area",
+        "Shape__Length"
+      ],
+      "supports_centroid_runtime": true,
+      "supports_live_selected_geometry": true,
+      "license": "public_statewide_parcel_service",
+      "notes": [
+        "MVP runtime ingest uses statewide attributes plus centroids.",
+        "Selected parcel geometry is fetched live by objectid through the same feature layer.",
+        "PMTiles parcel basemap generation is deferred in the first Arkansas pass."
+      ]
+    }
+  ]
+}

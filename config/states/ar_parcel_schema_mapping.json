@@ -1,0 +1,36 @@
+{
+  "state_code": "ar",
+  "state_name": "Arkansas",
+  "canonical_identity": {
+    "parcel_row_id": "derived_sha1(countyfips|parcelid)",
+    "parcel_id": "parcelid",
+    "state_code": "constant:ar",
+    "county_name": "county",
+    "county_fips": "countyfips",
+    "geometry": "selected parcel polygons fetched live from AGFC Cadastre Viewer FeatureServer/2 by objectid; runtime stores centroid reference only in MVP"
+  },
+  "parcel_source_fields": {
+    "objectid": "source_object_id",
+    "countyfips": "county_fips_raw",
+    "county": "county_name_display",
+    "parcelid": "parcel_id",
+    "ownername": "owner_name",
+    "adrlabel": "site_address",
+    "parceltype": "land_use",
+    "assessvalue": "assessed_value_reported",
+    "impvalue": "assessed_improvement_value",
+    "landvalue": "assessed_land_value",
+    "totalvalue": "assessed_total_value",
+    "subdivision": "subdivision_name",
+    "Shape__Area": "shape_area_square_meters",
+    "Shape__Length": "shape_length_meters"
+  },
+  "notes": {
+    "status": "arkansas_mvp_mapped",
+    "reference_state": "ms",
+    "warnings": [
+      "Arkansas MVP runtime stores centroid references for statewide serving; full polygons are fetched on demand for selected parcels.",
+      "Width/frontage-style geometry metrics are not available statewide in the first pass without a full polygon processing pipeline."
+    ]
+  }
+}
