@@ -15,12 +15,20 @@ from PIL import Image, ImageDraw
 from shapely import wkb
 from shapely.geometry import box as geometry_box
 
-from parcel_contract_ms import (
-    CANONICAL_PARCEL_FIELDS,
-    CANONICAL_REQUIRED_NON_NULL_FIELDS,
-    validate_required_columns,
-)
-from state_artifacts import load_state_artifacts
+try:
+    from floodscraper.parcel_contract_ms import (
+        CANONICAL_PARCEL_FIELDS,
+        CANONICAL_REQUIRED_NON_NULL_FIELDS,
+        validate_required_columns,
+    )
+    from floodscraper.state_artifacts import load_state_artifacts
+except ModuleNotFoundError:  # pragma: no cover - supports direct script execution
+    from parcel_contract_ms import (
+        CANONICAL_PARCEL_FIELDS,
+        CANONICAL_REQUIRED_NON_NULL_FIELDS,
+        validate_required_columns,
+    )
+    from state_artifacts import load_state_artifacts
 
 
 ROOT = Path(__file__).resolve().parents[1]

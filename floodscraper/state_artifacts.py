@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from state_registry import ROOT, load_state_definition
+try:
+    from floodscraper.state_registry import ROOT, load_state_definition
+except ModuleNotFoundError:  # pragma: no cover - supports direct script execution
+    from state_registry import ROOT, load_state_definition
 
 
 FRONTEND_DATA_DIR = ROOT / "frontend" / "public" / "data"

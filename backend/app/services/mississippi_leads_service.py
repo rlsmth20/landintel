@@ -5,7 +5,6 @@ import logging
 import os
 import time
 import io
-import sys
 from collections import Counter
 from functools import lru_cache
 from pathlib import Path
@@ -29,6 +28,9 @@ from app.settings import (
     LEADS_MAX_LIMIT,
     MISSISSIPPI_STATIC_FEED_PATH,
 )
+from app.bootstrap import ensure_repo_root_on_path
+
+ensure_repo_root_on_path()
 
 
 def _discover_project_root() -> Path:
@@ -46,12 +48,8 @@ def _discover_project_root() -> Path:
 
 
 PROJECT_ROOT = _discover_project_root()
-BACKEND_DIR = Path(__file__).resolve().parents[2]
-FLOODSCRAPER_DIR = PROJECT_ROOT / "floodscraper"
-if str(FLOODSCRAPER_DIR) not in sys.path:
-    sys.path.insert(0, str(FLOODSCRAPER_DIR))
 
-from parcel_contract_ms import (  # noqa: E402
+from floodscraper.parcel_contract_ms import (  # noqa: E402
     API_LEADS_SUMMARY_FIELDS,
     BACKEND_DETAIL_REQUIRED_FIELDS,
     CANONICAL_PARCEL_FIELDS,
@@ -68,13 +66,13 @@ from parcel_contract_ms import (  # noqa: E402
     validate_output_records,
     validate_required_columns,
 )
-from parcel_marketability_ms import (  # noqa: E402
+from floodscraper.parcel_marketability_ms import (  # noqa: E402
     add_geometry_marketability_fields,
     apply_geometry_marketability_score_adjustment,
     geometry_marketability_diagnostics,
 )
-from state_artifacts import load_state_artifacts  # noqa: E402
-from vacancy_ai_common import (  # noqa: E402
+from floodscraper.state_artifacts import load_state_artifacts  # noqa: E402
+from floodscraper.vacancy_ai_common import (  # noqa: E402
     TileAddress as SharedTileAddress,
     adjust_confidence_for_tile_coverage as shared_adjust_confidence_for_tile_coverage,
     build_ai_vacancy_status_note as shared_build_ai_vacancy_status_note,

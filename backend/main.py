@@ -4,6 +4,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
+from app.bootstrap import ensure_repo_root_on_path
+
+ensure_repo_root_on_path()
+
 from app.api.analyze import router as analyze_router
 from app.api.mississippi_leads import router as mississippi_leads_router
 from app.api.state_leads import router as state_leads_router

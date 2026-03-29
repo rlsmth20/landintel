@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import sys
 import logging
 from functools import lru_cache
 from pathlib import Path
@@ -17,13 +16,11 @@ import requests
 from shapely import wkb
 from shapely.geometry import mapping, shape
 
+from app.bootstrap import ensure_repo_root_on_path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-FLOODSCRAPER_DIR = PROJECT_ROOT / "floodscraper"
-if str(FLOODSCRAPER_DIR) not in sys.path:
-    sys.path.insert(0, str(FLOODSCRAPER_DIR))
+PROJECT_ROOT = ensure_repo_root_on_path()
 
-from parcel_contract_ms import (  # noqa: E402
+from floodscraper.parcel_contract_ms import (  # noqa: E402
     API_LEADS_SUMMARY_FIELDS,
     BACKEND_DETAIL_REQUIRED_FIELDS,
     GEOMETRY_FEATURE_PROPERTY_FIELDS,
@@ -34,8 +31,8 @@ from parcel_contract_ms import (  # noqa: E402
     serialize_contract_row,
     validate_output_records,
 )
-from state_artifacts import load_state_artifacts  # noqa: E402
-from state_registry import load_state_definition  # noqa: E402
+from floodscraper.state_artifacts import load_state_artifacts  # noqa: E402
+from floodscraper.state_registry import load_state_definition  # noqa: E402
 
 
 EARTH_RADIUS_MILES = 3958.7613
