@@ -6,7 +6,31 @@
     },
     "ar": {
       "config_path": "config/states/ar.json",
-      "status": "bootstrapped"
+      "status": "mvp_runtime_ready"
+    },
+    "mt": {
+      "config_path": "config/states/mt.json",
+      "status": "mvp_runtime_ready"
+    },
+    "wi": {
+      "config_path": "config/states/wi.json",
+      "status": "mvp_runtime_ready"
+    },
+    "ny": {
+      "config_path": "config/states/ny.json",
+      "status": "partial_runtime_only"
+    },
+    "ct": {
+      "config_path": "config/states/ct.json",
+      "status": "mvp_runtime_ready"
+    },
+    "vt": {
+      "config_path": "config/states/vt.json",
+      "status": "mvp_runtime_ready"
+    },
+    "ut": {
+      "config_path": "config/states/ut.json",
+      "status": "blocked_source_validation"
     }
   }
 }

@@ -1,0 +1,37 @@
+{
+  "state_code": "ny",
+  "state_name": "New York",
+  "canonical_identity": {
+    "parcel_row_id": "derived_sha1(county_fips_lookup(COUNTY_NAME)|coalesce(PRINT_KEY,SBL))",
+    "parcel_id": "coalesce(PRINT_KEY,SBL)",
+    "state_code": "constant:ny",
+    "county_name": "COUNTY_NAME",
+    "county_fips": "lookup(COUNTY_NAME)",
+    "geometry": "official statewide parcel centroid points only in first New York pass; no polygon overlay is stored in the runtime"
+  },
+  "parcel_source_fields": {
+    "OBJECTID": "source_object_id",
+    "COUNTY_NAME": "county_name_display",
+    "MUNI_NAME": "municipality_name",
+    "PARCEL_ADDR": "site_address",
+    "PRINT_KEY": "parcel_id_primary",
+    "SBL": "parcel_id_fallback",
+    "PRIMARY_OWNER": "owner_name",
+    "LAND_AV": "assessed_land_value",
+    "TOTAL_AV": "assessed_total_value",
+    "FULL_MARKET_VAL": "estimated_market_value",
+    "FRONT": "front_feet",
+    "DEPTH": "depth_feet",
+    "ACRES": "acreage",
+    "PROP_CLASS": "land_use",
+    "ROLL_SECTION": "roll_section"
+  },
+  "notes": {
+    "status": "new_york_mvp_mapped",
+    "reference_state": "ms",
+    "warnings": [
+      "New York uses the official statewide centroid layer rather than polygon parcels in the first MVP pass.",
+      "The source does not expose separate assessed improvement value, so vacancy proxy precision is weaker than polygon states with land/improvement splits."
+    ]
+  }
+}

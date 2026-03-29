@@ -1,0 +1,37 @@
+{
+  "state_code": "vt",
+  "state_name": "Vermont",
+  "canonical_identity": {
+    "parcel_row_id": "derived_sha1(split(SPAN,'-')[0]|coalesce(GLIST_SPAN,SPAN,MAPID,PARCID))",
+    "parcel_id": "coalesce(GLIST_SPAN,SPAN,MAPID,PARCID)",
+    "state_code": "constant:vt",
+    "county_name": "TNAME",
+    "county_fips": "split(SPAN,'-')[0]",
+    "geometry": "selected parcel polygons fetched live from the Vermont statewide parcel layer by OBJECTID; runtime backfills selected centroids with returnCentroid"
+  },
+  "parcel_source_fields": {
+    "OBJECTID": "source_object_id",
+    "SPAN": "span_code",
+    "GLIST_SPAN": "parcel_id_primary",
+    "MAPID": "parcel_id_fallback",
+    "PARCID": "parcel_id_local_fallback",
+    "TNAME": "town_name",
+    "OWNER1": "owner_name",
+    "E911ADDR": "site_address",
+    "PROPTYPE": "land_use",
+    "ACRESGL": "acreage",
+    "REAL_FLV": "assessed_total_value",
+    "LAND_LV": "assessed_land_value",
+    "IMPRV_LV": "assessed_improvement_value",
+    "SHAPE__Area": "shape_area_square_meters",
+    "SHAPE__Length": "shape_length_meters"
+  },
+  "notes": {
+    "status": "vermont_mvp_mapped",
+    "reference_state": "ms",
+    "warnings": [
+      "Vermont runtime uses towns as the primary local division rather than counties.",
+      "The runtime prefers GLIST_SPAN and falls back to SPAN, MAPID, or PARCID when statewide parcel identifiers are missing."
+    ]
+  }
+}

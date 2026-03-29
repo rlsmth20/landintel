@@ -1,0 +1,59 @@
+{
+  "state_code": "mt",
+  "state_name": "Montana",
+  "county_division_label": "county",
+  "artifact_roots": {
+    "parcels": "data/parcels/mt",
+    "runtime": "data/runtime/mt",
+    "review": "data/review/mt",
+    "training": "data/training/mt"
+  },
+  "legacy_paths": {
+    "parcel_master": "data/parcels/mt/mt_parcels_master.parquet",
+    "app_ready_leads": "data/tax_published/mt/app_ready_mt_leads.parquet",
+    "runtime_parcel_index": "data/runtime/mt/parcel_index",
+    "runtime_detail_metrics": "data/runtime/mt/parcel_detail_metrics.parquet",
+    "runtime_summary": "data/runtime/mt/summary.json",
+    "runtime_presets": "data/runtime/mt/presets.json",
+    "runtime_default_leads": "data/runtime/mt/default_leads.json",
+    "runtime_default_geometry": "data/runtime/mt/default_geometry.json",
+    "frontend_detail_fallback": "frontend/public/data/mt_lead_detail_fallback.json",
+    "frontend_meta": "frontend/public/data/mt_lead_explorer_meta.json",
+    "frontend_static_feed": "frontend/public/data/mt_lead_explorer.json",
+    "frontend_parcel_pmtiles": "frontend/public/tiles/mt_parcels.pmtiles",
+    "geometry_quality_artifact": "data/parcels/mt/mt_parcel_geometry_quality.parquet",
+    "geometry_quality_summary": "data/parcels/mt/mt_parcel_geometry_quality_summary.json"
+  },
+  "parcel_tiles": {
+    "build_source": "parcel_master",
+    "layer": "parcels",
+    "min_zoom": 6,
+    "max_zoom": 14,
+    "frontend_url": "/tiles/mt_parcels.pmtiles",
+    "public_url": "https://pub-f5f866f9a229419696c3066b960daae4.r2.dev/tiles/mt_parcels.pmtiles",
+    "geometry_strategy": "live_arcgis_app_ready_geometry_cache",
+    "geometry_cache_path": "data/parcels/mt/mt_app_ready_parcel_tile_features.parquet",
+    "summary_output": "data/runtime/mt/parcel_pmtiles_build_summary.json",
+    "publish_manifest_output": "data/runtime/mt/parcel_pmtiles_publish_manifest.json",
+    "cloudflare_object_key": "tiles/mt_parcels.pmtiles"
+  },
+  "source_registry_paths": {
+    "parcel_source": "floodscraper/state_configs/parcel_source_mt.json",
+    "tax_source": "floodscraper/state_configs/tax_source_mt.json",
+    "tax_linkage": "floodscraper/state_configs/tax_linkage_mt.json"
+  },
+  "schema_mapping_templates": {
+    "parcel_schema_mapping": "config/states/mt_parcel_schema_mapping.json"
+  },
+  "notes": {
+    "bootstrap_status": "mvp_runtime_ready",
+    "reference_state": "ms",
+    "mvp_scope": [
+      "official Montana cadastral parcel master from DNRC ArcGIS service",
+      "selected-lead centroid backfill from live ArcGIS returnCentroid queries",
+      "generic runtime/default leads/frontend fallback artifacts",
+      "full statewide parcel PMTiles overlay from live ArcGIS polygon fetches against the parcel master",
+      "no tax-source linkage in first Montana pass"
+    ]
+  }
+}

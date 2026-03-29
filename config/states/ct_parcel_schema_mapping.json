@@ -1,0 +1,34 @@
+{
+  "state_code": "ct",
+  "state_name": "Connecticut",
+  "canonical_identity": {
+    "parcel_row_id": "derived_sha1(split(Link,'-')[0]|Link)",
+    "parcel_id": "Link",
+    "state_code": "constant:ct",
+    "county_name": "Town_Name",
+    "county_fips": "split(Link,'-')[0]",
+    "geometry": "selected parcel polygons fetched live from the Connecticut statewide parcel layer by OBJECTID; runtime backfills selected centroids with returnCentroid"
+  },
+  "parcel_source_fields": {
+    "OBJECTID": "source_object_id",
+    "Town_Name": "town_name",
+    "Link": "parcel_id_and_local_division_code",
+    "Owner": "owner_name",
+    "Location": "site_address",
+    "Planning_Region": "planning_region",
+    "Assessed_Total": "assessed_total_value",
+    "Assessed_Land": "assessed_land_value",
+    "Assessed_Building": "assessed_improvement_value",
+    "Collection_Year": "assessment_collection_year",
+    "Shape__Area": "shape_area_square_meters",
+    "Shape__Length": "shape_length_meters"
+  },
+  "notes": {
+    "status": "connecticut_mvp_mapped",
+    "reference_state": "ms",
+    "warnings": [
+      "Connecticut runtime uses towns as the primary local division rather than counties.",
+      "Local division codes are derived from the Link field because the source does not expose a separate town-code field."
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "state_code": "ut",
+  "state_name": "Utah",
+  "status": "blocked_source_validation",
+  "linkage_rules": [],
+  "notes": [
+    "No Utah parcel-to-tax linkage rules are configured because statewide source validation is still blocked."
+  ]
+}

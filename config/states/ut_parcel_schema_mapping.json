@@ -1,0 +1,26 @@
+{
+  "state_code": "ut",
+  "state_name": "Utah",
+  "canonical_identity": {
+    "parcel_row_id": "blocked_pending_true_statewide_source",
+    "parcel_id": "pending_source_validation",
+    "state_code": "constant:ut",
+    "county_name": "pending_source_validation",
+    "county_fips": "pending_source_validation",
+    "geometry": "blocked_pending_true_statewide_source"
+  },
+  "parcel_source_fields": {
+    "FIPS": "candidate_county_fips",
+    "PARCEL_ID": "candidate_parcel_id",
+    "PARCEL_ADD": "candidate_site_address",
+    "OWNERNAME": "candidate_owner_name"
+  },
+  "notes": {
+    "status": "blocked_source_validation",
+    "reference_state": "ms",
+    "warnings": [
+      "Blocked during this run because the candidate service returned only county FIPS 49049 records.",
+      "Shared builder support for no-improvement-value runtimes was added, but a true statewide Utah parcel source still needs validation."
+    ]
+  }
+}

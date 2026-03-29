@@ -1,0 +1,17 @@
+{
+  "state_code": "ut",
+  "state_name": "Utah",
+  "status": "blocked_source_validation",
+  "parcel_sources": [
+    {
+      "source_name": "parcels_utah_candidate_blocked",
+      "primary": false,
+      "service_type": "arcgis_feature_layer",
+      "service_url": "https://services1.arcgis.com/99lidPhWCzftIe9K/ArcGIS/rest/services/Parcels_Utah/FeatureServer/0",
+      "notes": [
+        "Blocked during validation: grouped count queries returned only FIPS 49049 records, so this source is not being treated as a statewide Utah parcel source.",
+        "The builder can support no-improvement-value runtimes once a true statewide Utah source is identified."
+      ]
+    }
+  ]
+}

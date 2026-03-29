@@ -1,0 +1,82 @@
+{
+  "state_code": "ct",
+  "state_name": "Connecticut",
+  "status": "mvp_active",
+  "parcel_sources": [
+    {
+      "source_name": "connecticut_state_parcel_layer_2023",
+      "primary": true,
+      "service_type": "arcgis_feature_layer",
+      "service_url": "https://services3.arcgis.com/3FL1kr7L4LvwA2Kb/arcgis/rest/services/Connecticut_State_Parcel_Layer_2023/FeatureServer/0",
+      "object_id_field": "OBJECTID",
+      "max_object_ids_per_query": 250,
+      "geometry_out_fields": "OBJECTID,Link,Town_Name",
+      "attribute_out_fields": [
+        "OBJECTID",
+        "Town_Name",
+        "Link",
+        "Owner",
+        "Location",
+        "Mailing_Address",
+        "Mailing_City",
+        "Mailing_State",
+        "Assessed_Total",
+        "Assessed_Land",
+        "Assessed_Building",
+        "Planning_Region",
+        "Collection_Year",
+        "Shape__Area",
+        "Shape__Length"
+      ],
+      "runtime_builder": {
+        "profile": "statewide_arcgis_parcel_mvp_v1",
+        "source_name": "Connecticut State Parcel Layer 2023",
+        "source_confidence_tier": "high",
+        "county_source_coverage_tier": "statewide_primary",
+        "source_warning": "Connecticut MVP uses the official statewide parcel layer with town-based partitions, selected-lead centroid backfill, and proxy geometry metrics from statewide area/perimeter fields.",
+        "coordinate_mode": "selected_return_centroid",
+        "batch_size_hint": 2000,
+        "field_map": {
+          "source_object_id": "OBJECTID",
+          "parcel_id_fields": [
+            "Link"
+          ],
+          "county_name": "Town_Name",
+          "county_fips": {
+            "field": "Link",
+            "split": "-",
+            "index": 0
+          },
+          "owner_name": "Owner",
+          "site_address": "Location",
+          "subdivision_name": "Planning_Region",
+          "assessed_total_value": "Assessed_Total",
+          "assessed_land_value": "Assessed_Land",
+          "assessed_improvement_value": "Assessed_Building",
+          "area_square_meters": "Shape__Area",
+          "perimeter_meters": "Shape__Length"
+        },
+        "parcel_id_null_values": [
+          "",
+          "0"
+        ],
+        "default_bounds": [
+          -73.75,
+          40.95,
+          -71.78,
+          42.05
+        ],
+        "notes": [
+          "Connecticut is town-based in the first MVP pass because the official statewide parcel layer is organized by municipality rather than county.",
+          "Local division codes are derived directly from the official Link field to avoid maintaining a separate statewide town-code table."
+        ],
+        "parcel_pmtiles_ready": true
+      },
+      "license": "official_statewide_parcel_service",
+      "notes": [
+        "Official Connecticut statewide parcel layer published through ArcGIS Online.",
+        "First MVP runtime uses selected-lead centroid backfill rather than storing statewide point coordinates."
+      ]
+    }
+  ]
+}

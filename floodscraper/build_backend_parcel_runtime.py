@@ -17,10 +17,10 @@ def main() -> None:
     module_name = {
         "ar": "build_backend_parcel_runtime_ar",
         "ms": "build_backend_parcel_runtime_ms",
-    }.get(state_code)
-    if module_name is None:
-        raise NotImplementedError(f"Runtime builder is only implemented for state_code={state_code!r} at this stage.")
+    }.get(state_code, "build_backend_parcel_runtime_arcgis")
     sys.argv = [f"{module_name}.py", *passthrough]
+    if module_name == "build_backend_parcel_runtime_arcgis":
+        sys.argv.extend(["--state-code", state_code])
     runpy.run_module(module_name, run_name="__main__")
 
 

@@ -1,0 +1,9 @@
+{
+  "state_code": "ct",
+  "state_name": "Connecticut",
+  "status": "stub_not_configured",
+  "linkage_rules": [],
+  "notes": [
+    "No tax-linkage rules are configured in the first Connecticut MVP pass."
+  ]
+}

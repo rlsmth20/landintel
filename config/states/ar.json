@@ -25,11 +25,12 @@
     "geometry_quality_summary": "data/parcels/ar/ar_parcel_geometry_quality_summary.json"
   },
   "parcel_tiles": {
-    "build_source": "app_ready",
+    "build_source": "parcel_master",
     "layer": "parcels",
     "min_zoom": 6,
     "max_zoom": 14,
     "frontend_url": "/tiles/ar_parcels.pmtiles",
+    "public_url": "https://pub-f5f866f9a229419696c3066b960daae4.r2.dev/tiles/ar_parcels.pmtiles",
     "geometry_strategy": "live_arcgis_app_ready_geometry_cache",
     "geometry_cache_path": "data/parcels/ar/ar_app_ready_parcel_tile_features.parquet",
     "summary_output": "data/runtime/ar/parcel_pmtiles_build_summary.json",
@@ -51,7 +52,7 @@
       "statewide parcel master from Arkansas GIS parcel layer",
       "ranked app_ready subset for generic backend/frontend serving",
       "selected parcel geometry fetched live from source ArcGIS layer",
-      "no PMTiles parcel basemap in first Arkansas pass",
+      "full statewide parcel PMTiles overlay from live polygon fetches against the parcel master",
       "no county-hosted tax or vacancy-imagery parity yet"
     ]
   }

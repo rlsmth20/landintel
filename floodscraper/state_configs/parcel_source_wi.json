@@ -1,0 +1,84 @@
+{
+  "state_code": "wi",
+  "state_name": "Wisconsin",
+  "status": "mvp_active",
+  "parcel_sources": [
+    {
+      "source_name": "wisconsin_statewide_parcels",
+      "primary": true,
+      "service_type": "arcgis_feature_layer",
+      "service_url": "https://services3.arcgis.com/n6uYoouQZW75n5WI/arcgis/rest/services/Wisconsin_Statewide_Parcels/FeatureServer/0",
+      "object_id_field": "OBJECTID",
+      "max_object_ids_per_query": 250,
+      "geometry_out_fields": "OBJECTID,PARCELID,CONAME,PARCELFIPS",
+      "attribute_out_fields": [
+        "OBJECTID",
+        "PARCELID",
+        "TAXPARCELID",
+        "OWNERNME1",
+        "SITEADRESS",
+        "PROPCLASS",
+        "CNTASSDVALUE",
+        "LNDVALUE",
+        "IMPVALUE",
+        "ESTFMKVALUE",
+        "GISACRES",
+        "CONAME",
+        "PARCELFIPS",
+        "LATITUDE",
+        "LONGITUDE",
+        "Shape__Area",
+        "Shape__Length"
+      ],
+      "runtime_builder": {
+        "profile": "statewide_arcgis_parcel_mvp_v1",
+        "source_name": "Wisconsin statewide parcel layer",
+        "source_confidence_tier": "high",
+        "county_source_coverage_tier": "statewide_primary",
+        "source_warning": "Wisconsin MVP uses the official statewide parcel layer with direct parcel coordinates and proxy geometry metrics from area/perimeter fields.",
+        "coordinate_mode": "fields",
+        "field_map": {
+          "source_object_id": "OBJECTID",
+          "parcel_id_fields": [
+            "TAXPARCELID",
+            "PARCELID"
+          ],
+          "county_name": "CONAME",
+          "county_fips": "PARCELFIPS",
+          "county_fips_prefix": "55",
+          "owner_name": "OWNERNME1",
+          "site_address": "SITEADRESS",
+          "land_use": "PROPCLASS",
+          "assessed_total_value": "CNTASSDVALUE",
+          "assessed_land_value": "LNDVALUE",
+          "assessed_improvement_value": "IMPVALUE",
+          "acreage": "GISACRES",
+          "area_square_meters": "Shape__Area",
+          "perimeter_meters": "Shape__Length",
+          "latitude": "LATITUDE",
+          "longitude": "LONGITUDE"
+        },
+        "parcel_id_null_values": [
+          "",
+          "0"
+        ],
+        "default_bounds": [
+          -92.95,
+          42.4,
+          -86.23,
+          47.35
+        ],
+        "notes": [
+          "Wisconsin is the strongest next full-template state because the official source is statewide, polygon-based, richly attributed, and already carries county and coordinate fields.",
+          "Parcel PMTiles should be built from the statewide parcel master with live polygon fetches against the same service."
+        ],
+        "parcel_pmtiles_ready": true
+      },
+      "license": "official_statewide_parcel_service",
+      "notes": [
+        "Official Wisconsin statewide parcel service published through ArcGIS Online.",
+        "First MVP runtime uses direct coordinates and proxy geometry metrics from source attributes."
+      ]
+    }
+  ]
+}

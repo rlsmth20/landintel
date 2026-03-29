@@ -32,6 +32,30 @@ class StateRegistryTests(unittest.TestCase):
         self.assertTrue(str(definition.legacy_path("parcel_master")).endswith("ar_parcels_master.parquet"))
         self.assertTrue(str(definition.source_registry_path("parcel_source")).endswith("parcel_source_ar.json"))
 
+    def test_load_state_definition_wi(self) -> None:
+        definition = state_registry.load_state_definition("wi")
+
+        self.assertEqual(definition.state_code, "wi")
+        self.assertEqual(definition.state_name, "Wisconsin")
+        self.assertTrue(str(definition.legacy_path("parcel_master")).endswith("wi_parcels_master.parquet"))
+        self.assertTrue(str(definition.source_registry_path("parcel_source")).endswith("parcel_source_wi.json"))
+
+    def test_load_state_definition_ct(self) -> None:
+        definition = state_registry.load_state_definition("ct")
+
+        self.assertEqual(definition.state_code, "ct")
+        self.assertEqual(definition.state_name, "Connecticut")
+        self.assertEqual(definition.county_division_label, "town")
+        self.assertTrue(str(definition.legacy_path("parcel_master")).endswith("ct_parcels_master.parquet"))
+
+    def test_load_state_definition_vt(self) -> None:
+        definition = state_registry.load_state_definition("vt")
+
+        self.assertEqual(definition.state_code, "vt")
+        self.assertEqual(definition.state_name, "Vermont")
+        self.assertEqual(definition.county_division_label, "town")
+        self.assertTrue(str(definition.source_registry_path("parcel_source")).endswith("parcel_source_vt.json"))
+
     def test_reviewed_pilot_default_outputs_ms_uses_legacy_paths(self) -> None:
         outputs = state_registry.reviewed_pilot_default_outputs("ms", run_name="reviewed50")
 
@@ -88,6 +112,13 @@ class StateRegistryTests(unittest.TestCase):
         self.assertIn("app_ready_county_coverage", diagnostics)
         self.assertIn("geometry_quality_overview", diagnostics)
         self.assertIn("marketability_summary", diagnostics)
+        self.assertIn("statewide_parcel_base", diagnostics)
+        self.assertIn("statewide_parcel_tile_coverage", diagnostics)
+        self.assertIn("statewide_geometry_coverage", diagnostics)
+        self.assertIn("runtime_parcel_detail_coverage", diagnostics)
+        self.assertIn("map_shows_all_parcels", diagnostics)
+        self.assertIn("geometry_source_type", diagnostics)
+        self.assertIn("blocker_reason", diagnostics)
 
     def test_build_state_diagnostics_ar_includes_schema_and_paths(self) -> None:
         diagnostics = state_diagnostics.build_state_diagnostics("ar")
@@ -95,6 +126,11 @@ class StateRegistryTests(unittest.TestCase):
         self.assertEqual(diagnostics["state_code"], "ar")
         self.assertIn("schema_mapping_summary", diagnostics)
         self.assertIn("artifact_roots", diagnostics)
+        self.assertIn(diagnostics["statewide_parcel_tile_coverage"], {"full", "subset"})
+        self.assertIn(diagnostics["statewide_geometry_coverage"], {"full", "subset"})
+        self.assertIn(diagnostics["runtime_parcel_detail_coverage"], {"full", "subset"})
+        self.assertEqual(diagnostics["lead_coverage"], "subset")
+        self.assertIn(diagnostics["geometry_source_type"], {"local cached", "remote fetch", "mixed"})
 
 
 if __name__ == "__main__":

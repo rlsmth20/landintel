@@ -17,10 +17,10 @@ def main() -> None:
     module_name = {
         "ar": "build_frontend_detail_fallback_ar",
         "ms": "build_frontend_detail_fallback_ms",
-    }.get(state_code)
-    if module_name is None:
-        raise NotImplementedError(f"Frontend fallback generation is only implemented for state_code={state_code!r} at this stage.")
+    }.get(state_code, "build_frontend_detail_fallback_state")
     sys.argv = [f"{module_name}.py", *passthrough]
+    if module_name == "build_frontend_detail_fallback_state":
+        sys.argv.extend(["--state-code", state_code])
     runpy.run_module(module_name, run_name="__main__")
 
 

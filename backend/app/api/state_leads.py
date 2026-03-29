@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 
-from app.services.state_service_registry import get_state_service_module
+from app.services.state_service_registry import get_state_service
 from app.settings import GEOMETRY_DEFAULT_LIMIT, LEADS_DEFAULT_LIMIT
 
 
@@ -16,7 +16,7 @@ logger = logging.getLogger("parcel-tiles")
 def _service(state_code: str):
     try:
         logger.info("Resolving state route state=%s", state_code)
-        return get_state_service_module(state_code)
+        return get_state_service(state_code)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except NotImplementedError as error:

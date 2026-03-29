@@ -1,0 +1,25 @@
+{
+  "state_code": "ut",
+  "state_name": "Utah",
+  "county_division_label": "county",
+  "artifact_roots": {
+    "parcels": "data/parcels/ut",
+    "runtime": "data/runtime/ut",
+    "review": "data/review/ut",
+    "training": "data/training/ut"
+  },
+  "legacy_paths": {},
+  "source_registry_paths": {
+    "parcel_source": "floodscraper/state_configs/parcel_source_ut.json",
+    "tax_source": "floodscraper/state_configs/tax_source_ut.json",
+    "tax_linkage": "floodscraper/state_configs/tax_linkage_ut.json"
+  },
+  "schema_mapping_templates": {
+    "parcel_schema_mapping": "config/states/ut_parcel_schema_mapping.json"
+  },
+  "notes": {
+    "bootstrap_status": "blocked_source_validation",
+    "reference_state": "ms",
+    "blocker": "The official-looking parcel service tested during this run returned only county FIPS 49049 rather than statewide coverage."
+  }
+}

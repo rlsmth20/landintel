@@ -1,0 +1,10 @@
+{
+  "state_code": "vt",
+  "state_name": "Vermont",
+  "status": "stub_not_configured",
+  "tax_sources": [],
+  "notes": [
+    "Vermont first-pass MVP uses parcel-source valuation fields only.",
+    "Tax-source onboarding is deferred until a reusable statewide or town-linked tax workflow is added."
+  ]
+}

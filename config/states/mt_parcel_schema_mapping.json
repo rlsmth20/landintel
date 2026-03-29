@@ -1,0 +1,37 @@
+{
+  "state_code": "mt",
+  "state_name": "Montana",
+  "canonical_identity": {
+    "parcel_row_id": "derived_sha1(county_fips_lookup(COUNTYCD)|coalesce(Geocode,PARCELID,PropertyID))",
+    "parcel_id": "coalesce(Geocode,PARCELID,PropertyID)",
+    "state_code": "constant:mt",
+    "county_name": "domain(COUNTYCD)",
+    "county_fips": "lookup(domain(COUNTYCD))",
+    "geometry": "selected parcel polygons fetched live from Montana DNRC cadastral service by OBJECTID; runtime backfills selected centroids with returnCentroid"
+  },
+  "parcel_source_fields": {
+    "OBJECTID": "source_object_id",
+    "COUNTYCD": "county_code",
+    "Geocode": "parcel_id_primary",
+    "PARCELID": "parcel_id_fallback",
+    "PropertyID": "parcel_id_second_fallback",
+    "OwnerName": "owner_name",
+    "AddressLine1": "site_address",
+    "PropType": "land_use",
+    "Subdivision": "subdivision_name",
+    "TotalAcres": "acreage",
+    "TotalValue": "assessed_total_value",
+    "TotalLandValue": "assessed_land_value",
+    "TotalBuildingValue": "assessed_improvement_value",
+    "Shape__Area": "shape_area_square_meters",
+    "Shape__Length": "shape_length_meters"
+  },
+  "notes": {
+    "status": "montana_mvp_mapped",
+    "reference_state": "ms",
+    "warnings": [
+      "Montana runtime stores selected-lead centroids rather than statewide point references in the first pass.",
+      "The source contains placeholder parcel identifiers for some records, so the runtime prefers Geocode and falls back to ParcelID or PropertyID."
+    ]
+  }
+}

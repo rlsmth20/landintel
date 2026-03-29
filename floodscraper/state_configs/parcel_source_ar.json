@@ -34,7 +34,7 @@
       "notes": [
         "MVP runtime ingest uses statewide attributes plus centroids.",
         "Selected parcel geometry is fetched live by objectid through the same feature layer.",
-        "PMTiles parcel basemap generation is deferred in the first Arkansas pass."
+        "Full statewide parcel PMTiles are built from the parcel master through paged live polygon fetches."
       ]
     }
   ]

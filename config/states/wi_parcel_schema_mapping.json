@@ -1,0 +1,39 @@
+{
+  "state_code": "wi",
+  "state_name": "Wisconsin",
+  "canonical_identity": {
+    "parcel_row_id": "derived_sha1(55+PARCELFIPS|coalesce(TAXPARCELID,PARCELID))",
+    "parcel_id": "coalesce(TAXPARCELID,PARCELID)",
+    "state_code": "constant:wi",
+    "county_name": "CONAME",
+    "county_fips": "55 + PARCELFIPS",
+    "geometry": "selected parcel polygons fetched live from Wisconsin statewide parcel layer by OBJECTID; runtime stores point reference from LATITUDE/LONGITUDE"
+  },
+  "parcel_source_fields": {
+    "OBJECTID": "source_object_id",
+    "PARCELID": "parcel_id_fallback",
+    "TAXPARCELID": "parcel_id_primary",
+    "CONAME": "county_name_display",
+    "PARCELFIPS": "county_fips_suffix",
+    "OWNERNME1": "owner_name",
+    "SITEADRESS": "site_address",
+    "PROPCLASS": "land_use",
+    "CNTASSDVALUE": "assessed_total_value",
+    "LNDVALUE": "assessed_land_value",
+    "IMPVALUE": "assessed_improvement_value",
+    "ESTFMKVALUE": "estimated_market_value",
+    "GISACRES": "acreage",
+    "LATITUDE": "latitude",
+    "LONGITUDE": "longitude",
+    "Shape__Area": "shape_area_square_meters",
+    "Shape__Length": "shape_length_meters"
+  },
+  "notes": {
+    "status": "wisconsin_mvp_mapped",
+    "reference_state": "ms",
+    "warnings": [
+      "Wisconsin runtime uses direct point references plus live polygon fetches for selected parcels.",
+      "Width/frontage-style geometry metrics are proxy estimates derived from statewide area/perimeter attributes."
+    ]
+  }
+}

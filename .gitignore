@@ -21,6 +21,11 @@ venv/
 
 # Generated and downloaded data
 data/*
+!data/parcels/
+data/parcels/*
+!data/parcels/ar/
+data/parcels/ar/*
+!data/parcels/ar/ar_app_ready_parcel_tile_features.parquet
 !data/tax_published/
 data/tax_published/*
 !data/tax_published/ms/
@@ -39,11 +44,13 @@ frontend/public/data/*
 !frontend/public/data/mississippi_lead_explorer_geometries.json
 !frontend/public/data/mississippi_lead_detail_fallback.json
 frontend/public/tiles/*.pmtiles
+!frontend/public/tiles/ar_parcels.pmtiles
 !frontend/public/tiles/mississippi_parcels.pmtiles
 
 # Local scrape/debug artifacts
 tmp_*
 *.cookie
+.wrangler/
 
 # OS/editor noise
 .DS_Store
@@ -52,4 +59,6 @@ Thumbs.db
 
 backend/runtime/
 *.parquet
+!data/parcels/ar/ar_app_ready_parcel_tile_features.parquet
 *.pmtiles
+!frontend/public/tiles/ar_parcels.pmtiles

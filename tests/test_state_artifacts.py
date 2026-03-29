@@ -45,6 +45,25 @@ class StateArtifactsTests(unittest.TestCase):
         self.assertTrue(hasattr(module, "get_parcel_geometry"))
         self.assertIn("ar", state_service_registry.supported_state_codes())
 
+    def test_state_service_registry_resolves_runtime_backed_wi(self) -> None:
+        service = state_service_registry.get_state_service("wi")
+
+        self.assertTrue(hasattr(service, "get_leads"))
+        self.assertTrue(hasattr(service, "get_parcel_geometry"))
+        self.assertEqual(service.state_code, "wi")
+        self.assertIn("wi", state_service_registry.supported_state_codes())
+
+    def test_state_service_registry_resolves_runtime_backed_ct(self) -> None:
+        service = state_service_registry.get_state_service("ct")
+
+        self.assertTrue(hasattr(service, "get_leads"))
+        self.assertTrue(hasattr(service, "get_parcel_geometry"))
+        self.assertEqual(service.state_code, "ct")
+        self.assertIn("ct", state_service_registry.supported_state_codes())
+
+    def test_blocked_registry_entries_are_not_supported_runtime_states(self) -> None:
+        self.assertNotIn("ut", state_service_registry.supported_state_codes())
+
 
 if __name__ == "__main__":
     unittest.main()

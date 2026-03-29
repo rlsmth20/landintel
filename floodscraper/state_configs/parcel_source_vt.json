@@ -1,0 +1,86 @@
+{
+  "state_code": "vt",
+  "state_name": "Vermont",
+  "status": "mvp_active",
+  "parcel_sources": [
+    {
+      "source_name": "vermont_vcgi_parcels_grand_list",
+      "primary": true,
+      "service_type": "arcgis_feature_layer",
+      "service_url": "https://services1.arcgis.com/BkFxaEFNwHqX3tAw/arcgis/rest/services/FS_VCGI_VTPARCELS_WM_NOCACHE_v2/FeatureServer/1",
+      "object_id_field": "OBJECTID",
+      "max_object_ids_per_query": 250,
+      "geometry_out_fields": "OBJECTID,GLIST_SPAN,SPAN,TNAME",
+      "attribute_out_fields": [
+        "OBJECTID",
+        "SPAN",
+        "GLIST_SPAN",
+        "MAPID",
+        "PARCID",
+        "PROPTYPE",
+        "TNAME",
+        "OWNER1",
+        "E911ADDR",
+        "ACRESGL",
+        "REAL_FLV",
+        "LAND_LV",
+        "IMPRV_LV",
+        "SHAPE__Area",
+        "SHAPE__Length"
+      ],
+      "runtime_builder": {
+        "profile": "statewide_arcgis_parcel_mvp_v1",
+        "source_name": "Vermont VCGI statewide parcel layer",
+        "source_confidence_tier": "high",
+        "county_source_coverage_tier": "statewide_primary",
+        "source_warning": "Vermont MVP uses the official statewide parcel layer with town-based partitions, selected-lead centroid backfill, and proxy geometry metrics from statewide area/perimeter fields.",
+        "coordinate_mode": "selected_return_centroid",
+        "batch_size_hint": 2000,
+        "field_map": {
+          "source_object_id": "OBJECTID",
+          "parcel_id_fields": [
+            "GLIST_SPAN",
+            "SPAN",
+            "MAPID",
+            "PARCID"
+          ],
+          "county_name": "TNAME",
+          "county_fips": {
+            "field": "SPAN",
+            "split": "-",
+            "index": 0
+          },
+          "owner_name": "OWNER1",
+          "site_address": "E911ADDR",
+          "land_use": "PROPTYPE",
+          "assessed_total_value": "REAL_FLV",
+          "assessed_land_value": "LAND_LV",
+          "assessed_improvement_value": "IMPRV_LV",
+          "acreage": "ACRESGL",
+          "area_square_meters": "SHAPE__Area",
+          "perimeter_meters": "SHAPE__Length"
+        },
+        "parcel_id_null_values": [
+          "",
+          "0"
+        ],
+        "default_bounds": [
+          -73.45,
+          42.72,
+          -71.47,
+          45.05
+        ],
+        "notes": [
+          "Vermont is town-based in the first MVP pass because the official statewide grand-list parcel layer is organized by municipality rather than county.",
+          "The runtime prefers GLIST_SPAN as the statewide parcel identifier and derives the local division code from the SPAN prefix."
+        ],
+        "parcel_pmtiles_ready": true
+      },
+      "license": "official_statewide_parcel_service",
+      "notes": [
+        "Official Vermont statewide parcel layer published by VCGI through ArcGIS Online.",
+        "First MVP runtime uses selected-lead centroid backfill rather than storing statewide point coordinates."
+      ]
+    }
+  ]
+}

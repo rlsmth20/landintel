@@ -1,0 +1,59 @@
+{
+  "state_code": "ct",
+  "state_name": "Connecticut",
+  "county_division_label": "town",
+  "artifact_roots": {
+    "parcels": "data/parcels/ct",
+    "runtime": "data/runtime/ct",
+    "review": "data/review/ct",
+    "training": "data/training/ct"
+  },
+  "legacy_paths": {
+    "parcel_master": "data/parcels/ct/ct_parcels_master.parquet",
+    "app_ready_leads": "data/tax_published/ct/app_ready_ct_leads.parquet",
+    "runtime_parcel_index": "data/runtime/ct/parcel_index",
+    "runtime_detail_metrics": "data/runtime/ct/parcel_detail_metrics.parquet",
+    "runtime_summary": "data/runtime/ct/summary.json",
+    "runtime_presets": "data/runtime/ct/presets.json",
+    "runtime_default_leads": "data/runtime/ct/default_leads.json",
+    "runtime_default_geometry": "data/runtime/ct/default_geometry.json",
+    "frontend_detail_fallback": "frontend/public/data/ct_lead_detail_fallback.json",
+    "frontend_meta": "frontend/public/data/ct_lead_explorer_meta.json",
+    "frontend_static_feed": "frontend/public/data/ct_lead_explorer.json",
+    "frontend_parcel_pmtiles": "frontend/public/tiles/ct_parcels.pmtiles",
+    "geometry_quality_artifact": "data/parcels/ct/ct_parcel_geometry_quality.parquet",
+    "geometry_quality_summary": "data/parcels/ct/ct_parcel_geometry_quality_summary.json"
+  },
+  "parcel_tiles": {
+    "build_source": "parcel_master",
+    "layer": "parcels",
+    "min_zoom": 7,
+    "max_zoom": 15,
+    "frontend_url": "/tiles/ct_parcels.pmtiles",
+    "public_url": "https://pub-f5f866f9a229419696c3066b960daae4.r2.dev/tiles/ct_parcels.pmtiles",
+    "geometry_strategy": "live_arcgis_app_ready_geometry_cache",
+    "geometry_cache_path": "data/parcels/ct/ct_app_ready_parcel_tile_features.parquet",
+    "summary_output": "data/runtime/ct/parcel_pmtiles_build_summary.json",
+    "publish_manifest_output": "data/runtime/ct/parcel_pmtiles_publish_manifest.json",
+    "cloudflare_object_key": "tiles/ct_parcels.pmtiles"
+  },
+  "source_registry_paths": {
+    "parcel_source": "floodscraper/state_configs/parcel_source_ct.json",
+    "tax_source": "floodscraper/state_configs/tax_source_ct.json",
+    "tax_linkage": "floodscraper/state_configs/tax_linkage_ct.json"
+  },
+  "schema_mapping_templates": {
+    "parcel_schema_mapping": "config/states/ct_parcel_schema_mapping.json"
+  },
+  "notes": {
+    "bootstrap_status": "mvp_runtime_ready",
+    "reference_state": "ms",
+    "mvp_scope": [
+      "official Connecticut statewide parcel master from the 2023 state parcel layer",
+      "town-based runtime/default leads/frontend fallback artifacts",
+      "selected-lead centroids backfilled from the live ArcGIS service",
+      "full statewide parcel PMTiles overlay from live polygon fetches against the parcel master",
+      "no tax-source linkage in the first Connecticut pass"
+    ]
+  }
+}

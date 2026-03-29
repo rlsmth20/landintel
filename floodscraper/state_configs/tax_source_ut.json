@@ -1,0 +1,9 @@
+{
+  "state_code": "ut",
+  "state_name": "Utah",
+  "status": "blocked_source_validation",
+  "tax_sources": [],
+  "notes": [
+    "Utah tax-source work is deferred until a true statewide parcel base is validated."
+  ]
+}

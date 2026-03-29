@@ -4,6 +4,7 @@ import json
 import math
 import os
 import sys
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
@@ -13,7 +14,8 @@ import numpy as np
 import pandas as pd
 import pyarrow.dataset as ds
 import requests
-from shapely.geometry import shape
+from shapely import wkb
+from shapely.geometry import mapping, shape
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -38,6 +40,7 @@ from state_registry import load_state_definition  # noqa: E402
 
 EARTH_RADIUS_MILES = 3958.7613
 DEFAULT_NEARBY_RADIUS_MILES = 3.0
+logger = logging.getLogger("state-geometry")
 
 
 def _normalize_string(value: Any) -> str | None:
@@ -158,6 +161,12 @@ class RuntimeStateService:
         return ds.dataset(target, format="parquet")
 
     @lru_cache(maxsize=1)
+    def _parcel_master_dataset(self) -> ds.Dataset:
+        if not self.artifacts.parcel_master_path.exists():
+            raise FileNotFoundError(f"State parcel master dataset not found: {self.artifacts.parcel_master_path}")
+        return ds.dataset(self.artifacts.parcel_master_path, format="parquet")
+
+    @lru_cache(maxsize=1)
     def _search_frame(self) -> pd.DataFrame:
         dataset = self._app_ready_dataset()
         available_columns = [column for column in SEARCH_SOURCE_FIELDS + ["latitude", "longitude"] if column in dataset.schema.names]
@@ -172,6 +181,22 @@ class RuntimeStateService:
         if registry_path is None or not registry_path.exists():
             return {}
         return json.loads(registry_path.read_text(encoding="utf-8"))
+
+    def _geometry_cache_path(self) -> Path | None:
+        configured = self.definition.raw.get("parcel_tiles", {}).get("geometry_cache_path")
+        if not configured:
+            return None
+        candidate = Path(str(configured))
+        if not candidate.is_absolute():
+            candidate = PROJECT_ROOT / candidate
+        return candidate
+
+    @lru_cache(maxsize=1)
+    def _geometry_cache_dataset(self) -> ds.Dataset | None:
+        cache_path = self._geometry_cache_path()
+        if cache_path is None or not cache_path.exists():
+            return None
+        return ds.dataset(cache_path, format="parquet")
 
     def _primary_arcgis_source(self) -> dict[str, Any] | None:
         registry = self._parcel_source_registry()
@@ -189,13 +214,13 @@ class RuntimeStateService:
     def _detail_row(self, parcel_row_id: str) -> pd.Series | None:
         return self._dataset_row(self._detail_dataset(), parcel_row_id)
 
-    def _base_row(self, parcel_row_id: str) -> pd.Series | None:
-        return self._dataset_row(self._app_ready_dataset(), parcel_row_id)
+    def _parcel_master_row(self, parcel_row_id: str) -> pd.Series | None:
+        return self._dataset_row(self._parcel_master_dataset(), parcel_row_id)
 
     def _row_for_parcel(self, parcel_row_id: str) -> pd.Series | None:
         row = self._detail_row(parcel_row_id)
         if row is None:
-            row = self._base_row(parcel_row_id)
+            row = self._parcel_master_row(parcel_row_id)
         return row
 
     def _query_frame(self, *, columns: list[str], filter_expression: ds.Expression | None = None) -> pd.DataFrame:
@@ -205,28 +230,120 @@ class RuntimeStateService:
             return pd.DataFrame(columns=columns)
         return dataset.to_table(columns=available_columns, filter=filter_expression).to_pandas()
 
-    def _source_geometry_geojson(self, source_object_id: int | str) -> dict[str, Any] | None:
+    def _cached_geometry_geojson(
+        self,
+        parcel_row_id: str,
+        *,
+        source_object_id: int | str | None = None,
+    ) -> dict[str, Any] | None:
+        dataset = self._geometry_cache_dataset()
+        if dataset is None:
+            return None
+        available_columns = [
+            column
+            for column in ["parcel_row_id", "parcel_id", "county_name", "source_object_id", "geometry_wkb"]
+            if column in dataset.schema.names
+        ]
+        if "geometry_wkb" not in available_columns:
+            return None
+        table = dataset.to_table(columns=available_columns, filter=ds.field("parcel_row_id") == parcel_row_id)
+        if table.num_rows == 0 and source_object_id is not None and "source_object_id" in dataset.schema.names:
+            try:
+                object_id_value = int(float(source_object_id))
+            except Exception:
+                object_id_value = None
+            if object_id_value is not None:
+                table = dataset.to_table(columns=available_columns, filter=ds.field("source_object_id") == object_id_value)
+        if table.num_rows == 0:
+            return None
+        record = table.to_pandas().iloc[0]
+        geometry_bytes = record.get("geometry_wkb")
+        if geometry_bytes is None:
+            return None
+        geometry_shape = wkb.loads(bytes(geometry_bytes))
+        return {
+            "type": "Feature",
+            "geometry": mapping(geometry_shape),
+            "properties": {
+                "parcel_row_id": _normalize_string(record.get("parcel_row_id")),
+                "parcel_id": _normalize_string(record.get("parcel_id")),
+                "county_name": _normalize_string(record.get("county_name")),
+                "source_object_id": _json_scalar(record.get("source_object_id")),
+            },
+        }
+
+    def _source_geometry_geojson(
+        self,
+        source_object_id: int | str,
+        *,
+        parcel_row_id: str | None = None,
+        parcel_id: str | None = None,
+    ) -> dict[str, Any] | None:
         source = self._primary_arcgis_source()
         if source is None:
+            logger.warning(
+                "State geometry source missing state=%s parcel_row_id=%s parcel_id=%s source_object_id=%s",
+                self.state_code,
+                parcel_row_id,
+                parcel_id,
+                source_object_id,
+            )
             return None
         query_url = str(source["service_url"]).rstrip("/") + "/query"
-        object_id_field = str(source.get("object_id_field", "objectid"))
         out_fields = str(source.get("geometry_out_fields", "objectid,countyfips,county,parcelid"))
+        object_id_value = int(float(source_object_id))
+        params = {
+            "objectIds": str(object_id_value),
+            "outFields": out_fields,
+            "returnGeometry": "true",
+            "outSR": "4326",
+            "f": "geojson",
+        }
+        logger.info(
+            "State geometry ArcGIS request state=%s parcel_row_id=%s parcel_id=%s source_object_id=%s url=%s params=%s",
+            self.state_code,
+            parcel_row_id,
+            parcel_id,
+            object_id_value,
+            query_url,
+            params,
+        )
         response = self._http.get(
             query_url,
-            params={
-                "where": f"{object_id_field}={int(source_object_id)}",
-                "outFields": out_fields,
-                "returnGeometry": "true",
-                "outSR": "4326",
-                "f": "geojson",
-            },
+            params=params,
             timeout=float(os.getenv("STATE_GEOMETRY_TIMEOUT_SECONDS", "20")),
         )
-        response.raise_for_status()
+        if not response.ok:
+            logger.error(
+                "State geometry ArcGIS error state=%s parcel_row_id=%s parcel_id=%s source_object_id=%s status=%s body=%s",
+                self.state_code,
+                parcel_row_id,
+                parcel_id,
+                object_id_value,
+                response.status_code,
+                response.text[:500],
+            )
+            response.raise_for_status()
+        logger.info(
+            "State geometry ArcGIS response state=%s parcel_row_id=%s parcel_id=%s source_object_id=%s status=%s url=%s",
+            self.state_code,
+            parcel_row_id,
+            parcel_id,
+            object_id_value,
+            response.status_code,
+            response.url,
+        )
         payload = response.json()
         features = payload.get("features", [])
         if not features:
+            logger.warning(
+                "State geometry ArcGIS empty state=%s parcel_row_id=%s parcel_id=%s source_object_id=%s body=%s",
+                self.state_code,
+                parcel_row_id,
+                parcel_id,
+                object_id_value,
+                response.text[:500],
+            )
             return None
         return features[0]
 
@@ -657,11 +774,60 @@ class RuntimeStateService:
             }
 
         geometry_feature = None
+        row_dict = row.to_dict()
+        parcel_id = _normalize_string(row.get("parcel_id"))
         source_object_id = row.get("source_object_id") or row.get("geometry_source_objectid")
-        if source_object_id is not None:
+        logger.info(
+            "State geometry request state=%s parcel_row_id=%s parcel_id=%s source_object_id=%s",
+            self.state_code,
+            parcel_row_id,
+            parcel_id,
+            source_object_id,
+        )
+        try:
+            geometry_feature = self._cached_geometry_geojson(parcel_row_id, source_object_id=source_object_id)
+            if geometry_feature is not None:
+                logger.info(
+                    "State geometry cache hit state=%s parcel_row_id=%s parcel_id=%s source_object_id=%s",
+                    self.state_code,
+                    parcel_row_id,
+                    parcel_id,
+                    source_object_id,
+                )
+            else:
+                logger.info(
+                    "State geometry cache miss state=%s parcel_row_id=%s parcel_id=%s source_object_id=%s cache_path=%s",
+                    self.state_code,
+                    parcel_row_id,
+                    parcel_id,
+                    source_object_id,
+                    self._geometry_cache_path(),
+                )
+        except Exception:
+            logger.exception(
+                "State geometry cache lookup failed state=%s parcel_row_id=%s parcel_id=%s source_object_id=%s",
+                self.state_code,
+                parcel_row_id,
+                parcel_id,
+                source_object_id,
+            )
+            geometry_feature = None
+
+        if geometry_feature is None and source_object_id is not None:
             try:
-                geometry_feature = self._source_geometry_geojson(source_object_id)
+                geometry_feature = self._source_geometry_geojson(
+                    source_object_id,
+                    parcel_row_id=parcel_row_id,
+                    parcel_id=parcel_id,
+                )
             except Exception:
+                logger.exception(
+                    "State geometry live fetch failed state=%s parcel_row_id=%s parcel_id=%s source_object_id=%s",
+                    self.state_code,
+                    parcel_row_id,
+                    parcel_id,
+                    source_object_id,
+                )
                 geometry_feature = None
 
         if geometry_feature is None and pd.notna(row.get("longitude")) and pd.notna(row.get("latitude")):
@@ -683,7 +849,7 @@ class RuntimeStateService:
                 {
                     "type": "Feature",
                     "geometry": geometry_object,
-                    "properties": self._geometry_feature_properties(row.to_dict(), selected=True),
+                    "properties": self._geometry_feature_properties(row_dict, selected=True),
                 }
             ]
             try:
@@ -696,7 +862,7 @@ class RuntimeStateService:
                 else None
             )
 
-        items = [self._geometry_item(row.to_dict())]
+        items = [self._geometry_item(row_dict)]
         validate_output_records(
             [feature["properties"] for feature in features],
             expected_fields=GEOMETRY_FEATURE_PROPERTY_FIELDS,
@@ -713,7 +879,13 @@ class RuntimeStateService:
         )
         return {
             "geometry_mode": "selected_parcel_geojson",
-            "render_mode": "polygons" if features and features[0]["geometry"] and features[0]["geometry"].get("type") != "Point" else "points",
+            "render_mode": (
+                "polygons"
+                if features and features[0]["geometry"] and features[0]["geometry"].get("type") != "Point"
+                else "points"
+                if features
+                else "none"
+            ),
             "geometry_bounds": bounds_payload,
             "geometry_view_box": None,
             "requested_bounds": None,

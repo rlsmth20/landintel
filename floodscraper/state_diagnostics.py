@@ -36,6 +36,62 @@ def _safe_json(path: Path) -> dict[str, Any] | None:
         return None
 
 
+def _safe_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _coverage_label(*, numerator: int | None, denominator: int | None) -> str | None:
+    if numerator is None or denominator is None or denominator <= 0:
+        return None
+    return "full" if numerator >= denominator else "subset"
+
+
+def _configured_tile_coverage(build_source: str | None) -> str:
+    return "full" if str(build_source or "").strip().lower() == "parcel_master" else "subset"
+
+
+def _geometry_source_type(*, state_code: str, tile_summary: dict[str, Any] | None, tile_config: dict[str, Any], tile_artifact_exists: bool) -> str:
+    if state_code == "ms":
+        return "local cached"
+    strategy = str((tile_summary or {}).get("geometry_strategy") or tile_config.get("geometry_strategy") or "").strip().lower()
+    if "local" in strategy:
+        return "local cached"
+    if "arcgis" in strategy or tile_artifact_exists:
+        return "mixed"
+    return "remote fetch"
+
+
+def _blocker_reason(
+    *,
+    state_code: str,
+    tile_artifact_exists: bool,
+    tile_coverage: str | None,
+    geometry_coverage: str | None,
+    tile_summary: dict[str, Any] | None,
+    tile_config: dict[str, Any],
+) -> str | None:
+    if tile_artifact_exists and tile_coverage == "full" and geometry_coverage == "full":
+        return None
+    build_source = str((tile_summary or {}).get("build_source") or tile_config.get("build_source") or "").strip().lower()
+    if build_source and build_source != "parcel_master":
+        return "Parcel overlay is still built from an app_ready or other subset dataset instead of the statewide parcel master."
+    if tile_summary and tile_summary.get("geometry_blocker_reason"):
+        return str(tile_summary["geometry_blocker_reason"])
+    remaining_missing = (tile_summary or {}).get("geometry_remaining_missing_count")
+    if remaining_missing:
+        return f"{int(remaining_missing):,} parcel rows are still missing usable geometry in the parcel overlay cache."
+    if state_code == "ny":
+        return "The current official statewide source is centroid-only; polygon coverage is source-limited unless a hybrid or alternate polygon source is added."
+    if not tile_artifact_exists:
+        return "Statewide parcel overlay artifact is not built yet."
+    return "Statewide parcel geometry coverage is still below parcel-master row count."
+
+
 def _schema_mapping_summary(path: Path | None) -> dict[str, Any] | None:
     if path is None or not path.exists():
         return None
@@ -148,13 +204,17 @@ def build_state_diagnostics(state_code: str) -> dict[str, Any]:
     }
 
     parcel_master = definition.legacy_path("parcel_master") or artifacts.parcel_master_path
+    parcel_master_row_count = None
     if parcel_master.exists():
-        diagnostics["parcel_master_row_count"] = _safe_row_count(parcel_master)
+        parcel_master_row_count = _safe_row_count(parcel_master)
+        diagnostics["parcel_master_row_count"] = parcel_master_row_count
         diagnostics["parcel_master_county_coverage"] = _county_coverage_summary(parcel_master)
 
     app_ready = definition.legacy_path("app_ready_leads") or artifacts.app_ready_path
+    app_ready_row_count = None
     if app_ready.exists():
-        diagnostics["app_ready_row_count"] = _safe_row_count(app_ready)
+        app_ready_row_count = _safe_row_count(app_ready)
+        diagnostics["app_ready_row_count"] = app_ready_row_count
         diagnostics["app_ready_county_coverage"] = _county_coverage_summary(app_ready)
 
     review_summary = definition.legacy_path("review_sample_summary") or artifacts.review_sample_summary_path
@@ -181,18 +241,97 @@ def build_state_diagnostics(state_code: str) -> dict[str, Any]:
         diagnostics["runtime_summary"] = runtime_payload
         diagnostics["marketability_summary"] = _marketability_summary(runtime_payload)
 
-    tile_summary_path = ROOT / str(definition.raw.get("parcel_tiles", {}).get("summary_output", ""))
-    tile_manifest_path = ROOT / str(definition.raw.get("parcel_tiles", {}).get("publish_manifest_output", ""))
+    source_alignment_path = artifacts.runtime_root / "source_alignment_audit.json"
+    source_alignment_payload = _safe_json(source_alignment_path)
+    if source_alignment_payload:
+        diagnostics["official_source_alignment"] = source_alignment_payload
+
+    tile_config = definition.raw.get("parcel_tiles", {})
+    tile_summary_path = ROOT / str(tile_config.get("summary_output", ""))
+    tile_manifest_path = ROOT / str(tile_config.get("publish_manifest_output", ""))
     tile_summary = _safe_json(tile_summary_path) if str(tile_summary_path) != str(ROOT) else None
     tile_manifest = _safe_json(tile_manifest_path) if str(tile_manifest_path) != str(ROOT) else None
+    configured_tile_coverage = _configured_tile_coverage(
+        tile_summary.get("build_source") if tile_summary and tile_summary.get("build_source") is not None else tile_config.get("build_source")
+    )
+    tile_artifact_exists = artifacts.frontend_parcel_pmtiles_path.exists()
+    tile_coverage = (
+        tile_summary.get("statewide_parcel_tile_coverage")
+        if tile_summary and tile_summary.get("statewide_parcel_tile_coverage") is not None
+        else (configured_tile_coverage if tile_artifact_exists else "subset")
+    )
+    geometry_coverage = (
+        tile_summary.get("statewide_geometry_coverage")
+        if tile_summary and tile_summary.get("statewide_geometry_coverage") is not None
+        else (configured_tile_coverage if tile_artifact_exists else "subset")
+    )
+    map_shows_all_parcels = bool(tile_artifact_exists and tile_coverage == "full" and geometry_coverage == "full")
+    geometry_source_type = _geometry_source_type(
+        state_code=state_code,
+        tile_summary=tile_summary,
+        tile_config=tile_config,
+        tile_artifact_exists=tile_artifact_exists,
+    )
+    blocker_reason = _blocker_reason(
+        state_code=state_code,
+        tile_artifact_exists=tile_artifact_exists,
+        tile_coverage=tile_coverage,
+        geometry_coverage=geometry_coverage,
+        tile_summary=tile_summary,
+        tile_config=tile_config,
+    )
+    official_source_row_count = _safe_int((source_alignment_payload or {}).get("official_source_row_count"))
+    official_county_count = _safe_int((source_alignment_payload or {}).get("official_county_count"))
+    canonical_county_coverage = (source_alignment_payload or {}).get("canonical_county_coverage")
+    missing_counties = list((source_alignment_payload or {}).get("missing_counties") or [])
+    partial_counties = list((source_alignment_payload or {}).get("partial_counties") or [])
+    if canonical_county_coverage != "full" and official_source_row_count and parcel_master_row_count and parcel_master_row_count < official_source_row_count:
+        missing_rows = int(official_source_row_count - parcel_master_row_count)
+        county_gap_count = int(len(missing_counties) + len(partial_counties))
+        blocker_reason = (
+            f"Local parcel master is short by {missing_rows:,} rows versus the live official statewide source"
+            f"{f' and still has {county_gap_count} counties with missing or partial coverage' if county_gap_count else ''}."
+        )
     diagnostics["parcel_tile_artifact"] = {
         "path": str(artifacts.frontend_parcel_pmtiles_path),
-        "exists": artifacts.frontend_parcel_pmtiles_path.exists(),
-        "size_bytes": artifacts.frontend_parcel_pmtiles_path.stat().st_size if artifacts.frontend_parcel_pmtiles_path.exists() else None,
-        "frontend_url": definition.raw.get("parcel_tiles", {}).get("frontend_url"),
+        "exists": tile_artifact_exists,
+        "size_bytes": artifacts.frontend_parcel_pmtiles_path.stat().st_size if tile_artifact_exists else None,
+        "frontend_url": tile_config.get("frontend_url"),
+        "public_url": tile_config.get("public_url"),
+        "statewide_parcel_tile_coverage": tile_coverage,
+        "statewide_geometry_coverage": geometry_coverage,
+        "map_shows_all_parcels": map_shows_all_parcels,
+        "geometry_source_type": geometry_source_type,
+        "blocker_reason": blocker_reason,
         "build_summary": tile_summary,
         "publish_manifest": tile_manifest,
     }
+
+    runtime_detail_row_count = None
+    runtime_detail_path = definition.legacy_path("runtime_detail_metrics") or artifacts.runtime_detail_metrics_path
+    if runtime_detail_path.exists():
+        runtime_detail_row_count = _safe_row_count(runtime_detail_path)
+    diagnostics["statewide_parcel_base"] = {
+        "row_count": parcel_master_row_count,
+        "coverage": canonical_county_coverage or _coverage_label(numerator=parcel_master_row_count, denominator=official_source_row_count) or ("full" if parcel_master_row_count else None),
+        "official_source_row_count": official_source_row_count,
+        "official_source_county_count": official_county_count,
+        "raw_source_row_gap": official_source_row_count - parcel_master_row_count if official_source_row_count and parcel_master_row_count else None,
+    }
+    diagnostics["statewide_parcel_tile_coverage"] = tile_coverage
+    diagnostics["statewide_geometry_coverage"] = geometry_coverage
+    diagnostics["app_ready_default_lead_row_count"] = app_ready_row_count
+    diagnostics["lead_coverage"] = _coverage_label(numerator=app_ready_row_count, denominator=parcel_master_row_count)
+    diagnostics["map_shows_all_parcels"] = map_shows_all_parcels
+    diagnostics["geometry_source_type"] = geometry_source_type
+    diagnostics["blocker_reason"] = blocker_reason
+    diagnostics["runtime_parcel_detail_coverage"] = (
+        "full"
+        if parcel_master_row_count and runtime_detail_row_count and runtime_detail_row_count >= parcel_master_row_count
+        else "full"
+        if parcel_master_row_count and state_code != "ms"
+        else _coverage_label(numerator=runtime_detail_row_count, denominator=parcel_master_row_count)
+    )
 
     return diagnostics
 

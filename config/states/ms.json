@@ -56,6 +56,7 @@
     "min_zoom": 6,
     "max_zoom": 15,
     "frontend_url": "/tiles/mississippi_parcels.pmtiles",
+    "public_url": "https://pub-f5f866f9a229419696c3066b960daae4.r2.dev/tiles/mississippi_parcels.pmtiles",
     "geometry_strategy": "local_parcel_master_geometry",
     "summary_output": "backend/runtime/mississippi/parcel_pmtiles_build_summary.json",
     "publish_manifest_output": "backend/runtime/mississippi/parcel_pmtiles_publish_manifest.json",

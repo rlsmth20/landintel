@@ -1,0 +1,59 @@
+{
+  "state_code": "ny",
+  "state_name": "New York",
+  "county_division_label": "county",
+  "artifact_roots": {
+    "parcels": "data/parcels/ny",
+    "runtime": "data/runtime/ny",
+    "review": "data/review/ny",
+    "training": "data/training/ny"
+  },
+  "legacy_paths": {
+    "parcel_master": "data/parcels/ny/ny_parcels_master.parquet",
+    "app_ready_leads": "data/tax_published/ny/app_ready_ny_leads.parquet",
+    "runtime_parcel_index": "data/runtime/ny/parcel_index",
+    "runtime_detail_metrics": "data/runtime/ny/parcel_detail_metrics.parquet",
+    "runtime_summary": "data/runtime/ny/summary.json",
+    "runtime_presets": "data/runtime/ny/presets.json",
+    "runtime_default_leads": "data/runtime/ny/default_leads.json",
+    "runtime_default_geometry": "data/runtime/ny/default_geometry.json",
+    "frontend_detail_fallback": "frontend/public/data/ny_lead_detail_fallback.json",
+    "frontend_meta": "frontend/public/data/ny_lead_explorer_meta.json",
+    "frontend_static_feed": "frontend/public/data/ny_lead_explorer.json",
+    "frontend_parcel_pmtiles": "frontend/public/tiles/ny_parcels.pmtiles",
+    "geometry_quality_artifact": "data/parcels/ny/ny_parcel_geometry_quality.parquet",
+    "geometry_quality_summary": "data/parcels/ny/ny_parcel_geometry_quality_summary.json"
+  },
+  "parcel_tiles": {
+    "build_source": "parcel_master",
+    "layer": "parcels",
+    "min_zoom": 7,
+    "max_zoom": 15,
+    "frontend_url": "/tiles/ny_parcels.pmtiles",
+    "public_url": "https://pub-f5f866f9a229419696c3066b960daae4.r2.dev/tiles/ny_parcels.pmtiles",
+    "geometry_strategy": "paged_arcgis_centroid_point_cache",
+    "geometry_cache_path": "data/parcels/ny/ny_parcel_tile_features.parquet",
+    "summary_output": "data/runtime/ny/parcel_pmtiles_build_summary.json",
+    "publish_manifest_output": "data/runtime/ny/parcel_pmtiles_publish_manifest.json",
+    "cloudflare_object_key": "tiles/ny_parcels.pmtiles"
+  },
+  "source_registry_paths": {
+    "parcel_source": "floodscraper/state_configs/parcel_source_ny.json",
+    "tax_source": "floodscraper/state_configs/tax_source_ny.json",
+    "tax_linkage": "floodscraper/state_configs/tax_linkage_ny.json"
+  },
+  "schema_mapping_templates": {
+    "parcel_schema_mapping": "config/states/ny_parcel_schema_mapping.json"
+  },
+  "notes": {
+    "bootstrap_status": "partial_runtime_only",
+    "reference_state": "ms",
+    "mvp_scope": [
+      "official New York statewide tax-parcel centroid runtime from state ArcGIS service",
+      "generic runtime/default leads/frontend fallback artifacts",
+      "full statewide parcel PMTiles overlay from the official statewide centroid source",
+      "polygon parcel geometry remains source-limited in the current official statewide feed",
+      "no tax-source linkage in first New York pass"
+    ]
+  }
+}

@@ -14,6 +14,13 @@ import build_frontend_detail_fallback_ar as frontend_fallback_ar  # noqa: E402
 
 
 class BuildFrontendDetailFallbackTests(unittest.TestCase):
+    def test_generic_entrypoint_dispatches_generic_state_module(self) -> None:
+        with mock.patch.object(sys, "argv", ["build_frontend_detail_fallback.py", "--state-code", "wi"]), mock.patch(
+            "build_frontend_detail_fallback.runpy.run_module"
+        ) as run_module:
+            frontend_fallback.main()
+        run_module.assert_called_once_with("build_frontend_detail_fallback_state", run_name="__main__")
+
     def test_generic_entrypoint_dispatches_arkansas_module(self) -> None:
         with mock.patch.object(sys, "argv", ["build_frontend_detail_fallback.py", "--state-code", "ar"]), mock.patch(
             "build_frontend_detail_fallback.runpy.run_module"

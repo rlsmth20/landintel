@@ -1,0 +1,9 @@
+{
+  "state_code": "vt",
+  "state_name": "Vermont",
+  "status": "stub_not_configured",
+  "linkage_rules": [],
+  "notes": [
+    "No tax-linkage rules are configured in the first Vermont MVP pass."
+  ]
+}

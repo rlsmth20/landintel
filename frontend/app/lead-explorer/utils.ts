@@ -7,6 +7,11 @@ type TableColumnDefinition = {
   sortField?: "lead_score_total" | "acreage" | "delinquent_amount" | "road_distance_ft";
 };
 
+function titleCase(value: string) {
+  const normalized = typeof value === "string" && value.trim().length > 0 ? value.trim() : "county";
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
 export const PRESET_LABELS: Record<string, string> = {
   safest_early_investor_use: "Safest Outreach",
   vacant_land_targeting: "Vacant Buildable",
@@ -155,6 +160,32 @@ export const TABLE_COLUMNS: TableColumnDefinition[] = [
     tooltip: "The main factor currently pushing the parcel toward the top of the ranked view.",
   },
 ] as const;
+
+export function getTableColumns(countyDivisionLabel = "county"): TableColumnDefinition[] {
+  const divisionTitle = titleCase(countyDivisionLabel);
+  return TABLE_COLUMNS.map((column) => {
+    if (column.key === "county") {
+      return {
+        ...column,
+        label: divisionTitle,
+        tooltip: `The ${countyDivisionLabel} or local division where the parcel is located.`,
+      };
+    }
+    if (column.key === "parcel_id") {
+      return {
+        ...column,
+        tooltip: `The ${countyDivisionLabel} parcel identifier used for parcel-level lookup and review.`,
+      };
+    }
+    if (column.key === "source_confidence_tier") {
+      return {
+        ...column,
+        tooltip: "An overall confidence tier for the parcel's motivation and signal data.",
+      };
+    }
+    return column;
+  });
+}
 
 export function formatNumber(value: number | null | undefined, digits = 0) {
   if (value === null || value === undefined || Number.isNaN(value)) return "-";

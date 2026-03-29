@@ -36,6 +36,11 @@ function LeadBadge({ label, tone }: { label: string; tone?: string }) {
   return <span className={`badge badge-${tone ?? "neutral"}`}>{label}</span>;
 }
 
+function titleCase(value: string) {
+  const normalized = typeof value === "string" && value.trim().length > 0 ? value.trim() : "county";
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
 function DetailSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="detail-section">
@@ -370,12 +375,14 @@ function NearbyCompsSection({
 
 export function LeadDetail({
   lead,
+  countyDivisionLabel = "county",
   nearbyComps = null,
   nearbyCompsLoading = false,
   nearbyCompsError = null,
   onSelectComp = null,
 }: {
   lead: LeadRecord;
+  countyDivisionLabel?: string;
   nearbyComps?: NearbyCompsResponse | null;
   nearbyCompsLoading?: boolean;
   nearbyCompsError?: string | null;
@@ -384,11 +391,13 @@ export function LeadDetail({
   const parcelIdValue = getDisplayedParcelId(lead);
   const leadTier = humanizeValue(lead.lead_score_tier) ?? "-";
   const taxFreshness = formatTaxFreshness(lead);
+  const countyDivisionTitle = titleCase(countyDivisionLabel);
+  const divisionCodeLabel = countyDivisionLabel === "county" ? "County FIPS" : `${countyDivisionTitle} code`;
 
   return (
     <div className="detail-scroll">
       <div className="detail-header">
-        <p className="eyebrow">{lead.county_name} parcel intelligence record</p>
+        <p className="eyebrow">{lead.county_name} {countyDivisionLabel} parcel intelligence record</p>
         <h3>{parcelIdValue}</h3>
         <div className="inline-badges">
           <LeadBadge label={leadTier} tone="good" />
@@ -398,7 +407,7 @@ export function LeadDetail({
 
       <DetailSection title="Overview">
         <DetailRow label="Parcel ID" value={parcelIdValue} />
-        <DetailRow label="County" value={lead.county_name} />
+        <DetailRow label={countyDivisionTitle} value={lead.county_name} />
         <DetailRow label="Acreage" value={formatNumber(lead.acreage, 2)} />
         <DetailRow label="Land use" value={lead.land_use} />
         <DetailRow label="Lead score" value={formatNumber(lead.lead_score_total, 2)} />
@@ -454,7 +463,7 @@ export function LeadDetail({
       <DetailDisclosure title="Advanced details">
         <DetailSection title="Identifiers & Tax Data">
           <DetailRow label="Parcel row ID" value={lead.parcel_row_id} />
-          <DetailRow label="County FIPS" value={lead.county_fips} />
+          <DetailRow label={divisionCodeLabel} value={lead.county_fips} />
           <DetailRow label="Acreage bucket" value={lead.acreage_bucket} />
           <DetailRow label="Assessed total value" value={formatCurrency(lead.assessed_total_value)} />
           <DetailRow label="Parcel tax status" value={lead.parcel_tax_status} />
