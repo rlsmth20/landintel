@@ -2,7 +2,7 @@
 
 import "maplibre-gl/dist/maplibre-gl.css";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 import maplibregl, { GeoJSONSource, LngLatBoundsLike, Map } from "maplibre-gl";
 import { PMTiles, Protocol } from "pmtiles";
 
@@ -26,6 +26,18 @@ const DEFAULT_PARCEL_TILE_MIN_ZOOM = 10;
 const POINT_GEOMETRY_FILTER: maplibregl.FilterSpecification = ["any", ["==", ["geometry-type"], "Point"], ["==", ["geometry-type"], "MultiPoint"]];
 let pmtilesProtocol: Protocol | null = null;
 let pmtilesArchiveUrl: string | null = null;
+const PARCEL_INTERACTIVE_LAYER_IDS = ["parcel-points", "parcel-fills"] as const;
+const PARCEL_LAYER_IDS = [
+  "parcel-hover",
+  "parcel-point-hover",
+  "parcel-flood-overlay",
+  "parcel-road-overlay",
+  "parcel-wetlands-overlay",
+  "parcel-points",
+  "parcel-lines",
+  "parcel-fills",
+] as const;
+const SELECTED_LAYER_IDS = ["selected-parcel-point", "selected-parcel-line", "selected-parcel-fill"] as const;
 
 function toStateBounds(defaultBounds: [number, number, number, number]): [[number, number], [number, number]] {
   return [
@@ -104,6 +116,47 @@ function toMapBounds(bounds: [number, number, number, number]): LngLatBoundsLike
 function updateLayerVisibility(map: Map, layerId: string, visible: boolean) {
   if (!map.getLayer(layerId)) return;
   map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none");
+}
+
+function removeLayerIfPresent(map: Map, layerId: string) {
+  if (map.getLayer(layerId)) {
+    map.removeLayer(layerId);
+  }
+}
+
+function removeSourceIfPresent(map: Map, sourceId: string) {
+  if (map.getSource(sourceId)) {
+    map.removeSource(sourceId);
+  }
+}
+
+function emptyFeatureCollection(): FeatureCollectionPayload {
+  return {
+    type: "FeatureCollection",
+    features: [],
+  };
+}
+
+function applyLayerVisibility(map: Map, basemapMode: BasemapMode, activeOverlays: MapOverlayId[]) {
+  updateLayerVisibility(map, "street-base", basemapMode === "street");
+  updateLayerVisibility(map, "satellite-base", basemapMode === "satellite");
+  updateLayerVisibility(map, "parcel-fills", activeOverlays.includes("parcels"));
+  updateLayerVisibility(map, "parcel-lines", activeOverlays.includes("parcels"));
+  updateLayerVisibility(map, "parcel-points", activeOverlays.includes("parcels"));
+  updateLayerVisibility(map, "parcel-hover", activeOverlays.includes("parcels"));
+  updateLayerVisibility(map, "parcel-point-hover", activeOverlays.includes("parcels"));
+  updateLayerVisibility(map, "selected-parcel-fill", activeOverlays.includes("parcels"));
+  updateLayerVisibility(map, "selected-parcel-line", activeOverlays.includes("parcels"));
+  updateLayerVisibility(map, "selected-parcel-point", activeOverlays.includes("parcels"));
+  updateLayerVisibility(map, "parcel-wetlands-overlay", activeOverlays.includes("wetlands"));
+  updateLayerVisibility(map, "parcel-road-overlay", activeOverlays.includes("road_access"));
+  updateLayerVisibility(map, "parcel-flood-overlay", activeOverlays.includes("fema_flood"));
+}
+
+function teardownParcelLayers(map: Map) {
+  [...PARCEL_LAYER_IDS, ...SELECTED_LAYER_IDS].forEach((layerId) => removeLayerIfPresent(map, layerId));
+  removeSourceIfPresent(map, PARCEL_TILE_SOURCE_ID);
+  removeSourceIfPresent(map, SELECTED_PARCEL_SOURCE_ID);
 }
 
 function initializeParcelLayers(
@@ -318,9 +371,19 @@ export function LeadMap({
     [activeState.parcelPmtilesMinZoom],
   );
   const hasParcelTileArchive = Boolean(getParcelPmtilesUrl(activeState.parcelPmtilesUrl));
+  const initialViewportRef = useRef(viewport);
+  const initialMapConfigRef = useRef({
+    stateCode,
+    parcelPmtilesUrl: activeState.parcelPmtilesUrl,
+    parcelTileMinZoom,
+    basemapMode,
+    activeOverlays,
+    defaultStateBounds,
+  });
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<Map | null>(null);
   const hoveredFeatureIdRef = useRef<string | null>(null);
+  const configuredStateCodeRef = useRef<string | null>(null);
   const hasInitializedViewportRef = useRef(false);
   const lastAppliedFitNonceRef = useRef<number>(-1);
   const lastLocateSelectedNonceRef = useRef<number>(-1);
@@ -337,82 +400,79 @@ export function LeadMap({
     () => selectedFeatureBounds(featureCollection, selectedParcelRowId),
     [featureCollection, selectedParcelRowId],
   );
+  const emitViewportChange = useEffectEvent((map: Map) => {
+    const currentBounds = map.getBounds();
+    onViewportChange({
+      center: [map.getCenter().lng, map.getCenter().lat],
+      zoom: map.getZoom(),
+      bounds: [currentBounds.getWest(), currentBounds.getSouth(), currentBounds.getEast(), currentBounds.getNorth()],
+    });
+  });
+  const handleParcelSelect = useEffectEvent((parcelRowId: string) => {
+    onSelect(parcelRowId);
+  });
 
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
+    const initialViewport = initialViewportRef.current;
+    const initialMapConfig = initialMapConfigRef.current;
+    if (process.env.NODE_ENV !== "production") {
+      console.debug("[landintel-map] mount", { stateCode: initialMapConfig.stateCode });
+    }
 
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
       style: BASE_STYLE,
-      center: viewport.center ?? DEFAULT_CENTER,
-      zoom: viewport.zoom ?? DEFAULT_ZOOM,
+      center: initialViewport.center ?? DEFAULT_CENTER,
+      zoom: initialViewport.zoom ?? DEFAULT_ZOOM,
     });
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "top-right");
     map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
     mapRef.current = map;
 
-    map.on("load", () => {
-      initializeParcelLayers(map, activeState.parcelPmtilesUrl, parcelTileMinZoom);
-
-      const clearHoveredFeature = () => {
-        if (hoveredFeatureIdRef.current) {
+    const clearHoveredFeature = () => {
+      if (hoveredFeatureIdRef.current) {
+        try {
           map.setFeatureState({ source: PARCEL_TILE_SOURCE_ID, sourceLayer: PARCEL_TILE_LAYER, id: hoveredFeatureIdRef.current }, { hover: false });
-          hoveredFeatureIdRef.current = null;
+        } catch {
+          // Layer/source can disappear during state reconfiguration.
         }
-        map.getCanvas().style.cursor = "";
-      };
-
-      if (map.getLayer("parcel-fills")) {
-        map.on("click", "parcel-fills", (event) => {
-          const feature = event.features?.[0];
-          const parcelRowId = getMapFeatureSelectionParcelRowId(feature);
-          if (parcelRowId) {
-            if (process.env.NODE_ENV !== "production") {
-              console.debug("[landintel-map] parcel click", { parcelRowId });
-            }
-            onSelect(parcelRowId);
-          }
-        });
-        map.on("mouseleave", "parcel-fills", clearHoveredFeature);
+        hoveredFeatureIdRef.current = null;
       }
+      map.getCanvas().style.cursor = "";
+    };
 
-      if (map.getLayer("parcel-points")) {
-        map.on("click", "parcel-points", (event) => {
-          const feature = event.features?.[0];
-          const parcelRowId = getMapFeatureSelectionParcelRowId(feature);
-          if (parcelRowId) {
-            if (process.env.NODE_ENV !== "production") {
-              console.debug("[landintel-map] parcel point click", { parcelRowId });
-            }
-            onSelect(parcelRowId);
-          }
-        });
-        map.on("mouseleave", "parcel-points", clearHoveredFeature);
+    const handleMapLoad = () => {
+      initializeParcelLayers(map, initialMapConfig.parcelPmtilesUrl, initialMapConfig.parcelTileMinZoom);
+      configuredStateCodeRef.current = initialMapConfig.stateCode;
+      applyLayerVisibility(map, initialMapConfig.basemapMode, initialMapConfig.activeOverlays);
+      emitViewportChange(map);
+    };
+
+    const handleMapClick = (event: maplibregl.MapMouseEvent & maplibregl.EventData) => {
+      const interactiveLayers = PARCEL_INTERACTIVE_LAYER_IDS.filter((layerId) => map.getLayer(layerId));
+      if (interactiveLayers.length === 0) return;
+      const feature = map.queryRenderedFeatures(event.point, { layers: [...interactiveLayers] })[0];
+      const parcelRowId = getMapFeatureSelectionParcelRowId(feature);
+      if (!parcelRowId) return;
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[landintel-map] parcel click", { parcelRowId });
       }
+      handleParcelSelect(parcelRowId);
+    };
 
-      const currentBounds = map.getBounds();
-      onViewportChange({
-        center: [map.getCenter().lng, map.getCenter().lat],
-        zoom: map.getZoom(),
-        bounds: [currentBounds.getWest(), currentBounds.getSouth(), currentBounds.getEast(), currentBounds.getNorth()],
-      });
-    });
+    map.fitBounds(initialMapConfig.defaultStateBounds, { padding: 28, duration: 0, maxZoom: 7.2 });
 
-    map.fitBounds(defaultStateBounds, { padding: 28, duration: 0, maxZoom: 7.2 });
+    const handleMapMoveEnd = () => emitViewportChange(map);
 
-    map.on("moveend", () => {
-      const currentBounds = map.getBounds();
-      onViewportChange({
-        center: [map.getCenter().lng, map.getCenter().lat],
-        zoom: map.getZoom(),
-        bounds: [currentBounds.getWest(), currentBounds.getSouth(), currentBounds.getEast(), currentBounds.getNorth()],
-      });
-    });
-
-    map.on("mousemove", (event) => {
-      if (!map.getLayer("parcel-fills") && !map.getLayer("parcel-points")) return;
+    const handleMapMouseMove = (event: maplibregl.MapMouseEvent & maplibregl.EventData) => {
+      const interactiveLayers = PARCEL_INTERACTIVE_LAYER_IDS.filter((layerId) => map.getLayer(layerId));
+      if (interactiveLayers.length === 0) {
+        clearHoveredFeature();
+        return;
+      }
       const parcelFeature = map.queryRenderedFeatures(event.point, {
-        layers: ["parcel-points", "parcel-fills"],
+        layers: [...interactiveLayers],
       })[0];
       const nextId = getMapFeatureSelectionParcelRowId(parcelFeature);
       if (hoveredFeatureIdRef.current && hoveredFeatureIdRef.current !== nextId) {
@@ -426,13 +486,52 @@ export function LeadMap({
         hoveredFeatureIdRef.current = null;
         map.getCanvas().style.cursor = "";
       }
-    });
+    };
+
+    map.on("load", handleMapLoad);
+    map.on("click", handleMapClick);
+    map.on("moveend", handleMapMoveEnd);
+    map.on("mousemove", handleMapMouseMove);
 
     return () => {
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[landintel-map] unmount", { stateCode: configuredStateCodeRef.current ?? initialMapConfig.stateCode });
+      }
+      map.off("load", handleMapLoad);
+      map.off("click", handleMapClick);
+      map.off("moveend", handleMapMoveEnd);
+      map.off("mousemove", handleMapMouseMove);
       map.remove();
       mapRef.current = null;
+      configuredStateCodeRef.current = null;
     };
-  }, [activeState.parcelPmtilesUrl, defaultStateBounds, onSelect, onViewportChange, parcelTileMinZoom, viewport.center, viewport.zoom]);
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    if (configuredStateCodeRef.current === stateCode) return;
+    if (process.env.NODE_ENV !== "production") {
+      console.debug("[landintel-map] reconfigure", {
+        fromStateCode: configuredStateCodeRef.current,
+        toStateCode: stateCode,
+      });
+    }
+    hoveredFeatureIdRef.current = null;
+    teardownParcelLayers(map);
+    initializeParcelLayers(map, activeState.parcelPmtilesUrl, parcelTileMinZoom);
+    const selectedSource = map.getSource(SELECTED_PARCEL_SOURCE_ID) as GeoJSONSource | undefined;
+    if (selectedSource) {
+      selectedSource.setData(emptyFeatureCollection() as never);
+    }
+    configuredStateCodeRef.current = stateCode;
+    lastAppliedFitNonceRef.current = -1;
+    lastLocateSelectedNonceRef.current = -1;
+    lastSelectedIdRef.current = null;
+    applyLayerVisibility(map, basemapMode, activeOverlays);
+    map.fitBounds(defaultStateBounds, { padding: 28, duration: 0, maxZoom: 7.2 });
+    hasInitializedViewportRef.current = true;
+  }, [activeOverlays, activeState.parcelPmtilesUrl, basemapMode, defaultStateBounds, parcelTileMinZoom, stateCode]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -467,19 +566,7 @@ export function LeadMap({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !map.isStyleLoaded()) return;
-    updateLayerVisibility(map, "street-base", basemapMode === "street");
-    updateLayerVisibility(map, "satellite-base", basemapMode === "satellite");
-    updateLayerVisibility(map, "parcel-fills", activeOverlays.includes("parcels"));
-    updateLayerVisibility(map, "parcel-lines", activeOverlays.includes("parcels"));
-    updateLayerVisibility(map, "parcel-points", activeOverlays.includes("parcels"));
-    updateLayerVisibility(map, "parcel-hover", activeOverlays.includes("parcels"));
-    updateLayerVisibility(map, "parcel-point-hover", activeOverlays.includes("parcels"));
-    updateLayerVisibility(map, "selected-parcel-fill", activeOverlays.includes("parcels"));
-    updateLayerVisibility(map, "selected-parcel-line", activeOverlays.includes("parcels"));
-    updateLayerVisibility(map, "selected-parcel-point", activeOverlays.includes("parcels"));
-    updateLayerVisibility(map, "parcel-wetlands-overlay", activeOverlays.includes("wetlands"));
-    updateLayerVisibility(map, "parcel-road-overlay", activeOverlays.includes("road_access"));
-    updateLayerVisibility(map, "parcel-flood-overlay", activeOverlays.includes("fema_flood"));
+    applyLayerVisibility(map, basemapMode, activeOverlays);
   }, [activeOverlays, basemapMode]);
 
   useEffect(() => {

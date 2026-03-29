@@ -8,7 +8,7 @@ from app.api.analyze import router as analyze_router
 from app.api.mississippi_leads import router as mississippi_leads_router
 from app.api.state_leads import router as state_leads_router
 from app.services.state_service_registry import configured_state_codes
-from app.settings import ALLOWED_CORS_ORIGINS, GZIP_MINIMUM_SIZE, state_runtime_file_diagnostics
+from app.settings import ALLOWED_CORS_ORIGINS, ALLOWED_CORS_ORIGIN_REGEX, GZIP_MINIMUM_SIZE, state_runtime_file_diagnostics
 
 logger = logging.getLogger("state-runtime")
 
@@ -17,6 +17,7 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_CORS_ORIGINS,
+    allow_origin_regex=ALLOWED_CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

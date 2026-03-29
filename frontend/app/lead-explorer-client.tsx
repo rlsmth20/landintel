@@ -55,6 +55,38 @@ const MAX_LIMIT = 250;
 const FILTER_DEBOUNCE_MS = 250;
 const SEARCH_DEBOUNCE_MS = 200;
 const SEARCH_MIN_QUERY_LENGTH = 2;
+const SELECTED_GEOMETRY_ZOOM = 14;
+const GEOMETRY_FAILURE_COOLDOWN_MS = 3000;
+const recentGeometryFailureByKey = new Map<string, number>();
+
+function buildSelectedGeometryRequestKey(stateCode: string, parcelRowId: string, zoom: number): string {
+  return `${stateConfig.normalizeStateCode(stateCode)}:${parcelRowId.trim()}:${zoom}`;
+}
+
+function sameBounds(
+  left: MapViewportState["bounds"] | [number, number, number, number],
+  right: MapViewportState["bounds"] | [number, number, number, number],
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return left.every((value, index) => value === right[index]);
+}
+
+function sameViewportState(left: MapViewportState, right: MapViewportState): boolean {
+  return (
+    left.zoom === right.zoom &&
+    left.center[0] === right.center[0] &&
+    left.center[1] === right.center[1] &&
+    sameBounds(left.bounds, right.bounds)
+  );
+}
+
+function geometryResponseMatchesParcel(response: GeometryResponse | null, parcelRowId: string | null): boolean {
+  if (!response || !parcelRowId) return false;
+  const featureMatch = response.feature_collection?.features?.some((feature) => feature.properties.parcel_row_id === parcelRowId) ?? false;
+  if (featureMatch) return true;
+  return response.items.some((item) => item.parcel_row_id === parcelRowId);
+}
 
 function buildDefaultViewport(stateCode: string): MapViewportState {
   const activeState = stateConfig.getStateConfig(stateCode);
@@ -194,10 +226,16 @@ export default function LeadExplorerClient({
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const hasInitializedStateRef = useRef(false);
+  const activeGeometryRequestKeyRef = useRef<string | null>(null);
+  const latestGeometryResponseRef = useRef<GeometryResponse | null>(null);
 
   useEffect(() => {
     setSelectedStateCode(resolveRuntimeStateCode(initialStateCode));
   }, [initialStateCode]);
+
+  useEffect(() => {
+    latestGeometryResponseRef.current = selectedGeometryResponse;
+  }, [selectedGeometryResponse]);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -243,6 +281,7 @@ export default function LeadExplorerClient({
 
   useEffect(() => {
     setViewport(buildDefaultViewport(selectedStateCode));
+    activeGeometryRequestKeyRef.current = null;
     if (!hasInitializedStateRef.current) {
       hasInitializedStateRef.current = true;
       return;
@@ -334,38 +373,107 @@ export default function LeadExplorerClient({
 
   useEffect(() => {
     if (!selectedParcelRowId) {
+      activeGeometryRequestKeyRef.current = null;
       setSelectedGeometryResponse(null);
+      setGeometryError(null);
       setGeometryLoading(false);
       return;
     }
     const selectedParcelId = selectedParcelRowId;
+    const requestKey = buildSelectedGeometryRequestKey(selectedStateCode, selectedParcelId, SELECTED_GEOMETRY_ZOOM);
+    const lastFailureAt = recentGeometryFailureByKey.get(requestKey);
+    if (lastFailureAt && Date.now() - lastFailureAt < GEOMETRY_FAILURE_COOLDOWN_MS) {
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[lead-explorer] selected geometry request suppressed", {
+          requestKey,
+          stateCode: selectedStateCode,
+          parcelRowId: selectedParcelId,
+          reason: "recent_failure",
+        });
+      }
+      activeGeometryRequestKeyRef.current = null;
+      if (!geometryResponseMatchesParcel(latestGeometryResponseRef.current, selectedParcelId)) {
+        setSelectedGeometryResponse(null);
+      }
+      setGeometryLoading(false);
+      setGeometryError("Selected parcel geometry is temporarily unavailable. Retry in a few seconds.");
+      return;
+    }
     let cancelled = false;
     const controller = new AbortController();
+    activeGeometryRequestKeyRef.current = requestKey;
     async function loadSelectedGeometry() {
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[lead-explorer] selected geometry request start", {
+          requestKey,
+          stateCode: selectedStateCode,
+          parcelRowId: selectedParcelId,
+          zoom: SELECTED_GEOMETRY_ZOOM,
+        });
+      }
       setGeometryLoading(true);
       setGeometryError(null);
-      setSelectedGeometryResponse(null);
       try {
-        const response = await fetchParcelGeometryById(selectedStateCode, selectedParcelId, 14, { signal: controller.signal });
+        const response = await fetchParcelGeometryById(selectedStateCode, selectedParcelId, SELECTED_GEOMETRY_ZOOM, { signal: controller.signal });
         if (cancelled) return;
+        recentGeometryFailureByKey.delete(requestKey);
+        if (process.env.NODE_ENV !== "production") {
+          console.debug("[lead-explorer] selected geometry request success", {
+            requestKey,
+            stateCode: selectedStateCode,
+            parcelRowId: selectedParcelId,
+            featureCount: response.feature_count ?? 0,
+          });
+        }
         setSelectedGeometryResponse(response);
+        setGeometryError(null);
       } catch (error) {
         if (cancelled) return;
         if (isAbortLikeError(error)) {
+          if (process.env.NODE_ENV !== "production") {
+            console.debug("[lead-explorer] selected geometry request aborted", {
+              requestKey,
+              stateCode: selectedStateCode,
+              parcelRowId: selectedParcelId,
+            });
+          }
           return;
         }
+        recentGeometryFailureByKey.set(requestKey, Date.now());
         if (process.env.NODE_ENV !== "production") {
-          console.debug("[lead-explorer] selected geometry failed", { selectedParcelId, error });
+          console.debug("[lead-explorer] selected geometry request failed", {
+            requestKey,
+            stateCode: selectedStateCode,
+            parcelRowId: selectedParcelId,
+            error,
+          });
         }
-        setSelectedGeometryResponse(null);
+        if (!geometryResponseMatchesParcel(latestGeometryResponseRef.current, selectedParcelId)) {
+          setSelectedGeometryResponse(null);
+        }
         setGeometryError(error instanceof Error ? error.message : "Failed to load parcel geometry");
       } finally {
-        if (!cancelled) setGeometryLoading(false);
+        if (!cancelled) {
+          setGeometryLoading(false);
+        }
+        if (activeGeometryRequestKeyRef.current === requestKey) {
+          activeGeometryRequestKeyRef.current = null;
+        }
       }
     }
     void loadSelectedGeometry();
     return () => {
       cancelled = true;
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[lead-explorer] selected geometry request cleanup", {
+          requestKey,
+          stateCode: selectedStateCode,
+          parcelRowId: selectedParcelId,
+        });
+      }
+      if (activeGeometryRequestKeyRef.current === requestKey) {
+        activeGeometryRequestKeyRef.current = null;
+      }
       controller.abort();
     };
   }, [selectedParcelRowId, selectedStateCode]);
@@ -489,6 +597,9 @@ export default function LeadExplorerClient({
   const countyDivisionTitle = countyDivisionLabel.charAt(0).toUpperCase() + countyDivisionLabel.slice(1);
   const countyPlaceholder = `all ${countyDivisionLabel}s`;
   const tableColumns = useMemo(() => getTableColumns(countyDivisionLabel), [countyDivisionLabel]);
+  const handleViewportChange = useCallback((nextViewport: MapViewportState) => {
+    setViewport((current) => (sameViewportState(current, nextViewport) ? current : nextViewport));
+  }, []);
 
   const visibleLeads = leads;
   const visibleVacantCount = useMemo(
@@ -518,11 +629,22 @@ export default function LeadExplorerClient({
     if (process.env.NODE_ENV !== "production") {
       console.debug("[lead-explorer] row-or-map selection", { stateCode: selectedStateCode, parcelRowId });
     }
+    if (selectedParcelRowId === parcelRowId) {
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[lead-explorer] row-or-map selection ignored", {
+          stateCode: selectedStateCode,
+          parcelRowId,
+          reason: "already_selected",
+        });
+      }
+      return;
+    }
     setDetailError(null);
+    setGeometryError(null);
     setSelectedLead(lead ? normalizeDetailLeadRecord(lead) : null);
     setSelectedParcelRowId(parcelRowId);
     setFitNonce((current) => current + 1);
-  }, [selectedStateCode]);
+  }, [selectedParcelRowId, selectedStateCode]);
 
   const handleSearchSelect = useCallback(
     (result: SearchResultRecord) => {
@@ -1022,9 +1144,7 @@ export default function LeadExplorerClient({
                 {selectedGeometryResponse?.feature_count ? <LeadBadge label={`${selectedGeometryResponse.feature_count} selected feature`} tone="neutral" /> : null}
               </div>
             </div>
-            {geometryError ? <p className="error-text">{geometryError}</p> : null}
             <LeadMap
-              key={selectedStateCode}
               stateCode={selectedStateCode}
               geometryResponse={selectedGeometryResponse}
               selectedParcelRowId={selectedParcelRowId}
@@ -1033,7 +1153,7 @@ export default function LeadExplorerClient({
               locateSelectedNonce={locateSelectedNonce}
               activeOverlays={activeOverlays}
               viewport={viewport}
-              onViewportChange={setViewport}
+              onViewportChange={handleViewportChange}
               basemapMode={basemapMode}
               resultsLoading={leadsLoading}
               loading={geometryLoading}

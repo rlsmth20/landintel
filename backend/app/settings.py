@@ -14,6 +14,19 @@ def _csv_env(name: str, default: str) -> list[str]:
     return [value for value in values if value]
 
 
+def _merged_csv_env(name: str, defaults: list[str]) -> list[str]:
+    raw = os.getenv(name, "")
+    values = defaults + [value.strip() for value in raw.split(",")]
+    merged: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        merged.append(value)
+    return merged
+
+
 def _absolute_path(path: Path) -> Path:
     return path.expanduser().resolve(strict=False)
 
@@ -158,9 +171,18 @@ def resolve_state_runtime_path(
 
 APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
 APP_PORT = int(os.getenv("APP_PORT", "8000"))
-ALLOWED_CORS_ORIGINS = _csv_env(
-    "ALLOWED_CORS_ORIGINS",
-    "http://localhost:3000,http://127.0.0.1:3000,https://landintel.vercel.app",
+DEFAULT_ALLOWED_CORS_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
+    "https://landintel.vercel.app",
+    "https://www.landintel.vercel.app",
+]
+ALLOWED_CORS_ORIGINS = _merged_csv_env("ALLOWED_CORS_ORIGINS", DEFAULT_ALLOWED_CORS_ORIGINS)
+ALLOWED_CORS_ORIGIN_REGEX = os.getenv(
+    "ALLOWED_CORS_ORIGIN_REGEX",
+    r"^https://(?:[a-z0-9-]+\.)?landintel(?:-[a-z0-9-]+)?\.vercel\.app$",
 )
 
 MISSISSIPPI_EXPLORER_DATA_ROOT = _resolve_runtime_path(

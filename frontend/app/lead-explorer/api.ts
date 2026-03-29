@@ -44,7 +44,20 @@ async function fetchJson<T>(
   const timeout = timeoutMs > 0 ? window.setTimeout(() => controller.abort(), timeoutMs) : null;
   let response: Response;
   try {
-    response = await fetch(url, { cache: "no-store", signal: controller.signal });
+    response = await fetch(url, {
+      cache: "no-store",
+      mode: API_BASE_URL ? "cors" : "same-origin",
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (!controller.signal.aborted) {
+      console.error("[lead-explorer] request failed before response", {
+        stateCode: options?.stateCode ?? null,
+        url,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    throw error;
   } finally {
     if (timeout !== null) {
       window.clearTimeout(timeout);
