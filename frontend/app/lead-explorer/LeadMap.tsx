@@ -449,7 +449,7 @@ export function LeadMap({
       emitViewportChange(map);
     };
 
-    const handleMapClick = (event: maplibregl.MapMouseEvent & maplibregl.EventData) => {
+    const handleMapClick = (event: maplibregl.MapMouseEvent) => {
       const interactiveLayers = PARCEL_INTERACTIVE_LAYER_IDS.filter((layerId) => map.getLayer(layerId));
       if (interactiveLayers.length === 0) return;
       const feature = map.queryRenderedFeatures(event.point, { layers: [...interactiveLayers] })[0];
@@ -465,7 +465,7 @@ export function LeadMap({
 
     const handleMapMoveEnd = () => emitViewportChange(map);
 
-    const handleMapMouseMove = (event: maplibregl.MapMouseEvent & maplibregl.EventData) => {
+    const handleMapMouseMove = (event: maplibregl.MapMouseEvent) => {
       const interactiveLayers = PARCEL_INTERACTIVE_LAYER_IDS.filter((layerId) => map.getLayer(layerId));
       if (interactiveLayers.length === 0) {
         clearHoveredFeature();
