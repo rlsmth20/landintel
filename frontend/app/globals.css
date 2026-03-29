@@ -377,6 +377,53 @@ button {
   font-family: inherit;
 }
 
+.map-status-stack {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(340px, calc(100% - 32px));
+  pointer-events: none;
+}
+
+.map-status-note {
+  align-self: flex-start;
+  padding: 9px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(58, 43, 24, 0.12);
+  background: rgba(255, 248, 238, 0.86);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 24px rgba(48, 34, 19, 0.12);
+  color: var(--ink);
+}
+
+.map-status-note.is-warn {
+  border-color: rgba(217, 71, 47, 0.28);
+  background: rgba(255, 243, 239, 0.92);
+}
+
+.map-status-note strong,
+.map-status-note p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.map-status-note strong {
+  display: block;
+  font-size: 0.8rem;
+  line-height: 1.25;
+}
+
+.map-status-note p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
 .map-empty-state {
   display: grid;
   place-items: center;

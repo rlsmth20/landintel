@@ -8,7 +8,7 @@ import { PMTiles, Protocol } from "pmtiles";
 
 import parcelIdentity from "./parcelIdentity";
 import stateConfig from "./stateConfig";
-import type { BasemapMode, FeatureCollectionPayload, GeometryFeature, GeometryResponse, LeadRecord, MapOverlayId, MapViewportState } from "./types";
+import type { BasemapMode, FeatureCollectionPayload, GeometryResponse, LeadRecord, MapOverlayId, MapViewportState } from "./types";
 
 const {
   featureBounds,
@@ -22,13 +22,10 @@ const DEFAULT_ZOOM = 3.4;
 const PARCEL_TILE_SOURCE_ID = "landintel-parcel-tiles";
 const PARCEL_TILE_LAYER = "parcels";
 const SELECTED_PARCEL_SOURCE_ID = "landintel-selected-parcel";
-const PARCEL_TILE_MIN_ZOOM = 6;
+const DEFAULT_PARCEL_TILE_MIN_ZOOM = 10;
+const POINT_GEOMETRY_FILTER: maplibregl.FilterSpecification = ["any", ["==", ["geometry-type"], "Point"], ["==", ["geometry-type"], "MultiPoint"]];
 let pmtilesProtocol: Protocol | null = null;
 let pmtilesArchiveUrl: string | null = null;
-const STATE_PM_TILES_ENV_OVERRIDES: Record<string, string | null> = {
-  ar: process.env.NEXT_PUBLIC_PARCEL_PMTILES_URL_AR?.trim() || null,
-  ms: process.env.NEXT_PUBLIC_PARCEL_PMTILES_URL_MS?.trim() || null,
-};
 
 function toStateBounds(defaultBounds: [number, number, number, number]): [[number, number], [number, number]] {
   return [
@@ -37,17 +34,10 @@ function toStateBounds(defaultBounds: [number, number, number, number]): [[numbe
   ];
 }
 
-function getParcelPmtilesUrl(stateCode: string, configuredPmtilesUrl: string | null | undefined): string | null {
-  const stateOverride = STATE_PM_TILES_ENV_OVERRIDES[stateCode]?.trim() || null;
-  const configured = process.env.NEXT_PUBLIC_PARCEL_PMTILES_URL?.trim();
-  const candidate =
-    stateOverride && stateOverride.length > 0
-      ? stateOverride
-      : configured && configured.length > 0
-        ? configured
-        : typeof configuredPmtilesUrl === "string" && configuredPmtilesUrl.trim().length > 0
-          ? configuredPmtilesUrl
-          : null;
+function getParcelPmtilesUrl(configuredPmtilesUrl: string | null | undefined): string | null {
+  const candidate = typeof configuredPmtilesUrl === "string" && configuredPmtilesUrl.trim().length > 0
+    ? configuredPmtilesUrl.trim()
+    : null;
   if (!candidate) return null;
   if (/^https?:\/\//i.test(candidate)) return candidate;
   if (typeof window !== "undefined") {
@@ -56,8 +46,8 @@ function getParcelPmtilesUrl(stateCode: string, configuredPmtilesUrl: string | n
   return candidate;
 }
 
-function ensurePmtilesProtocol(stateCode: string, parcelPmtilesUrl: string | null | undefined) {
-  const nextUrl = getParcelPmtilesUrl(stateCode, parcelPmtilesUrl);
+function ensurePmtilesProtocol(parcelPmtilesUrl: string | null | undefined) {
+  const nextUrl = getParcelPmtilesUrl(parcelPmtilesUrl);
   if (typeof window === "undefined" || !nextUrl) return null;
   if (!pmtilesProtocol) {
     pmtilesProtocol = new Protocol();
@@ -116,7 +106,11 @@ function updateLayerVisibility(map: Map, layerId: string, visible: boolean) {
   map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none");
 }
 
-function initializeParcelLayers(map: Map, stateCode: string, parcelPmtilesUrl: string | null | undefined) {
+function initializeParcelLayers(
+  map: Map,
+  parcelPmtilesUrl: string | null | undefined,
+  parcelTileMinZoom: number,
+) {
   map.addSource(SELECTED_PARCEL_SOURCE_ID, {
     type: "geojson",
     data: {
@@ -125,12 +119,12 @@ function initializeParcelLayers(map: Map, stateCode: string, parcelPmtilesUrl: s
     },
   });
 
-  const resolvedParcelPmtilesUrl = ensurePmtilesProtocol(stateCode, parcelPmtilesUrl);
+  const resolvedParcelPmtilesUrl = ensurePmtilesProtocol(parcelPmtilesUrl);
   if (resolvedParcelPmtilesUrl && !map.getSource(PARCEL_TILE_SOURCE_ID)) {
     map.addSource(PARCEL_TILE_SOURCE_ID, {
       type: "vector",
       url: `pmtiles://${resolvedParcelPmtilesUrl}`,
-      minzoom: PARCEL_TILE_MIN_ZOOM,
+      minzoom: parcelTileMinZoom,
       maxzoom: 15,
       promoteId: { [PARCEL_TILE_LAYER]: "parcel_row_id" },
     });
@@ -140,6 +134,7 @@ function initializeParcelLayers(map: Map, stateCode: string, parcelPmtilesUrl: s
       type: "fill",
       source: PARCEL_TILE_SOURCE_ID,
       "source-layer": PARCEL_TILE_LAYER,
+      minzoom: parcelTileMinZoom,
       paint: {
         "fill-color": "#2f6b6d",
         "fill-opacity": 0.18,
@@ -151,6 +146,7 @@ function initializeParcelLayers(map: Map, stateCode: string, parcelPmtilesUrl: s
       type: "line",
       source: PARCEL_TILE_SOURCE_ID,
       "source-layer": PARCEL_TILE_LAYER,
+      minzoom: parcelTileMinZoom,
       paint: {
         "line-color": "#17393a",
         "line-width": ["interpolate", ["linear"], ["zoom"], 7, 0.4, 10, 0.8, 13, 1.2, 15, 1.6],
@@ -159,10 +155,27 @@ function initializeParcelLayers(map: Map, stateCode: string, parcelPmtilesUrl: s
     });
 
     map.addLayer({
+      id: "parcel-points",
+      type: "circle",
+      source: PARCEL_TILE_SOURCE_ID,
+      "source-layer": PARCEL_TILE_LAYER,
+      minzoom: parcelTileMinZoom,
+      filter: POINT_GEOMETRY_FILTER,
+      paint: {
+        "circle-color": "#2f6b6d",
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 7, 1.2, 10, 1.8, 13, 2.6, 15, 3.4],
+        "circle-opacity": 0.82,
+        "circle-stroke-color": "#17393a",
+        "circle-stroke-width": 0.8,
+      },
+    });
+
+    map.addLayer({
       id: "parcel-wetlands-overlay",
       type: "line",
       source: PARCEL_TILE_SOURCE_ID,
       "source-layer": PARCEL_TILE_LAYER,
+      minzoom: parcelTileMinZoom,
       filter: ["==", ["get", "wetland_flag"], true],
       paint: {
         "line-color": "#617f56",
@@ -176,6 +189,7 @@ function initializeParcelLayers(map: Map, stateCode: string, parcelPmtilesUrl: s
       type: "line",
       source: PARCEL_TILE_SOURCE_ID,
       "source-layer": PARCEL_TILE_LAYER,
+      minzoom: parcelTileMinZoom,
       filter: ["==", ["get", "road_access_tier"], "direct"],
       paint: {
         "line-color": "#1f7f80",
@@ -189,6 +203,7 @@ function initializeParcelLayers(map: Map, stateCode: string, parcelPmtilesUrl: s
       type: "line",
       source: PARCEL_TILE_SOURCE_ID,
       "source-layer": PARCEL_TILE_LAYER,
+      minzoom: parcelTileMinZoom,
       filter: [">", ["coalesce", ["get", "flood_risk_score"], 0], 0],
       paint: {
         "line-color": "#5f8db8",
@@ -219,16 +234,47 @@ function initializeParcelLayers(map: Map, stateCode: string, parcelPmtilesUrl: s
     },
   });
 
+  map.addLayer({
+    id: "selected-parcel-point",
+    type: "circle",
+    source: SELECTED_PARCEL_SOURCE_ID,
+    filter: POINT_GEOMETRY_FILTER,
+    paint: {
+      "circle-color": "#d9472f",
+      "circle-radius": 7.5,
+      "circle-opacity": 0.94,
+      "circle-stroke-color": "#fff8ee",
+      "circle-stroke-width": 2.2,
+    },
+  });
+
   if (parcelPmtilesUrl) {
     map.addLayer({
       id: "parcel-hover",
       type: "line",
       source: PARCEL_TILE_SOURCE_ID,
       "source-layer": PARCEL_TILE_LAYER,
+      minzoom: parcelTileMinZoom,
       paint: {
         "line-color": "#ffe5cf",
         "line-width": ["case", ["boolean", ["feature-state", "hover"], false], 3.2, 0],
         "line-opacity": ["case", ["boolean", ["feature-state", "hover"], false], 1, 0],
+      },
+    });
+
+    map.addLayer({
+      id: "parcel-point-hover",
+      type: "circle",
+      source: PARCEL_TILE_SOURCE_ID,
+      "source-layer": PARCEL_TILE_LAYER,
+      minzoom: parcelTileMinZoom,
+      filter: POINT_GEOMETRY_FILTER,
+      paint: {
+        "circle-color": "#ffe5cf",
+        "circle-radius": ["case", ["boolean", ["feature-state", "hover"], false], 6, 0],
+        "circle-opacity": ["case", ["boolean", ["feature-state", "hover"], false], 0.45, 0],
+        "circle-stroke-color": "#fff8ee",
+        "circle-stroke-width": ["case", ["boolean", ["feature-state", "hover"], false], 1.4, 0],
       },
     });
   }
@@ -267,7 +313,11 @@ export function LeadMap({
 }) {
   const activeState = useMemo(() => stateConfig.getStateConfig(stateCode), [stateCode]);
   const defaultStateBounds = useMemo(() => toStateBounds(activeState.defaultBounds), [activeState.defaultBounds]);
-  const hasParcelTileArchive = Boolean(getParcelPmtilesUrl(stateCode, activeState.parcelPmtilesUrl));
+  const parcelTileMinZoom = useMemo(
+    () => activeState.parcelPmtilesMinZoom ?? stateConfig.DEFAULT_PARCEL_PMTILES_MIN_ZOOM ?? DEFAULT_PARCEL_TILE_MIN_ZOOM,
+    [activeState.parcelPmtilesMinZoom],
+  );
+  const hasParcelTileArchive = Boolean(getParcelPmtilesUrl(activeState.parcelPmtilesUrl));
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<Map | null>(null);
   const hoveredFeatureIdRef = useRef<string | null>(null);
@@ -302,7 +352,15 @@ export function LeadMap({
     mapRef.current = map;
 
     map.on("load", () => {
-      initializeParcelLayers(map, stateCode, activeState.parcelPmtilesUrl);
+      initializeParcelLayers(map, activeState.parcelPmtilesUrl, parcelTileMinZoom);
+
+      const clearHoveredFeature = () => {
+        if (hoveredFeatureIdRef.current) {
+          map.setFeatureState({ source: PARCEL_TILE_SOURCE_ID, sourceLayer: PARCEL_TILE_LAYER, id: hoveredFeatureIdRef.current }, { hover: false });
+          hoveredFeatureIdRef.current = null;
+        }
+        map.getCanvas().style.cursor = "";
+      };
 
       if (map.getLayer("parcel-fills")) {
         map.on("click", "parcel-fills", (event) => {
@@ -315,14 +373,21 @@ export function LeadMap({
             onSelect(parcelRowId);
           }
         });
+        map.on("mouseleave", "parcel-fills", clearHoveredFeature);
+      }
 
-        map.on("mouseleave", "parcel-fills", () => {
-          if (hoveredFeatureIdRef.current) {
-            map.setFeatureState({ source: PARCEL_TILE_SOURCE_ID, sourceLayer: PARCEL_TILE_LAYER, id: hoveredFeatureIdRef.current }, { hover: false });
-            hoveredFeatureIdRef.current = null;
+      if (map.getLayer("parcel-points")) {
+        map.on("click", "parcel-points", (event) => {
+          const feature = event.features?.[0];
+          const parcelRowId = getMapFeatureSelectionParcelRowId(feature);
+          if (parcelRowId) {
+            if (process.env.NODE_ENV !== "production") {
+              console.debug("[landintel-map] parcel point click", { parcelRowId });
+            }
+            onSelect(parcelRowId);
           }
-          map.getCanvas().style.cursor = "";
         });
+        map.on("mouseleave", "parcel-points", clearHoveredFeature);
       }
 
       const currentBounds = map.getBounds();
@@ -345,9 +410,9 @@ export function LeadMap({
     });
 
     map.on("mousemove", (event) => {
-      if (!map.getLayer("parcel-fills")) return;
+      if (!map.getLayer("parcel-fills") && !map.getLayer("parcel-points")) return;
       const parcelFeature = map.queryRenderedFeatures(event.point, {
-        layers: ["parcel-fills"],
+        layers: ["parcel-points", "parcel-fills"],
       })[0];
       const nextId = getMapFeatureSelectionParcelRowId(parcelFeature);
       if (hoveredFeatureIdRef.current && hoveredFeatureIdRef.current !== nextId) {
@@ -367,7 +432,7 @@ export function LeadMap({
       map.remove();
       mapRef.current = null;
     };
-  }, [activeState.parcelPmtilesUrl, defaultStateBounds, onSelect, onViewportChange, stateCode]);
+  }, [activeState.parcelPmtilesUrl, defaultStateBounds, onSelect, onViewportChange, parcelTileMinZoom, viewport.center, viewport.zoom]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -406,9 +471,12 @@ export function LeadMap({
     updateLayerVisibility(map, "satellite-base", basemapMode === "satellite");
     updateLayerVisibility(map, "parcel-fills", activeOverlays.includes("parcels"));
     updateLayerVisibility(map, "parcel-lines", activeOverlays.includes("parcels"));
+    updateLayerVisibility(map, "parcel-points", activeOverlays.includes("parcels"));
     updateLayerVisibility(map, "parcel-hover", activeOverlays.includes("parcels"));
+    updateLayerVisibility(map, "parcel-point-hover", activeOverlays.includes("parcels"));
     updateLayerVisibility(map, "selected-parcel-fill", activeOverlays.includes("parcels"));
     updateLayerVisibility(map, "selected-parcel-line", activeOverlays.includes("parcels"));
+    updateLayerVisibility(map, "selected-parcel-point", activeOverlays.includes("parcels"));
     updateLayerVisibility(map, "parcel-wetlands-overlay", activeOverlays.includes("wetlands"));
     updateLayerVisibility(map, "parcel-road-overlay", activeOverlays.includes("road_access"));
     updateLayerVisibility(map, "parcel-flood-overlay", activeOverlays.includes("fema_flood"));
@@ -480,34 +548,64 @@ export function LeadMap({
         });
       }
     }
-  }, [defaultStateBounds, featureCount, fitNonce, geometryResponse, locateSelectedNonce, resultBounds, selectedBounds, selectedParcelRowId]);
+  }, [defaultStateBounds, featureCollection?.features, featureCount, fitNonce, geometryResponse, locateSelectedNonce, resultBounds, selectedBounds, selectedParcelRowId]);
 
-  let emptyTitle: string | null = null;
-  let emptyBody: string | null = null;
+  const showParcelLayerHint =
+    hasParcelTileArchive &&
+    activeOverlays.includes("parcels") &&
+    (viewport.zoom ?? DEFAULT_ZOOM) < parcelTileMinZoom;
+
+  const statusMessages: Array<{ key: string; tone: "neutral" | "warn"; title: string; body?: string | null }> = [];
   if (resultsLoading) {
-    emptyTitle = "Loading parcel results";
-    emptyBody = "Fetching parcel records and filters for the current dataset.";
+    statusMessages.push({
+      key: "results-loading",
+      tone: "neutral",
+      title: "Refreshing parcel results",
+    });
   } else if (totalCount === 0) {
-    emptyTitle = "No parcels match current filters";
-    emptyBody = "Try broadening the current filter set or clearing preset constraints.";
-  } else if (hasParcelTileArchive && viewport.zoom < PARCEL_TILE_MIN_ZOOM) {
-    emptyTitle = "Zoom in to inspect parcel boundaries";
-    emptyBody = `The base parcel layer uses PMTiles and becomes legible once you zoom further into ${activeState.displayName}.`;
-  } else if (loading && selectedParcelRowId) {
-    emptyTitle = "Loading selected parcel";
-    emptyBody = "Fetching detailed geometry for the current selection.";
+    statusMessages.push({
+      key: "no-results",
+      tone: "neutral",
+      title: "No parcels match current filters",
+      body: "Broaden the current filters to repopulate the statewide parcel base.",
+    });
+  }
+
+  if (showParcelLayerHint) {
+    statusMessages.push({
+      key: "parcel-minzoom",
+      tone: "neutral",
+      title: `Parcel layer appears at zoom ${parcelTileMinZoom}+`,
+      body: `Base parcel geometry stays hidden until it is legible in ${activeState.displayName}.`,
+    });
+  }
+
+  if (loading && selectedParcelRowId) {
+    statusMessages.push({
+      key: "selected-loading",
+      tone: "neutral",
+      title: "Loading selected parcel",
+    });
   } else if (error && selectedParcelRowId) {
-    emptyTitle = "Selected parcel geometry failed to load";
-    emptyBody = error;
+    statusMessages.push({
+      key: "selected-error",
+      tone: "warn",
+      title: "Selected parcel detail unavailable",
+      body: error,
+    });
   }
 
   return (
     <div className="lead-map-shell">
       <div className="lead-map-canvas" ref={mapContainerRef} />
-      {emptyTitle ? (
-        <div className="map-empty-state map-overlay-empty">
-          <strong>{emptyTitle}</strong>
-          <p>{emptyBody}</p>
+      {statusMessages.length > 0 ? (
+        <div className="map-status-stack" aria-live="polite">
+          {statusMessages.map((message) => (
+            <div key={message.key} className={`map-status-note is-${message.tone}`}>
+              <strong>{message.title}</strong>
+              {message.body ? <p>{message.body}</p> : null}
+            </div>
+          ))}
         </div>
       ) : null}
     </div>

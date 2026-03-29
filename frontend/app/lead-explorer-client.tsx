@@ -35,11 +35,11 @@ import {
   INITIAL_FILTERS,
   MAP_OVERLAYS,
   PRESET_LABELS,
-  TABLE_COLUMNS,
   applyPreset,
   badgeTone,
   formatCurrency,
   formatNumber,
+  getTableColumns,
   toggleSelection,
 } from "./lead-explorer/utils";
 
@@ -68,9 +68,12 @@ function buildDefaultViewport(stateCode: string): MapViewportState {
 
 function resolveRuntimeStateCode(initialStateCode: string): string {
   if (typeof window === "undefined") {
-    return stateConfig.normalizeStateCode(initialStateCode);
+    return stateConfig.resolveSelectableStateCode(initialStateCode);
   }
-  return stateConfig.readStateCodeFromSearch(window.location.search, initialStateCode);
+  return stateConfig.resolveSelectableStateCode(
+    stateConfig.readStateCodeFromSearch(window.location.search, initialStateCode),
+    initialStateCode,
+  );
 }
 
 function replaceUrlState(stateCode: string, parcelRowId: string | null) {
@@ -199,7 +202,10 @@ export default function LeadExplorerClient({
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
     const syncStateFromUrl = () => {
-      const nextStateCode = stateConfig.readStateCodeFromSearch(window.location.search, selectedStateCode);
+      const nextStateCode = stateConfig.resolveSelectableStateCode(
+        stateConfig.readStateCodeFromSearch(window.location.search, selectedStateCode),
+        selectedStateCode,
+      );
       setSelectedStateCode((current) => (current === nextStateCode ? current : nextStateCode));
     };
     syncStateFromUrl();
@@ -479,6 +485,10 @@ export default function LeadExplorerClient({
     () => summary?.sections?.top_counties?.map((item) => item.key).filter(Boolean) ?? [],
     [summary],
   );
+  const countyDivisionLabel = activeState.countyDivisionLabel ?? "county";
+  const countyDivisionTitle = countyDivisionLabel.charAt(0).toUpperCase() + countyDivisionLabel.slice(1);
+  const countyPlaceholder = `all ${countyDivisionLabel}s`;
+  const tableColumns = useMemo(() => getTableColumns(countyDivisionLabel), [countyDivisionLabel]);
 
   const visibleLeads = leads;
   const visibleVacantCount = useMemo(
@@ -491,7 +501,7 @@ export default function LeadExplorerClient({
   );
   const currentPage = Math.floor(offset / limit) + 1;
   const pageCount = Math.max(1, Math.ceil(totalCount / limit));
-  const datasetStatusLabel = activeState.parcelPmtilesUrl ? "Base tiles live" : "On-demand geometry live";
+  const datasetStatusLabel = activeState.parcelPmtilesUrl ? "Base tiles configured" : "On-demand geometry live";
 
   function updateFilter<K extends keyof Filters>(key: K, value: Filters[K]) {
     setFilters((current) => ({ ...current, [key]: value }));
@@ -620,17 +630,17 @@ export default function LeadExplorerClient({
               }}
             >
               {availableStates.map((state) => (
-                <option key={state.stateCode} value={state.stateCode}>
-                  {state.displayName}
+                <option key={state.stateCode} value={state.stateCode} disabled={!state.selectionEnabled}>
+                  {state.selectionEnabled ? state.displayName : `${state.displayName} (blocked)`}
                 </option>
               ))}
             </select>
           </label>
           <label>
-            County name
+            {countyDivisionTitle} name
             <input
               list="county-suggestions"
-              placeholder="all counties"
+              placeholder={countyPlaceholder}
               value={filters.countyName === "all" ? "" : filters.countyName}
               onChange={(event) => {
                 setActivePreset(null);
@@ -1134,7 +1144,7 @@ export default function LeadExplorerClient({
               <table>
                 <thead>
                   <tr>
-                    {TABLE_COLUMNS.map((column) => (
+                    {tableColumns.map((column) => (
                       <HeaderCell
                         key={column.key}
                         label={column.label}
@@ -1199,6 +1209,7 @@ export default function LeadExplorerClient({
         {selectedLead ? (
           <LeadDetail
             lead={selectedLead}
+            countyDivisionLabel={countyDivisionLabel}
             nearbyComps={nearbyComps}
             nearbyCompsLoading={nearbyCompsLoading}
             nearbyCompsError={nearbyCompsError}
