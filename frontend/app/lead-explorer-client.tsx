@@ -188,6 +188,7 @@ export default function LeadExplorerClient({
   const activeState = useMemo(() => stateConfig.getStateConfig(selectedStateCode), [selectedStateCode]);
   const availableStates = useMemo(() => stateConfig.getKnownStateConfigs(), []);
   const [summary, setSummary] = useState<ExplorerMeta | null>(null);
+  const [summaryNotice, setSummaryNotice] = useState<string | null>(null);
   const [presets, setPresets] = useState<PresetItem[]>([]);
   const [filters, setFilters] = useState<Filters>(INITIAL_FILTERS);
   const [debouncedFilters, setDebouncedFilters] = useState<Filters>(INITIAL_FILTERS);
@@ -199,6 +200,7 @@ export default function LeadExplorerClient({
 
   const [leads, setLeads] = useState<LeadRecord[]>([]);
   const [totalCount, setTotalCount] = useState(0);
+  const [leadsNotice, setLeadsNotice] = useState<string | null>(null);
   const [selectedParcelRowId, setSelectedParcelRowId] = useState<string | null>(initialParcelRowId);
   const [selectedLead, setSelectedLead] = useState<LeadRecord | null>(null);
   const [selectedGeometryResponse, setSelectedGeometryResponse] = useState<GeometryResponse | null>(null);
@@ -240,16 +242,18 @@ export default function LeadExplorerClient({
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
     const syncStateFromUrl = () => {
-      const nextStateCode = stateConfig.resolveSelectableStateCode(
-        stateConfig.readStateCodeFromSearch(window.location.search, selectedStateCode),
-        selectedStateCode,
-      );
-      setSelectedStateCode((current) => (current === nextStateCode ? current : nextStateCode));
+      setSelectedStateCode((current) => {
+        const nextStateCode = stateConfig.resolveSelectableStateCode(
+          stateConfig.readStateCodeFromSearch(window.location.search, current),
+          current,
+        );
+        return current === nextStateCode ? current : nextStateCode;
+      });
     };
     syncStateFromUrl();
     window.addEventListener("popstate", syncStateFromUrl);
     return () => window.removeEventListener("popstate", syncStateFromUrl);
-  }, [selectedStateCode]);
+  }, []);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -273,6 +277,7 @@ export default function LeadExplorerClient({
         displayName: activeState.displayName,
         apiPrefix: activeState.apiPrefix,
         staticMetaPath: activeState.staticMetaPath,
+        staticLeadPath: activeState.staticLeadPath,
         staticLeadDetailPath: activeState.staticLeadDetailPath,
         parcelPmtilesUrl: activeState.parcelPmtilesUrl,
       });
@@ -287,9 +292,11 @@ export default function LeadExplorerClient({
       return;
     }
     setSummary(null);
+    setSummaryNotice(null);
     setPresets([]);
     setLeads([]);
     setTotalCount(0);
+    setLeadsNotice(null);
     setSelectedParcelRowId(null);
     setSelectedLead(null);
     setSelectedGeometryResponse(null);
@@ -317,19 +324,41 @@ export default function LeadExplorerClient({
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     async function loadBootstrap() {
+      console.info("[lead-explorer] bootstrap start", {
+        stateCode: selectedStateCode,
+        apiPrefix: activeState.apiPrefix,
+        staticMetaPath: activeState.staticMetaPath,
+      });
       setSummaryLoading(true);
       setSummaryError(null);
+      setSummaryNotice(null);
       try {
         const [summaryResponse, presetsResponse] = await Promise.all([
-          fetchSummary(selectedStateCode),
-          fetchPresets(selectedStateCode),
+          fetchSummary(selectedStateCode, { signal: controller.signal }),
+          fetchPresets(selectedStateCode, { signal: controller.signal }),
         ]);
         if (cancelled) return;
         setSummary(summaryResponse);
+        setSummaryNotice(summaryResponse.fallback_notice ?? null);
         setPresets(presetsResponse);
+        console.info("[lead-explorer] bootstrap loaded", {
+          stateCode: selectedStateCode,
+          rowCount: summaryResponse.row_count ?? null,
+          usedFallback: Boolean(summaryResponse.fallback_notice),
+          presetCount: presetsResponse.length,
+        });
       } catch (error) {
         if (cancelled) return;
+        if (isAbortLikeError(error)) return;
+        console.warn("[lead-explorer] bootstrap failed", {
+          stateCode: selectedStateCode,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        setSummary(null);
+        setSummaryNotice(null);
+        setPresets([]);
         setSummaryError(error instanceof Error ? error.message : "Failed to load summary");
       } finally {
         if (!cancelled) setSummaryLoading(false);
@@ -338,14 +367,17 @@ export default function LeadExplorerClient({
     void loadBootstrap();
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [selectedStateCode]);
+  }, [activeState.apiPrefix, activeState.staticMetaPath, selectedStateCode]);
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     async function loadLeads() {
       setLeadsLoading(true);
       setLeadsError(null);
+      setLeadsNotice(null);
       try {
         const response = await fetchLeads(
           selectedStateCode,
@@ -354,12 +386,35 @@ export default function LeadExplorerClient({
           sortDirection,
           Math.min(limit, MAX_LIMIT),
           offset,
+          { signal: controller.signal },
         );
         if (cancelled) return;
+        console.info("[lead-explorer] leads loaded", {
+          stateCode: selectedStateCode,
+          totalCount: response.total_count,
+          itemCount: response.items.length,
+          offset,
+          limit: Math.min(limit, MAX_LIMIT),
+          sortField,
+          sortDirection,
+        });
         setLeads(response.items);
         setTotalCount(response.total_count);
+        setLeadsNotice(response.fallback_notice ?? null);
       } catch (error) {
         if (cancelled) return;
+        if (isAbortLikeError(error)) return;
+        console.warn("[lead-explorer] leads load failed", {
+          stateCode: selectedStateCode,
+          offset,
+          limit: Math.min(limit, MAX_LIMIT),
+          sortField,
+          sortDirection,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        setLeads([]);
+        setTotalCount(0);
+        setLeadsNotice(null);
         setLeadsError(error instanceof Error ? error.message : "Failed to load leads");
       } finally {
         if (!cancelled) setLeadsLoading(false);
@@ -368,6 +423,7 @@ export default function LeadExplorerClient({
     void loadLeads();
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [debouncedFilters, limit, offset, selectedStateCode, sortDirection, sortField]);
 
@@ -1068,6 +1124,7 @@ export default function LeadExplorerClient({
           <h2>Summary</h2>
           {summaryLoading ? <p className="muted">Loading summary...</p> : null}
           {summaryError ? <p className="error-text">{summaryError}</p> : null}
+          {summaryNotice ? <p className="field-note">{summaryNotice}</p> : null}
           <div className="stats-grid">
             <div>
               <span className="stat-label">Statewide parcels</span>
@@ -1156,6 +1213,7 @@ export default function LeadExplorerClient({
               onViewportChange={handleViewportChange}
               basemapMode={basemapMode}
               resultsLoading={leadsLoading}
+              resultsError={leadsError}
               loading={geometryLoading}
               error={geometryError}
               totalCount={totalCount}
@@ -1260,6 +1318,7 @@ export default function LeadExplorerClient({
             </div>
             {leadsLoading ? <p className="muted">Loading leads...</p> : null}
             {leadsError ? <p className="error-text">{leadsError}</p> : null}
+            {leadsNotice ? <p className="field-note">{leadsNotice}</p> : null}
             <div className="table-wrap">
               <table>
                 <thead>

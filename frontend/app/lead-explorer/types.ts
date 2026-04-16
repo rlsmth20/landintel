@@ -157,6 +157,7 @@ export type LeadRecord = {
 export type ExplorerMeta = {
   row_count?: number;
   source?: string;
+  fallback_notice?: string | null;
   geometry_mode?: string;
   geometry_bounds?: number[];
   geometry_view_box?: number[];
@@ -194,6 +195,7 @@ export type LeadsResponse = {
   limit: number;
   offset: number;
   items: LeadRecord[];
+  fallback_notice?: string | null;
 };
 
 export type SearchResultRecord = {

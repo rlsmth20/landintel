@@ -1,0 +1,275 @@
+{
+  "defaultViews": [
+    {
+      "view_name": "general_ranked",
+      "description": "Top-ranked statewide parcel leads from the official parcel source.",
+      "filter_expression": "recommended_view_bucket = 'general_ranked'",
+      "metric": "row_count",
+      "value": "0"
+    },
+    {
+      "view_name": "vacant_land_targeting",
+      "description": "Likely vacant parcels with acceptable geometry and usable centroid coverage.",
+      "filter_expression": "parcel_vacant_flag = true AND recommended_view_bucket = 'vacant_land_targeting'",
+      "metric": "row_count",
+      "value": "36999"
+    },
+    {
+      "view_name": "vacant_land_targeting",
+      "description": "Likely vacant parcels with acceptable geometry and usable centroid coverage.",
+      "filter_expression": "parcel_vacant_flag = true AND recommended_view_bucket = 'vacant_land_targeting'",
+      "metric": "average_lead_score",
+      "value": "111.5429"
+    },
+    {
+      "view_name": "larger_land_targeting",
+      "description": "Larger-acreage parcels in the current app_ready subset.",
+      "filter_expression": "acreage >= 10 AND recommended_view_bucket = 'larger_land_targeting'",
+      "metric": "row_count",
+      "value": "13001"
+    },
+    {
+      "view_name": "larger_land_targeting",
+      "description": "Larger-acreage parcels in the current app_ready subset.",
+      "filter_expression": "acreage >= 10 AND recommended_view_bucket = 'larger_land_targeting'",
+      "metric": "average_lead_score",
+      "value": "110.9845"
+    }
+  ],
+  "fieldReadiness": [
+    {
+      "field_name": "parcel_vacant_flag",
+      "readiness": "partial",
+      "ui_guidance": "Use as a parcel-attribute proxy, not as an imagery-vacancy replacement.",
+      "notes": "First-pass non-Mississippi runtimes infer improvement status from parcel value fields when available."
+    },
+    {
+      "field_name": "road_access_tier",
+      "readiness": "hide_from_default_ui",
+      "ui_guidance": "Hide until state-specific road enrichment exists.",
+      "notes": "Road-distance enrichment is not included in the first statewide ArcGIS MVP profile."
+    },
+    {
+      "field_name": "delinquent_amount",
+      "readiness": "hide_from_default_ui",
+      "ui_guidance": "Hide until tax-source onboarding is implemented for the state.",
+      "notes": "Parcel runtime MVP does not include delinquent-tax enrichment."
+    },
+    {
+      "field_name": "geometry_marketability_flag",
+      "readiness": "production_ready",
+      "ui_guidance": "Safe to surface as contextual lead-quality guidance.",
+      "notes": "Marketability uses proxy dimensions from source area/perimeter attributes in the statewide ArcGIS profile."
+    }
+  ],
+  "summary": [
+    {
+      "section": "statewide",
+      "metric": "lead_count",
+      "key": "",
+      "value": "50000"
+    },
+    {
+      "section": "statewide",
+      "metric": "average_lead_score",
+      "key": "",
+      "value": "111.3977"
+    },
+    {
+      "section": "statewide",
+      "metric": "likely_vacant_count",
+      "key": "",
+      "value": "50000"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "new_milford",
+      "value": "949"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "waterbury",
+      "value": "910"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "thompson",
+      "value": "753"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "woodstock",
+      "value": "708"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "glastonbury",
+      "value": "672"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "east_haddam",
+      "value": "623"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "killingly",
+      "value": "602"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "middletown",
+      "value": "600"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "danbury",
+      "value": "583"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "guilford",
+      "value": "582"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "southington",
+      "value": "576"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "torrington",
+      "value": "571"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "norwich",
+      "value": "564"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "suffield",
+      "value": "559"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "newtown",
+      "value": "555"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "bristol",
+      "value": "533"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "plainfield",
+      "value": "520"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "mansfield",
+      "value": "498"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "montville",
+      "value": "488"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "colchester",
+      "value": "468"
+    },
+    {
+      "section": "recommended_view_bucket",
+      "metric": "lead_count",
+      "key": "larger_land_targeting",
+      "value": "13001"
+    },
+    {
+      "section": "recommended_view_bucket",
+      "metric": "lead_count",
+      "key": "vacant_land_targeting",
+      "value": "36999"
+    },
+    {
+      "section": "geometry_quality_flag",
+      "metric": "parcel_count",
+      "key": "access_strip",
+      "value": "23008"
+    },
+    {
+      "section": "geometry_quality_flag",
+      "metric": "parcel_count",
+      "key": "good",
+      "value": "1042449"
+    },
+    {
+      "section": "geometry_quality_flag",
+      "metric": "parcel_count",
+      "key": "irregular",
+      "value": "156728"
+    },
+    {
+      "section": "geometry_marketability_action",
+      "metric": "parcel_count",
+      "key": "exclude",
+      "value": "170522"
+    },
+    {
+      "section": "geometry_marketability_action",
+      "metric": "parcel_count",
+      "key": "keep",
+      "value": "1015274"
+    },
+    {
+      "section": "geometry_marketability_action",
+      "metric": "parcel_count",
+      "key": "penalize",
+      "value": "36389"
+    }
+  ],
+  "rowCount": 50000,
+  "source": "C:\\Users\\Rainer\\landrisk\\data\\tax_published\\ct\\app_ready_ct_leads.parquet",
+  "geometryMode": "selected_parcel_geojson",
+  "geometryBounds": [
+    -73.627864,
+    41.023966,
+    -71.787905,
+    42.049683
+  ],
+  "geometryViewBox": [
+    0,
+    0,
+    1000,
+    700
+  ],
+  "warnings": [
+    "Connecticut MVP uses the official statewide parcel layer with town-based partitions, selected-lead centroid backfill, and proxy geometry metrics from statewide area/perimeter fields.",
+    "Connecticut is town-based in the first MVP pass because the official statewide parcel layer is organized by municipality rather than county.",
+    "Local division codes are derived directly from the official Link field to avoid maintaining a separate statewide town-code table.",
+    "Tax and imagery-vacancy enrichment are deferred in the statewide ArcGIS MVP profile."
+  ],
+  "geometrySimplifyTolerance": null
+}

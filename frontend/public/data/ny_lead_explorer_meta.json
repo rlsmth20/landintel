@@ -1,0 +1,264 @@
+{
+  "defaultViews": [
+    {
+      "view_name": "general_ranked",
+      "description": "Top-ranked statewide parcel leads from the official parcel source.",
+      "filter_expression": "recommended_view_bucket = 'general_ranked'",
+      "metric": "row_count",
+      "value": "41722"
+    },
+    {
+      "view_name": "general_ranked",
+      "description": "Top-ranked statewide parcel leads from the official parcel source.",
+      "filter_expression": "recommended_view_bucket = 'general_ranked'",
+      "metric": "average_lead_score",
+      "value": "86.0000"
+    },
+    {
+      "view_name": "vacant_land_targeting",
+      "description": "Likely vacant parcels with acceptable geometry and usable centroid coverage.",
+      "filter_expression": "parcel_vacant_flag = true AND recommended_view_bucket = 'vacant_land_targeting'",
+      "metric": "row_count",
+      "value": "3131"
+    },
+    {
+      "view_name": "vacant_land_targeting",
+      "description": "Likely vacant parcels with acceptable geometry and usable centroid coverage.",
+      "filter_expression": "parcel_vacant_flag = true AND recommended_view_bucket = 'vacant_land_targeting'",
+      "metric": "average_lead_score",
+      "value": "105.6052"
+    },
+    {
+      "view_name": "larger_land_targeting",
+      "description": "Larger-acreage parcels in the current app_ready subset.",
+      "filter_expression": "acreage >= 10 AND recommended_view_bucket = 'larger_land_targeting'",
+      "metric": "row_count",
+      "value": "5147"
+    },
+    {
+      "view_name": "larger_land_targeting",
+      "description": "Larger-acreage parcels in the current app_ready subset.",
+      "filter_expression": "acreage >= 10 AND recommended_view_bucket = 'larger_land_targeting'",
+      "metric": "average_lead_score",
+      "value": "86.4989"
+    }
+  ],
+  "fieldReadiness": [
+    {
+      "field_name": "parcel_vacant_flag",
+      "readiness": "partial",
+      "ui_guidance": "Use as a parcel-attribute proxy, not as an imagery-vacancy replacement.",
+      "notes": "First-pass non-Mississippi runtimes infer improvement status from parcel value fields when available."
+    },
+    {
+      "field_name": "road_access_tier",
+      "readiness": "hide_from_default_ui",
+      "ui_guidance": "Hide until state-specific road enrichment exists.",
+      "notes": "Road-distance enrichment is not included in the first statewide ArcGIS MVP profile."
+    },
+    {
+      "field_name": "delinquent_amount",
+      "readiness": "hide_from_default_ui",
+      "ui_guidance": "Hide until tax-source onboarding is implemented for the state.",
+      "notes": "Parcel runtime MVP does not include delinquent-tax enrichment."
+    },
+    {
+      "field_name": "geometry_marketability_flag",
+      "readiness": "production_ready",
+      "ui_guidance": "Safe to surface as contextual lead-quality guidance.",
+      "notes": "Marketability uses proxy dimensions from source area/perimeter attributes in the statewide ArcGIS profile."
+    }
+  ],
+  "summary": [
+    {
+      "section": "statewide",
+      "metric": "lead_count",
+      "key": "",
+      "value": "50000"
+    },
+    {
+      "section": "statewide",
+      "metric": "average_lead_score",
+      "key": "",
+      "value": "87.2790"
+    },
+    {
+      "section": "statewide",
+      "metric": "likely_vacant_count",
+      "key": "",
+      "value": "3689"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "suffolk",
+      "value": "11376"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "westchester",
+      "value": "2005"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "orange",
+      "value": "1919"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "sullivan",
+      "value": "1853"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "erie",
+      "value": "1810"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "delaware",
+      "value": "1348"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "chautauqua",
+      "value": "1279"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "ulster",
+      "value": "1270"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "oneida",
+      "value": "1215"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "stlawrence",
+      "value": "1146"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "saratoga",
+      "value": "1109"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "rensselaer",
+      "value": "1022"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "onondaga",
+      "value": "975"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "broome",
+      "value": "953"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "warren",
+      "value": "945"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "greene",
+      "value": "916"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "dutchess",
+      "value": "910"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "cattaraugus",
+      "value": "839"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "otsego",
+      "value": "811"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "jefferson",
+      "value": "780"
+    },
+    {
+      "section": "recommended_view_bucket",
+      "metric": "lead_count",
+      "key": "general_ranked",
+      "value": "41722"
+    },
+    {
+      "section": "recommended_view_bucket",
+      "metric": "lead_count",
+      "key": "larger_land_targeting",
+      "value": "5147"
+    },
+    {
+      "section": "recommended_view_bucket",
+      "metric": "lead_count",
+      "key": "vacant_land_targeting",
+      "value": "3131"
+    },
+    {
+      "section": "geometry_quality_flag",
+      "metric": "parcel_count",
+      "key": "good",
+      "value": "5225972"
+    },
+    {
+      "section": "geometry_marketability_action",
+      "metric": "parcel_count",
+      "key": "keep",
+      "value": "5225972"
+    }
+  ],
+  "rowCount": 50000,
+  "source": "C:\\Users\\Rainer\\landrisk\\data\\tax_published\\ny\\app_ready_ny_leads.parquet",
+  "geometryMode": "selected_parcel_geojson",
+  "geometryBounds": [
+    -79.75508,
+    40.58363,
+    -71.87348,
+    45.008553
+  ],
+  "geometryViewBox": [
+    0,
+    0,
+    1000,
+    700
+  ],
+  "warnings": [
+    "New York MVP uses the official statewide tax-parcel centroid layer. The parcel base layer can cover all parcels statewide as points, but statewide polygon coverage remains source-limited.",
+    "New York is a strong statewide point-overlay state because the official source is statewide and richly attributed, but it is centroid-only rather than polygonal.",
+    "Assessed improvement value is not separately exposed in this source, so vacancy proxy precision is weaker than Wisconsin or Montana.",
+    "Tax and imagery-vacancy enrichment are deferred in the statewide ArcGIS MVP profile."
+  ],
+  "geometrySimplifyTolerance": null
+}

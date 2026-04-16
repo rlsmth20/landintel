@@ -191,6 +191,7 @@ PRESET_DEFINITIONS = {
 PARCEL_TILE_LAYER = "parcels"
 PARCEL_TILE_MIN_ZOOM = 14
 MISSISSIPPI_TILE_BOUNDS = (-91.65, 30.15, -88.0, 35.1)
+logger = logging.getLogger("mississippi-leads")
 tile_logger = logging.getLogger("parcel-tiles")
 DEFAULT_TILE_URL_TEMPLATE = "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
 SQFT_PER_ACRE = 43560.0
@@ -3184,6 +3185,21 @@ def runtime_file_diagnostics() -> dict[str, dict[str, int | bool | str | None]]:
     return diagnostics
 
 
+@lru_cache(maxsize=1)
+def _embedded_default_leads_payload() -> dict[str, Any] | None:
+    if not EMBEDDED_DEFAULT_LEADS_PATH.exists():
+        return None
+    try:
+        payload = json.loads(EMBEDDED_DEFAULT_LEADS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        logger.exception("mississippi default leads artifact load failed path=%s", EMBEDDED_DEFAULT_LEADS_PATH)
+        return None
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        logger.warning("mississippi default leads artifact has invalid payload path=%s", EMBEDDED_DEFAULT_LEADS_PATH)
+        return None
+    return payload
+
+
 def get_leads(
     *,
     county_name: str | None = None,
@@ -3208,6 +3224,35 @@ def get_leads(
     limit: int = LEADS_DEFAULT_LIMIT,
     offset: int = 0,
 ) -> dict[str, Any]:
+    default_request = not any(
+        value
+        for value in [
+            county_name,
+            lead_score_tier,
+            min_lead_score_total,
+            acreage_min,
+            acreage_max,
+            parcel_vacant_flag,
+            county_hosted_flag,
+            high_confidence_link_flag,
+            wetland_flag,
+            amount_trust_tier,
+            corporate_owner_flag,
+            absentee_owner_flag,
+            out_of_state_owner_flag,
+            growth_pressure_bucket,
+            recommended_view_bucket,
+            road_access_tier,
+            road_distance_ft_max,
+            offset,
+        ]
+    ) and sort_by == "lead_score_total" and sort_direction == "desc"
+    if default_request:
+        default_payload = _embedded_default_leads_payload()
+        if default_payload is not None:
+            logger.info("mississippi leads using embedded default artifact path=%s", EMBEDDED_DEFAULT_LEADS_PATH)
+            return default_payload
+
     if _using_embedded_runtime():
         resolved_sort_by = _resolve_sort_by(sort_by, _embedded_parcel_dataset().schema.names)
         safe_limit = _clamp_limit(limit, default=LEADS_DEFAULT_LIMIT, max_limit=LEADS_MAX_LIMIT)

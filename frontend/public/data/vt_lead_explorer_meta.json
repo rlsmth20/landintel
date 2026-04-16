@@ -1,0 +1,288 @@
+{
+  "defaultViews": [
+    {
+      "view_name": "general_ranked",
+      "description": "Top-ranked statewide parcel leads from the official parcel source.",
+      "filter_expression": "recommended_view_bucket = 'general_ranked'",
+      "metric": "row_count",
+      "value": "3020"
+    },
+    {
+      "view_name": "general_ranked",
+      "description": "Top-ranked statewide parcel leads from the official parcel source.",
+      "filter_expression": "recommended_view_bucket = 'general_ranked'",
+      "metric": "average_lead_score",
+      "value": "93.6040"
+    },
+    {
+      "view_name": "vacant_land_targeting",
+      "description": "Likely vacant parcels with acceptable geometry and usable centroid coverage.",
+      "filter_expression": "parcel_vacant_flag = true AND recommended_view_bucket = 'vacant_land_targeting'",
+      "metric": "row_count",
+      "value": "27335"
+    },
+    {
+      "view_name": "vacant_land_targeting",
+      "description": "Likely vacant parcels with acceptable geometry and usable centroid coverage.",
+      "filter_expression": "parcel_vacant_flag = true AND recommended_view_bucket = 'vacant_land_targeting'",
+      "metric": "average_lead_score",
+      "value": "105.4635"
+    },
+    {
+      "view_name": "larger_land_targeting",
+      "description": "Larger-acreage parcels in the current app_ready subset.",
+      "filter_expression": "acreage >= 10 AND recommended_view_bucket = 'larger_land_targeting'",
+      "metric": "row_count",
+      "value": "19645"
+    },
+    {
+      "view_name": "larger_land_targeting",
+      "description": "Larger-acreage parcels in the current app_ready subset.",
+      "filter_expression": "acreage >= 10 AND recommended_view_bucket = 'larger_land_targeting'",
+      "metric": "average_lead_score",
+      "value": "102.8048"
+    }
+  ],
+  "fieldReadiness": [
+    {
+      "field_name": "parcel_vacant_flag",
+      "readiness": "partial",
+      "ui_guidance": "Use as a parcel-attribute proxy, not as an imagery-vacancy replacement.",
+      "notes": "First-pass non-Mississippi runtimes infer improvement status from parcel value fields when available."
+    },
+    {
+      "field_name": "road_access_tier",
+      "readiness": "hide_from_default_ui",
+      "ui_guidance": "Hide until state-specific road enrichment exists.",
+      "notes": "Road-distance enrichment is not included in the first statewide ArcGIS MVP profile."
+    },
+    {
+      "field_name": "delinquent_amount",
+      "readiness": "hide_from_default_ui",
+      "ui_guidance": "Hide until tax-source onboarding is implemented for the state.",
+      "notes": "Parcel runtime MVP does not include delinquent-tax enrichment."
+    },
+    {
+      "field_name": "geometry_marketability_flag",
+      "readiness": "production_ready",
+      "ui_guidance": "Safe to surface as contextual lead-quality guidance.",
+      "notes": "Marketability uses proxy dimensions from source area/perimeter attributes in the statewide ArcGIS profile."
+    }
+  ],
+  "summary": [
+    {
+      "section": "statewide",
+      "metric": "lead_count",
+      "key": "",
+      "value": "50000"
+    },
+    {
+      "section": "statewide",
+      "metric": "average_lead_score",
+      "key": "",
+      "value": "103.7026"
+    },
+    {
+      "section": "statewide",
+      "metric": "likely_vacant_count",
+      "key": "",
+      "value": "44510"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "colchester",
+      "value": "4357"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "hartford",
+      "value": "3476"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "williston",
+      "value": "2754"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "dover",
+      "value": "1730"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "killington",
+      "value": "1335"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "pittsford",
+      "value": "1296"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "mount_holly",
+      "value": "1144"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "guilford",
+      "value": "999"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "wilmington",
+      "value": "584"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "pomfret",
+      "value": "539"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "stratton",
+      "value": "461"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "sudbury",
+      "value": "385"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "bennington",
+      "value": "326"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "derby",
+      "value": "312"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "newbury",
+      "value": "301"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "warren",
+      "value": "287"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "ludlow",
+      "value": "267"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "brandon",
+      "value": "266"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "springfield",
+      "value": "264"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "castleton",
+      "value": "261"
+    },
+    {
+      "section": "recommended_view_bucket",
+      "metric": "lead_count",
+      "key": "general_ranked",
+      "value": "3020"
+    },
+    {
+      "section": "recommended_view_bucket",
+      "metric": "lead_count",
+      "key": "larger_land_targeting",
+      "value": "19645"
+    },
+    {
+      "section": "recommended_view_bucket",
+      "metric": "lead_count",
+      "key": "vacant_land_targeting",
+      "value": "27335"
+    },
+    {
+      "section": "geometry_quality_flag",
+      "metric": "parcel_count",
+      "key": "access_strip",
+      "value": "13167"
+    },
+    {
+      "section": "geometry_quality_flag",
+      "metric": "parcel_count",
+      "key": "good",
+      "value": "276438"
+    },
+    {
+      "section": "geometry_quality_flag",
+      "metric": "parcel_count",
+      "key": "irregular",
+      "value": "12970"
+    },
+    {
+      "section": "geometry_marketability_action",
+      "metric": "parcel_count",
+      "key": "exclude",
+      "value": "25745"
+    },
+    {
+      "section": "geometry_marketability_action",
+      "metric": "parcel_count",
+      "key": "keep",
+      "value": "260950"
+    },
+    {
+      "section": "geometry_marketability_action",
+      "metric": "parcel_count",
+      "key": "penalize",
+      "value": "15880"
+    }
+  ],
+  "rowCount": 50000,
+  "source": "C:\\Users\\Rainer\\landrisk\\data\\tax_published\\vt\\app_ready_vt_leads.parquet",
+  "geometryMode": "selected_parcel_geojson",
+  "geometryBounds": [
+    -73.422151,
+    42.728036,
+    -71.480526,
+    45.015635
+  ],
+  "geometryViewBox": [
+    0,
+    0,
+    1000,
+    700
+  ],
+  "warnings": [
+    "Vermont MVP uses the official statewide parcel layer with town-based partitions, selected-lead centroid backfill, and proxy geometry metrics from statewide area/perimeter fields.",
+    "Vermont is town-based in the first MVP pass because the official statewide grand-list parcel layer is organized by municipality rather than county.",
+    "The runtime prefers GLIST_SPAN as the statewide parcel identifier and derives the local division code from the SPAN prefix.",
+    "Tax and imagery-vacancy enrichment are deferred in the statewide ArcGIS MVP profile."
+  ],
+  "geometrySimplifyTolerance": null
+}

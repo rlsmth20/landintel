@@ -1,0 +1,275 @@
+{
+  "defaultViews": [
+    {
+      "view_name": "general_ranked",
+      "description": "Top-ranked statewide parcel leads from the official parcel source.",
+      "filter_expression": "recommended_view_bucket = 'general_ranked'",
+      "metric": "row_count",
+      "value": "0"
+    },
+    {
+      "view_name": "vacant_land_targeting",
+      "description": "Likely vacant parcels with acceptable geometry and usable centroid coverage.",
+      "filter_expression": "parcel_vacant_flag = true AND recommended_view_bucket = 'vacant_land_targeting'",
+      "metric": "row_count",
+      "value": "15553"
+    },
+    {
+      "view_name": "vacant_land_targeting",
+      "description": "Likely vacant parcels with acceptable geometry and usable centroid coverage.",
+      "filter_expression": "parcel_vacant_flag = true AND recommended_view_bucket = 'vacant_land_targeting'",
+      "metric": "average_lead_score",
+      "value": "113.5544"
+    },
+    {
+      "view_name": "larger_land_targeting",
+      "description": "Larger-acreage parcels in the current app_ready subset.",
+      "filter_expression": "acreage >= 10 AND recommended_view_bucket = 'larger_land_targeting'",
+      "metric": "row_count",
+      "value": "34447"
+    },
+    {
+      "view_name": "larger_land_targeting",
+      "description": "Larger-acreage parcels in the current app_ready subset.",
+      "filter_expression": "acreage >= 10 AND recommended_view_bucket = 'larger_land_targeting'",
+      "metric": "average_lead_score",
+      "value": "113.9825"
+    }
+  ],
+  "fieldReadiness": [
+    {
+      "field_name": "parcel_vacant_flag",
+      "readiness": "partial",
+      "ui_guidance": "Use as a parcel-attribute proxy, not as an imagery-vacancy replacement.",
+      "notes": "First-pass non-Mississippi runtimes infer improvement status from parcel value fields when available."
+    },
+    {
+      "field_name": "road_access_tier",
+      "readiness": "hide_from_default_ui",
+      "ui_guidance": "Hide until state-specific road enrichment exists.",
+      "notes": "Road-distance enrichment is not included in the first statewide ArcGIS MVP profile."
+    },
+    {
+      "field_name": "delinquent_amount",
+      "readiness": "hide_from_default_ui",
+      "ui_guidance": "Hide until tax-source onboarding is implemented for the state.",
+      "notes": "Parcel runtime MVP does not include delinquent-tax enrichment."
+    },
+    {
+      "field_name": "geometry_marketability_flag",
+      "readiness": "production_ready",
+      "ui_guidance": "Safe to surface as contextual lead-quality guidance.",
+      "notes": "Marketability uses proxy dimensions from source area/perimeter attributes in the statewide ArcGIS profile."
+    }
+  ],
+  "summary": [
+    {
+      "section": "statewide",
+      "metric": "lead_count",
+      "key": "",
+      "value": "50000"
+    },
+    {
+      "section": "statewide",
+      "metric": "average_lead_score",
+      "key": "",
+      "value": "113.8494"
+    },
+    {
+      "section": "statewide",
+      "metric": "likely_vacant_count",
+      "key": "",
+      "value": "50000"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "ravalli",
+      "value": "2629"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "flathead",
+      "value": "2456"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "glacier",
+      "value": "2278"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "madison",
+      "value": "2007"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "fergus",
+      "value": "2005"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "big_horn",
+      "value": "1853"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "yellowstone",
+      "value": "1848"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "gallatin",
+      "value": "1738"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "cascade",
+      "value": "1618"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "lake",
+      "value": "1498"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "lewis_and_clark",
+      "value": "1454"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "valley",
+      "value": "1451"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "jefferson",
+      "value": "1414"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "missoula",
+      "value": "1348"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "beaverhead",
+      "value": "1232"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "carbon",
+      "value": "1209"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "lincoln",
+      "value": "1197"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "chouteau",
+      "value": "1164"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "sanders",
+      "value": "1027"
+    },
+    {
+      "section": "top_counties",
+      "metric": "lead_count",
+      "key": "park",
+      "value": "942"
+    },
+    {
+      "section": "recommended_view_bucket",
+      "metric": "lead_count",
+      "key": "larger_land_targeting",
+      "value": "34447"
+    },
+    {
+      "section": "recommended_view_bucket",
+      "metric": "lead_count",
+      "key": "vacant_land_targeting",
+      "value": "15553"
+    },
+    {
+      "section": "geometry_quality_flag",
+      "metric": "parcel_count",
+      "key": "access_strip",
+      "value": "17686"
+    },
+    {
+      "section": "geometry_quality_flag",
+      "metric": "parcel_count",
+      "key": "good",
+      "value": "711693"
+    },
+    {
+      "section": "geometry_quality_flag",
+      "metric": "parcel_count",
+      "key": "irregular",
+      "value": "156120"
+    },
+    {
+      "section": "geometry_marketability_action",
+      "metric": "parcel_count",
+      "key": "exclude",
+      "value": "171111"
+    },
+    {
+      "section": "geometry_marketability_action",
+      "metric": "parcel_count",
+      "key": "keep",
+      "value": "695223"
+    },
+    {
+      "section": "geometry_marketability_action",
+      "metric": "parcel_count",
+      "key": "penalize",
+      "value": "19165"
+    }
+  ],
+  "rowCount": 50000,
+  "source": "C:\\Users\\Rainer\\landrisk\\data\\tax_published\\mt\\app_ready_mt_leads.parquet",
+  "geometryMode": "selected_parcel_geojson",
+  "geometryBounds": [
+    -116.046827,
+    44.362561,
+    -104.042061,
+    48.999421
+  ],
+  "geometryViewBox": [
+    0,
+    0,
+    1000,
+    700
+  ],
+  "warnings": [
+    "Montana MVP uses the official DNRC cadastral parcel layer with selected-lead centroid backfill and proxy geometry metrics from statewide area/perimeter fields.",
+    "Montana is the next best polygon-template state after Wisconsin because the official source is statewide and structured, but selected-lead centroid backfill is needed.",
+    "The statewide source contains some placeholder parcel identifiers, so the runtime prefers Geocode and falls back to ParcelID or PropertyID.",
+    "Tax and imagery-vacancy enrichment are deferred in the statewide ArcGIS MVP profile."
+  ],
+  "geometrySimplifyTolerance": null
+}

@@ -49,29 +49,33 @@ def leads(
     offset: int = 0,
 ):
     service = _service(state_code)
-    return service.get_leads(
-        county_name=county_name,
-        lead_score_tier=lead_score_tier,
-        min_lead_score_total=min_lead_score_total,
-        acreage_min=acreage_min,
-        acreage_max=acreage_max,
-        parcel_vacant_flag=parcel_vacant_flag,
-        county_hosted_flag=county_hosted_flag,
-        high_confidence_link_flag=high_confidence_link_flag,
-        wetland_flag=wetland_flag,
-        amount_trust_tier=amount_trust_tier,
-        corporate_owner_flag=corporate_owner_flag,
-        absentee_owner_flag=absentee_owner_flag,
-        out_of_state_owner_flag=out_of_state_owner_flag,
-        growth_pressure_bucket=growth_pressure_bucket,
-        recommended_view_bucket=recommended_view_bucket,
-        road_access_tier=road_access_tier,
-        road_distance_ft_max=road_distance_ft_max,
-        sort_by=sort_by,
-        sort_direction=sort_direction,
-        limit=limit,
-        offset=offset,
-    )
+    try:
+        return service.get_leads(
+            county_name=county_name,
+            lead_score_tier=lead_score_tier,
+            min_lead_score_total=min_lead_score_total,
+            acreage_min=acreage_min,
+            acreage_max=acreage_max,
+            parcel_vacant_flag=parcel_vacant_flag,
+            county_hosted_flag=county_hosted_flag,
+            high_confidence_link_flag=high_confidence_link_flag,
+            wetland_flag=wetland_flag,
+            amount_trust_tier=amount_trust_tier,
+            corporate_owner_flag=corporate_owner_flag,
+            absentee_owner_flag=absentee_owner_flag,
+            out_of_state_owner_flag=out_of_state_owner_flag,
+            growth_pressure_bucket=growth_pressure_bucket,
+            recommended_view_bucket=recommended_view_bucket,
+            road_access_tier=road_access_tier,
+            road_distance_ft_max=road_distance_ft_max,
+            sort_by=sort_by,
+            sort_direction=sort_direction,
+            limit=limit,
+            offset=offset,
+        )
+    except FileNotFoundError as error:
+        logger.exception("state leads artifacts unavailable state=%s", state_code)
+        raise HTTPException(status_code=503, detail=str(error)) from error
 
 
 @router.get("/leads/search")

@@ -119,32 +119,290 @@ class RuntimeStateService:
     def state_name(self) -> str:
         return self.definition.state_name
 
+    def _read_json_artifact(self, path: Path, *, artifact: str) -> Any | None:
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.exception(
+                "State artifact load failed state=%s artifact=%s path=%s",
+                self.state_code,
+                artifact,
+                path,
+            )
+            return None
+
+    def _state_summary_unavailable_payload(self) -> dict[str, Any]:
+        return {
+            "row_count": 0,
+            "source": f"{self.state_name} runtime artifacts unavailable",
+            "geometry_mode": "selected_parcel_geojson",
+            "sections": {
+                "statewide": [],
+                "top_counties": [],
+                "recommended_view_bucket": [],
+            },
+        }
+
+    def _is_usable_summary_payload(self, payload: Any) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        sections = payload.get("sections")
+        if not isinstance(sections, dict):
+            return False
+        if any(isinstance(items, list) and items for items in sections.values()):
+            return True
+        try:
+            row_count = int(payload.get("row_count") or 0)
+        except Exception:
+            row_count = 0
+        if row_count > 0:
+            return True
+        source = (_normalize_string(payload.get("source")) or "").lower()
+        return bool(source) and "unavailable" not in source
+
+    @lru_cache(maxsize=1)
+    def _frontend_meta_payload(self) -> dict[str, Any] | None:
+        payload = self._read_json_artifact(self.artifacts.frontend_meta_path, artifact="frontend_meta")
+        return payload if isinstance(payload, dict) else None
+
+    def _summary_from_meta_payload(self) -> dict[str, Any] | None:
+        payload = self._frontend_meta_payload()
+        if not isinstance(payload, dict):
+            return None
+        rows = payload.get("summary")
+        if not isinstance(rows, list) or not rows:
+            return None
+        sections: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            section = _normalize_string(row.get("section")) or "statewide"
+            sections.setdefault(section, []).append(
+                {
+                    "section": section,
+                    "metric": _normalize_string(row.get("metric")),
+                    "key": _normalize_string(row.get("key")),
+                    "value": "" if row.get("value") is None else str(row.get("value")),
+                }
+            )
+        if not sections:
+            return None
+        try:
+            row_count = int(payload.get("rowCount") or 0)
+        except Exception:
+            row_count = 0
+        source_label = _normalize_string(payload.get("source"))
+        if source_label and "frontend meta fallback" not in source_label.lower():
+            source_label = f"{source_label} (frontend meta fallback)"
+        return {
+            "row_count": row_count,
+            "source": source_label or f"{self.state_name} frontend meta fallback",
+            "geometry_mode": _normalize_string(payload.get("geometryMode")) or "selected_parcel_geojson",
+            "sections": sections,
+        }
+
+    def _presets_from_meta_payload(self) -> list[dict[str, Any]]:
+        payload = self._frontend_meta_payload()
+        if not isinstance(payload, dict):
+            return []
+        default_views = payload.get("defaultViews")
+        if not isinstance(default_views, list):
+            return []
+        grouped: dict[str, dict[str, Any]] = {}
+        for item in default_views:
+            if not isinstance(item, dict):
+                continue
+            view_name = _normalize_string(item.get("view_name"))
+            if not view_name:
+                continue
+            current = grouped.setdefault(
+                view_name,
+                {
+                    "view_name": view_name,
+                    "description": _normalize_string(item.get("description")),
+                    "filter_expression": _normalize_string(item.get("filter_expression")),
+                },
+            )
+            metric = _normalize_string(item.get("metric"))
+            value = "" if item.get("value") is None else str(item.get("value"))
+            if metric == "row_count":
+                current["row_count"] = value
+            elif metric == "average_lead_score":
+                current["average_lead_score"] = value
+        return list(grouped.values())
+
+    def _normalize_leads_payload(self, payload: Any) -> dict[str, Any] | None:
+        if isinstance(payload, list):
+            items_payload = payload
+            total_count = len(items_payload)
+            limit = len(items_payload)
+            offset = 0
+        elif isinstance(payload, dict):
+            items_payload = payload.get("items")
+            if not isinstance(items_payload, list):
+                return None
+            try:
+                total_count = int(payload.get("total_count") or len(items_payload))
+            except Exception:
+                total_count = len(items_payload)
+            try:
+                limit = int(payload.get("limit") or len(items_payload))
+            except Exception:
+                limit = len(items_payload)
+            try:
+                offset = int(payload.get("offset") or 0)
+            except Exception:
+                offset = 0
+        else:
+            return None
+        records = [
+            serialize_contract_row(item, API_LEADS_SUMMARY_FIELDS, serializer=_json_scalar)
+            for item in items_payload
+            if isinstance(item, Mapping)
+        ]
+        validate_output_records(
+            records,
+            expected_fields=API_LEADS_SUMMARY_FIELDS,
+            required_fields=["parcel_row_id", "parcel_id", "county_name"],
+            non_null_fields=["parcel_row_id", "parcel_id"],
+            context=f"runtime_state_service[{self.state_code}].normalize_leads_payload",
+        )
+        return {
+            "total_count": total_count,
+            "limit": limit,
+            "offset": offset,
+            "items": records,
+        }
+
+    @lru_cache(maxsize=1)
+    def _frontend_static_feed_payload(self) -> dict[str, Any] | None:
+        payload = self._read_json_artifact(self.artifacts.frontend_static_feed_path, artifact="frontend_static_feed")
+        normalized = self._normalize_leads_payload(payload)
+        return normalized if normalized is not None else None
+
+    @lru_cache(maxsize=1)
+    def _frontend_detail_fallback_payload(self) -> list[dict[str, Any]]:
+        payload = self._read_json_artifact(self.artifacts.frontend_detail_fallback_path, artifact="frontend_detail_fallback")
+        return payload if isinstance(payload, list) else []
+
+    @lru_cache(maxsize=1)
+    def _frontend_static_feed_frame(self) -> pd.DataFrame:
+        payload = self._frontend_static_feed_payload()
+        items = payload.get("items", []) if isinstance(payload, dict) else []
+        frame = pd.DataFrame(items)
+        if "parcel_row_id" in frame.columns:
+            frame["parcel_row_id"] = frame["parcel_row_id"].astype("string")
+        return frame
+
+    @lru_cache(maxsize=1)
+    def _frontend_detail_fallback_frame(self) -> pd.DataFrame:
+        frame = pd.DataFrame(self._frontend_detail_fallback_payload())
+        if "parcel_row_id" in frame.columns:
+            frame["parcel_row_id"] = frame["parcel_row_id"].astype("string")
+        return frame
+
+    @lru_cache(maxsize=1)
+    def _fallback_query_frame(self) -> pd.DataFrame:
+        detail_frame = self._frontend_detail_fallback_frame()
+        if not detail_frame.empty:
+            return detail_frame
+        return self._frontend_static_feed_frame()
+
+    def _fallback_frame_row(self, parcel_row_id: str) -> pd.Series | None:
+        for frame in (self._frontend_detail_fallback_frame(), self._frontend_static_feed_frame()):
+            if frame.empty or "parcel_row_id" not in frame.columns:
+                continue
+            matched = frame.loc[frame["parcel_row_id"].astype("string") == parcel_row_id]
+            if not matched.empty:
+                return matched.iloc[0]
+        return None
+
     @lru_cache(maxsize=1)
     def _summary_payload(self) -> dict[str, Any]:
-        if not self.artifacts.runtime_summary_path.exists():
-            return {
-                "row_count": 0,
-                "source": f"{self.state_name} runtime artifacts unavailable",
-                "geometry_mode": "selected_parcel_geojson",
-                "sections": {
-                    "statewide": [],
-                    "top_counties": [],
-                    "recommended_view_bucket": [],
-                },
-            }
-        return json.loads(self.artifacts.runtime_summary_path.read_text(encoding="utf-8"))
+        payload = self._read_json_artifact(self.artifacts.runtime_summary_path, artifact="runtime_summary")
+        if self._is_usable_summary_payload(payload):
+            return payload
+        fallback = self._summary_from_meta_payload()
+        if fallback is not None:
+            logger.warning(
+                "State summary fallback activated state=%s runtime_path=%s meta_path=%s",
+                self.state_code,
+                self.artifacts.runtime_summary_path,
+                self.artifacts.frontend_meta_path,
+            )
+            return fallback
+        logger.warning(
+            "State summary unavailable state=%s runtime_path=%s meta_path=%s",
+            self.state_code,
+            self.artifacts.runtime_summary_path,
+            self.artifacts.frontend_meta_path,
+        )
+        return self._state_summary_unavailable_payload()
 
     @lru_cache(maxsize=1)
     def _presets_payload(self) -> list[dict[str, Any]]:
-        if not self.artifacts.runtime_presets_path.exists():
-            return []
-        return json.loads(self.artifacts.runtime_presets_path.read_text(encoding="utf-8"))
+        payload = self._read_json_artifact(self.artifacts.runtime_presets_path, artifact="runtime_presets")
+        if isinstance(payload, list) and payload:
+            return payload
+        fallback = self._presets_from_meta_payload()
+        if fallback:
+            logger.warning(
+                "State presets fallback activated state=%s runtime_path=%s meta_path=%s",
+                self.state_code,
+                self.artifacts.runtime_presets_path,
+                self.artifacts.frontend_meta_path,
+            )
+            return fallback
+        return []
 
     @lru_cache(maxsize=1)
     def _default_leads_payload(self) -> dict[str, Any]:
-        if not self.artifacts.runtime_default_leads_path.exists():
-            return {"total_count": 0, "limit": 0, "offset": 0, "items": []}
-        return json.loads(self.artifacts.runtime_default_leads_path.read_text(encoding="utf-8"))
+        runtime_payload = self._normalize_leads_payload(
+            self._read_json_artifact(self.artifacts.runtime_default_leads_path, artifact="runtime_default_leads")
+        )
+        if runtime_payload is not None and runtime_payload.get("items"):
+            return runtime_payload
+        static_payload = self._frontend_static_feed_payload()
+        if static_payload is not None and static_payload.get("items"):
+            logger.warning(
+                "State leads fallback activated state=%s source=frontend_static_feed runtime_path=%s static_path=%s",
+                self.state_code,
+                self.artifacts.runtime_default_leads_path,
+                self.artifacts.frontend_static_feed_path,
+            )
+            return static_payload
+        detail_frame = self._frontend_detail_fallback_frame()
+        if not detail_frame.empty:
+            records = [
+                serialize_contract_row(row.to_dict(), API_LEADS_SUMMARY_FIELDS, serializer=_json_scalar)
+                for _, row in detail_frame.head(200).iterrows()
+            ]
+            validate_output_records(
+                records,
+                expected_fields=API_LEADS_SUMMARY_FIELDS,
+                required_fields=["parcel_row_id", "parcel_id", "county_name"],
+                non_null_fields=["parcel_row_id", "parcel_id"],
+                context=f"runtime_state_service[{self.state_code}].default_leads_detail_fallback",
+            )
+            logger.warning(
+                "State leads fallback activated state=%s source=frontend_detail_fallback detail_path=%s",
+                self.state_code,
+                self.artifacts.frontend_detail_fallback_path,
+            )
+            return {
+                "total_count": int(len(detail_frame)),
+                "limit": min(200, int(len(detail_frame))),
+                "offset": 0,
+                "items": records,
+            }
+        raise FileNotFoundError(
+            "State leads artifacts unavailable: "
+            f"runtime_default={self.artifacts.runtime_default_leads_path}; "
+            f"static_feed={self.artifacts.frontend_static_feed_path}; "
+            f"detail_fallback={self.artifacts.frontend_detail_fallback_path}"
+        )
 
     @lru_cache(maxsize=1)
     def _app_ready_dataset(self) -> ds.Dataset:
@@ -165,9 +423,14 @@ class RuntimeStateService:
 
     @lru_cache(maxsize=1)
     def _search_frame(self) -> pd.DataFrame:
-        dataset = self._app_ready_dataset()
-        available_columns = [column for column in SEARCH_SOURCE_FIELDS + ["latitude", "longitude"] if column in dataset.schema.names]
-        frame = dataset.to_table(columns=available_columns).to_pandas()
+        if self.artifacts.app_ready_path.exists():
+            dataset = self._app_ready_dataset()
+            available_columns = [column for column in SEARCH_SOURCE_FIELDS + ["latitude", "longitude"] if column in dataset.schema.names]
+            frame = dataset.to_table(columns=available_columns).to_pandas()
+        else:
+            fallback = self._fallback_query_frame()
+            available_columns = [column for column in SEARCH_SOURCE_FIELDS + ["latitude", "longitude"] if column in fallback.columns]
+            frame = fallback.loc[:, available_columns].copy() if available_columns else pd.DataFrame(columns=SEARCH_SOURCE_FIELDS)
         if "parcel_row_id" in frame.columns:
             frame["parcel_row_id"] = frame["parcel_row_id"].astype("string")
         return frame
@@ -209,9 +472,18 @@ class RuntimeStateService:
         return table.to_pandas().iloc[0]
 
     def _detail_row(self, parcel_row_id: str) -> pd.Series | None:
-        return self._dataset_row(self._detail_dataset(), parcel_row_id)
+        if self.artifacts.runtime_detail_metrics_path.exists() or self.artifacts.app_ready_path.exists():
+            try:
+                row = self._dataset_row(self._detail_dataset(), parcel_row_id)
+            except FileNotFoundError:
+                row = None
+            if row is not None:
+                return row
+        return self._fallback_frame_row(parcel_row_id)
 
     def _parcel_master_row(self, parcel_row_id: str) -> pd.Series | None:
+        if not self.artifacts.parcel_master_path.exists():
+            return None
         return self._dataset_row(self._parcel_master_dataset(), parcel_row_id)
 
     def _row_for_parcel(self, parcel_row_id: str) -> pd.Series | None:
@@ -221,11 +493,98 @@ class RuntimeStateService:
         return row
 
     def _query_frame(self, *, columns: list[str], filter_expression: ds.Expression | None = None) -> pd.DataFrame:
-        dataset = self._app_ready_dataset()
-        available_columns = [column for column in columns if column in dataset.schema.names]
+        if self.artifacts.app_ready_path.exists():
+            dataset = self._app_ready_dataset()
+            available_columns = [column for column in columns if column in dataset.schema.names]
+            if not available_columns:
+                return pd.DataFrame(columns=columns)
+            return dataset.to_table(columns=available_columns, filter=filter_expression).to_pandas()
+        fallback = self._fallback_query_frame()
+        available_columns = [column for column in columns if column in fallback.columns]
         if not available_columns:
             return pd.DataFrame(columns=columns)
-        return dataset.to_table(columns=available_columns, filter=filter_expression).to_pandas()
+        return fallback.loc[:, available_columns].copy()
+
+    def _apply_lead_filters_to_frame(
+        self,
+        frame: pd.DataFrame,
+        *,
+        county_name: str | None = None,
+        lead_score_tier: list[str] | None = None,
+        min_lead_score_total: float | None = None,
+        acreage_min: float | None = None,
+        acreage_max: float | None = None,
+        parcel_vacant_flag: bool | None = None,
+        county_hosted_flag: bool | None = None,
+        high_confidence_link_flag: bool | None = None,
+        wetland_flag: bool | None = None,
+        amount_trust_tier: list[str] | None = None,
+        corporate_owner_flag: bool | None = None,
+        absentee_owner_flag: bool | None = None,
+        out_of_state_owner_flag: bool | None = None,
+        growth_pressure_bucket: list[str] | None = None,
+        recommended_view_bucket: list[str] | None = None,
+        road_access_tier: list[str] | None = None,
+        road_distance_ft_max: float | None = None,
+        sort_by: str = "lead_score_total",
+        sort_direction: str = "desc",
+    ) -> pd.DataFrame:
+        filtered = frame.copy()
+
+        def _string_series(column: str) -> pd.Series:
+            if column not in filtered.columns:
+                return pd.Series(pd.NA, index=filtered.index, dtype="string")
+            return pd.Series(filtered[column], index=filtered.index, dtype="string").str.strip()
+
+        def _apply_membership_filter(column: str, allowed: list[str] | None) -> None:
+            nonlocal filtered
+            if not allowed or column not in filtered.columns:
+                return
+            allowed_values = {str(value).strip().lower() for value in allowed if str(value).strip()}
+            if not allowed_values:
+                return
+            normalized = _string_series(column).str.lower()
+            filtered = filtered.loc[normalized.isin(allowed_values)].copy()
+
+        def _apply_bool_filter(column: str, expected: bool | None) -> None:
+            nonlocal filtered
+            if expected is None or column not in filtered.columns:
+                return
+            filtered = filtered.loc[filtered[column].fillna(False).astype(bool) == bool(expected)].copy()
+
+        if county_name and "county_name" in filtered.columns:
+            filtered = filtered.loc[_string_series("county_name").str.lower() == (_slug_county_name(county_name) or "")].copy()
+        if acreage_min is not None and "acreage" in filtered.columns:
+            filtered = filtered.loc[pd.to_numeric(filtered["acreage"], errors="coerce") >= float(acreage_min)].copy()
+        if acreage_max is not None and "acreage" in filtered.columns:
+            filtered = filtered.loc[pd.to_numeric(filtered["acreage"], errors="coerce") <= float(acreage_max)].copy()
+        if min_lead_score_total is not None:
+            score_column = "lead_score_total" if "lead_score_total" in filtered.columns else "lead_score_total_effective"
+            if score_column in filtered.columns:
+                filtered = filtered.loc[pd.to_numeric(filtered[score_column], errors="coerce") >= float(min_lead_score_total)].copy()
+        _apply_bool_filter("parcel_vacant_flag", parcel_vacant_flag)
+        _apply_bool_filter("county_hosted_flag", county_hosted_flag)
+        _apply_bool_filter("high_confidence_link_flag", high_confidence_link_flag)
+        _apply_bool_filter("wetland_flag", wetland_flag)
+        _apply_bool_filter("corporate_owner_flag", corporate_owner_flag)
+        _apply_bool_filter("absentee_owner_flag", absentee_owner_flag)
+        _apply_bool_filter("out_of_state_owner_flag", out_of_state_owner_flag)
+        _apply_membership_filter("lead_score_tier", lead_score_tier)
+        _apply_membership_filter("amount_trust_tier", amount_trust_tier)
+        _apply_membership_filter("growth_pressure_bucket", growth_pressure_bucket)
+        _apply_membership_filter("recommended_view_bucket", recommended_view_bucket)
+        _apply_membership_filter("road_access_tier", road_access_tier)
+        if road_distance_ft_max is not None and "road_distance_ft" in filtered.columns:
+            filtered = filtered.loc[pd.to_numeric(filtered["road_distance_ft"], errors="coerce") <= float(road_distance_ft_max)].copy()
+
+        if sort_by not in filtered.columns:
+            sort_by = "lead_score_total" if "lead_score_total" in filtered.columns else "acreage"
+        if sort_by in filtered.columns and sort_by in {"lead_score_total", "lead_score_total_effective", "acreage", "road_distance_ft"}:
+            filtered[sort_by] = pd.to_numeric(filtered[sort_by], errors="coerce")
+        ascending = str(sort_direction).lower() == "asc"
+        if sort_by in filtered.columns:
+            filtered = filtered.sort_values(by=sort_by, ascending=ascending, na_position="last", kind="mergesort")
+        return filtered
 
     def _cached_geometry_geojson(
         self,
@@ -404,10 +763,10 @@ class RuntimeStateService:
                 offset,
             ]
         ) and sort_by == "lead_score_total" and sort_direction == "desc"
-        if default_request and self.artifacts.runtime_default_leads_path.exists():
+        if default_request:
             return self._default_leads_payload()
 
-        dataset = self._app_ready_dataset()
+        dataset = self._app_ready_dataset() if self.artifacts.app_ready_path.exists() else None
         requested_columns = list(
             dict.fromkeys(
                 API_LEADS_SUMMARY_FIELDS
@@ -436,31 +795,39 @@ class RuntimeStateService:
             )
         )
         filters: list[ds.Expression] = []
-        schema_names = set(dataset.schema.names)
-        if county_name and "county_name" in schema_names:
-            filters.append(ds.field("county_name") == _slug_county_name(county_name))
-        if acreage_min is not None and "acreage" in schema_names:
-            filters.append(ds.field("acreage") >= float(acreage_min))
-        if acreage_max is not None and "acreage" in schema_names:
-            filters.append(ds.field("acreage") <= float(acreage_max))
-        if min_lead_score_total is not None and "lead_score_total" in schema_names:
-            filters.append(ds.field("lead_score_total") >= float(min_lead_score_total))
-        if parcel_vacant_flag is not None and "parcel_vacant_flag" in schema_names:
-            filters.append(ds.field("parcel_vacant_flag") == bool(parcel_vacant_flag))
-        if county_hosted_flag is not None and "county_hosted_flag" in schema_names:
-            filters.append(ds.field("county_hosted_flag") == bool(county_hosted_flag))
-        if high_confidence_link_flag is not None and "high_confidence_link_flag" in schema_names:
-            filters.append(ds.field("high_confidence_link_flag") == bool(high_confidence_link_flag))
-        if wetland_flag is not None and "wetland_flag" in schema_names:
-            filters.append(ds.field("wetland_flag") == bool(wetland_flag))
-        if road_distance_ft_max is not None and "road_distance_ft" in schema_names:
-            filters.append(ds.field("road_distance_ft") <= float(road_distance_ft_max))
+        schema_names = set(dataset.schema.names) if dataset is not None else set()
+        if dataset is not None:
+            if county_name and "county_name" in schema_names:
+                filters.append(ds.field("county_name") == _slug_county_name(county_name))
+            if acreage_min is not None and "acreage" in schema_names:
+                filters.append(ds.field("acreage") >= float(acreage_min))
+            if acreage_max is not None and "acreage" in schema_names:
+                filters.append(ds.field("acreage") <= float(acreage_max))
+            if min_lead_score_total is not None and "lead_score_total" in schema_names:
+                filters.append(ds.field("lead_score_total") >= float(min_lead_score_total))
+            if parcel_vacant_flag is not None and "parcel_vacant_flag" in schema_names:
+                filters.append(ds.field("parcel_vacant_flag") == bool(parcel_vacant_flag))
+            if county_hosted_flag is not None and "county_hosted_flag" in schema_names:
+                filters.append(ds.field("county_hosted_flag") == bool(county_hosted_flag))
+            if high_confidence_link_flag is not None and "high_confidence_link_flag" in schema_names:
+                filters.append(ds.field("high_confidence_link_flag") == bool(high_confidence_link_flag))
+            if wetland_flag is not None and "wetland_flag" in schema_names:
+                filters.append(ds.field("wetland_flag") == bool(wetland_flag))
+            if road_distance_ft_max is not None and "road_distance_ft" in schema_names:
+                filters.append(ds.field("road_distance_ft") <= float(road_distance_ft_max))
 
         filter_expression = None
         for expression in filters:
             filter_expression = expression if filter_expression is None else filter_expression & expression
 
         frame = self._query_frame(columns=requested_columns, filter_expression=filter_expression)
+        if frame.empty and dataset is None and self._fallback_query_frame().empty:
+            raise FileNotFoundError(
+                "State leads query artifacts unavailable: "
+                f"app_ready={self.artifacts.app_ready_path}; "
+                f"static_feed={self.artifacts.frontend_static_feed_path}; "
+                f"detail_fallback={self.artifacts.frontend_detail_fallback_path}"
+            )
         if frame.empty:
             validate_output_records(
                 [],
@@ -470,35 +837,28 @@ class RuntimeStateService:
                 context=f"runtime_state_service[{self.state_code}].get_leads.empty",
             )
             return {"total_count": 0, "limit": int(limit), "offset": int(offset), "items": []}
-
-        def _apply_membership_filter(column: str, allowed: list[str] | None) -> None:
-            nonlocal frame
-            if not allowed or column not in frame.columns:
-                return
-            normalized = pd.Series(frame[column], index=frame.index, dtype="string").str.lower()
-            frame = frame.loc[normalized.isin({value.lower() for value in allowed if value})].copy()
-
-        def _apply_bool_filter(column: str, expected: bool | None) -> None:
-            nonlocal frame
-            if expected is None or column not in frame.columns:
-                return
-            frame = frame.loc[frame[column].fillna(False).astype(bool) == bool(expected)].copy()
-
-        _apply_membership_filter("lead_score_tier", lead_score_tier)
-        _apply_membership_filter("amount_trust_tier", amount_trust_tier)
-        _apply_membership_filter("growth_pressure_bucket", growth_pressure_bucket)
-        _apply_membership_filter("recommended_view_bucket", recommended_view_bucket)
-        _apply_membership_filter("road_access_tier", road_access_tier)
-        _apply_bool_filter("corporate_owner_flag", corporate_owner_flag)
-        _apply_bool_filter("absentee_owner_flag", absentee_owner_flag)
-        _apply_bool_filter("out_of_state_owner_flag", out_of_state_owner_flag)
-
-        if sort_by not in frame.columns:
-            sort_by = "lead_score_total" if "lead_score_total" in frame.columns else "acreage"
-        ascending = str(sort_direction).lower() == "asc"
-        if sort_by in {"lead_score_total", "lead_score_total_effective", "acreage", "road_distance_ft"}:
-            frame[sort_by] = pd.to_numeric(frame[sort_by], errors="coerce")
-        frame = frame.sort_values(by=sort_by, ascending=ascending, na_position="last", kind="mergesort")
+        frame = self._apply_lead_filters_to_frame(
+            frame,
+            county_name=county_name,
+            lead_score_tier=lead_score_tier,
+            min_lead_score_total=min_lead_score_total,
+            acreage_min=acreage_min,
+            acreage_max=acreage_max,
+            parcel_vacant_flag=parcel_vacant_flag,
+            county_hosted_flag=county_hosted_flag,
+            high_confidence_link_flag=high_confidence_link_flag,
+            wetland_flag=wetland_flag,
+            amount_trust_tier=amount_trust_tier,
+            corporate_owner_flag=corporate_owner_flag,
+            absentee_owner_flag=absentee_owner_flag,
+            out_of_state_owner_flag=out_of_state_owner_flag,
+            growth_pressure_bucket=growth_pressure_bucket,
+            recommended_view_bucket=recommended_view_bucket,
+            road_access_tier=road_access_tier,
+            road_distance_ft_max=road_distance_ft_max,
+            sort_by=sort_by,
+            sort_direction=sort_direction,
+        )
 
         total_count = int(len(frame))
         paged = frame.iloc[offset : offset + limit].copy()

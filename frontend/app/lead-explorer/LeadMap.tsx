@@ -2,7 +2,7 @@
 
 import "maplibre-gl/dist/maplibre-gl.css";
 
-import { useEffect, useEffectEvent, useMemo, useRef } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import maplibregl, { GeoJSONSource, LngLatBoundsLike, Map } from "maplibre-gl";
 import { PMTiles, Protocol } from "pmtiles";
 
@@ -38,6 +38,29 @@ const PARCEL_LAYER_IDS = [
   "parcel-fills",
 ] as const;
 const SELECTED_LAYER_IDS = ["selected-parcel-point", "selected-parcel-line", "selected-parcel-fill"] as const;
+
+function parcelMapDebugEnabled() {
+  if (process.env.NODE_ENV !== "production") return true;
+  if ((process.env.NEXT_PUBLIC_DEBUG_PARCEL_MAP ?? "").trim() === "1") return true;
+  if (typeof window === "undefined") return false;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("debug_map") === "1" || params.get("debug_parcel_map") === "1") return true;
+    return window.localStorage.getItem("landintel:debugParcelMap") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function logParcelMapDebug(event: string, payload: Record<string, unknown> = {}) {
+  if (!parcelMapDebugEnabled()) return;
+  console.info("[landintel-parcel-map]", event, payload);
+}
+
+function warnParcelMapDebug(event: string, payload: Record<string, unknown> = {}) {
+  if (!parcelMapDebugEnabled()) return;
+  console.warn("[landintel-parcel-map]", event, payload);
+}
 
 function toStateBounds(defaultBounds: [number, number, number, number]): [[number, number], [number, number]] {
   return [
@@ -130,6 +153,12 @@ function removeSourceIfPresent(map: Map, sourceId: string) {
   }
 }
 
+function addLayerIfMissing(map: Map, layer: maplibregl.AddLayerObject) {
+  if (!map.getLayer(layer.id)) {
+    map.addLayer(layer);
+  }
+}
+
 function emptyFeatureCollection(): FeatureCollectionPayload {
   return {
     type: "FeatureCollection",
@@ -161,18 +190,29 @@ function teardownParcelLayers(map: Map) {
 
 function initializeParcelLayers(
   map: Map,
+  stateCode: string,
   parcelPmtilesUrl: string | null | undefined,
   parcelTileMinZoom: number,
 ) {
-  map.addSource(SELECTED_PARCEL_SOURCE_ID, {
-    type: "geojson",
-    data: {
-      type: "FeatureCollection",
-      features: [],
-    },
+  const resolvedParcelPmtilesUrl = ensurePmtilesProtocol(parcelPmtilesUrl);
+  logParcelMapDebug("initialize_start", {
+    stateCode,
+    resolvedParcelPmtilesUrl,
+    parcelTileMinZoom,
+    currentZoom: Number(map.getZoom().toFixed(3)),
+    styleLoaded: map.isStyleLoaded(),
   });
 
-  const resolvedParcelPmtilesUrl = ensurePmtilesProtocol(parcelPmtilesUrl);
+  if (!map.getSource(SELECTED_PARCEL_SOURCE_ID)) {
+    map.addSource(SELECTED_PARCEL_SOURCE_ID, {
+      type: "geojson",
+      data: {
+        type: "FeatureCollection",
+        features: [],
+      },
+    });
+  }
+
   if (resolvedParcelPmtilesUrl && !map.getSource(PARCEL_TILE_SOURCE_ID)) {
     map.addSource(PARCEL_TILE_SOURCE_ID, {
       type: "vector",
@@ -181,8 +221,21 @@ function initializeParcelLayers(
       maxzoom: 15,
       promoteId: { [PARCEL_TILE_LAYER]: "parcel_row_id" },
     });
+    logParcelMapDebug("source_added", {
+      stateCode,
+      sourceId: PARCEL_TILE_SOURCE_ID,
+      sourceLayer: PARCEL_TILE_LAYER,
+      resolvedParcelPmtilesUrl,
+    });
+  } else if (!resolvedParcelPmtilesUrl) {
+    warnParcelMapDebug("source_missing_url", {
+      stateCode,
+      parcelPmtilesUrl,
+    });
+  }
 
-    map.addLayer({
+  if (map.getSource(PARCEL_TILE_SOURCE_ID)) {
+    addLayerIfMissing(map, {
       id: "parcel-fills",
       type: "fill",
       source: PARCEL_TILE_SOURCE_ID,
@@ -194,7 +247,7 @@ function initializeParcelLayers(
       },
     });
 
-    map.addLayer({
+    addLayerIfMissing(map, {
       id: "parcel-lines",
       type: "line",
       source: PARCEL_TILE_SOURCE_ID,
@@ -207,7 +260,7 @@ function initializeParcelLayers(
       },
     });
 
-    map.addLayer({
+    addLayerIfMissing(map, {
       id: "parcel-points",
       type: "circle",
       source: PARCEL_TILE_SOURCE_ID,
@@ -223,7 +276,7 @@ function initializeParcelLayers(
       },
     });
 
-    map.addLayer({
+    addLayerIfMissing(map, {
       id: "parcel-wetlands-overlay",
       type: "line",
       source: PARCEL_TILE_SOURCE_ID,
@@ -237,7 +290,7 @@ function initializeParcelLayers(
       },
     });
 
-    map.addLayer({
+    addLayerIfMissing(map, {
       id: "parcel-road-overlay",
       type: "line",
       source: PARCEL_TILE_SOURCE_ID,
@@ -251,7 +304,7 @@ function initializeParcelLayers(
       },
     });
 
-    map.addLayer({
+    addLayerIfMissing(map, {
       id: "parcel-flood-overlay",
       type: "line",
       source: PARCEL_TILE_SOURCE_ID,
@@ -266,7 +319,7 @@ function initializeParcelLayers(
     });
   }
 
-  map.addLayer({
+  addLayerIfMissing(map, {
     id: "selected-parcel-fill",
     type: "fill",
     source: SELECTED_PARCEL_SOURCE_ID,
@@ -276,7 +329,7 @@ function initializeParcelLayers(
     },
   });
 
-  map.addLayer({
+  addLayerIfMissing(map, {
     id: "selected-parcel-line",
     type: "line",
     source: SELECTED_PARCEL_SOURCE_ID,
@@ -287,7 +340,7 @@ function initializeParcelLayers(
     },
   });
 
-  map.addLayer({
+  addLayerIfMissing(map, {
     id: "selected-parcel-point",
     type: "circle",
     source: SELECTED_PARCEL_SOURCE_ID,
@@ -301,8 +354,8 @@ function initializeParcelLayers(
     },
   });
 
-  if (parcelPmtilesUrl) {
-    map.addLayer({
+  if (resolvedParcelPmtilesUrl && map.getSource(PARCEL_TILE_SOURCE_ID)) {
+    addLayerIfMissing(map, {
       id: "parcel-hover",
       type: "line",
       source: PARCEL_TILE_SOURCE_ID,
@@ -315,7 +368,7 @@ function initializeParcelLayers(
       },
     });
 
-    map.addLayer({
+    addLayerIfMissing(map, {
       id: "parcel-point-hover",
       type: "circle",
       source: PARCEL_TILE_SOURCE_ID,
@@ -331,6 +384,58 @@ function initializeParcelLayers(
       },
     });
   }
+
+  logParcelMapDebug("initialize_complete", {
+    stateCode,
+    resolvedParcelPmtilesUrl,
+    currentZoom: Number(map.getZoom().toFixed(3)),
+    parcelTileMinZoom,
+    sourceLoaded: Boolean(map.getSource(PARCEL_TILE_SOURCE_ID)),
+    createdLayers: PARCEL_LAYER_IDS.filter((layerId) => Boolean(map.getLayer(layerId))),
+    selectedLayers: SELECTED_LAYER_IDS.filter((layerId) => Boolean(map.getLayer(layerId))),
+  });
+}
+
+function initializeParcelLayersWhenReady(
+  map: Map,
+  stateCode: string,
+  parcelPmtilesUrl: string | null | undefined,
+  parcelTileMinZoom: number,
+  reason: string,
+  onReady?: () => void,
+) {
+  const run = () => {
+    try {
+      initializeParcelLayers(map, stateCode, parcelPmtilesUrl, parcelTileMinZoom);
+      onReady?.();
+      logParcelMapDebug("layers_ready", {
+        stateCode,
+        reason,
+        currentZoom: Number(map.getZoom().toFixed(3)),
+        parcelTileMinZoom,
+      });
+    } catch (error) {
+      warnParcelMapDebug("layers_ready_failed", {
+        stateCode,
+        reason,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  if (map.isStyleLoaded()) {
+    logParcelMapDebug("style_ready_immediate", { stateCode, reason });
+    run();
+    return () => {};
+  }
+
+  logParcelMapDebug("style_waiting_for_load", { stateCode, reason });
+  const handleMapLoad = () => {
+    logParcelMapDebug("style_ready_on_load", { stateCode, reason });
+    run();
+  };
+  map.once("load", handleMapLoad);
+  return () => map.off("load", handleMapLoad);
 }
 
 export function LeadMap({
@@ -345,6 +450,7 @@ export function LeadMap({
   viewport,
   onViewportChange,
   resultsLoading,
+  resultsError,
   loading,
   error,
   totalCount,
@@ -360,6 +466,7 @@ export function LeadMap({
   viewport: MapViewportState;
   onViewportChange: (value: MapViewportState) => void;
   resultsLoading: boolean;
+  resultsError: string | null;
   loading: boolean;
   error: string | null;
   totalCount: number;
@@ -380,6 +487,8 @@ export function LeadMap({
     activeOverlays,
     defaultStateBounds,
   });
+  const [layerConfigVersion, setLayerConfigVersion] = useState(0);
+  const [parcelLayerError, setParcelLayerError] = useState<string | null>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<Map | null>(null);
   const hoveredFeatureIdRef = useRef<string | null>(null);
@@ -416,9 +525,7 @@ export function LeadMap({
     if (!mapContainerRef.current || mapRef.current) return;
     const initialViewport = initialViewportRef.current;
     const initialMapConfig = initialMapConfigRef.current;
-    if (process.env.NODE_ENV !== "production") {
-      console.debug("[landintel-map] mount", { stateCode: initialMapConfig.stateCode });
-    }
+    logParcelMapDebug("mount", { stateCode: initialMapConfig.stateCode });
 
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
@@ -442,11 +549,8 @@ export function LeadMap({
       map.getCanvas().style.cursor = "";
     };
 
-    const handleMapLoad = () => {
-      initializeParcelLayers(map, initialMapConfig.parcelPmtilesUrl, initialMapConfig.parcelTileMinZoom);
-      configuredStateCodeRef.current = initialMapConfig.stateCode;
-      applyLayerVisibility(map, initialMapConfig.basemapMode, initialMapConfig.activeOverlays);
-      emitViewportChange(map);
+    const updateParcelLayerError = (message: string | null) => {
+      setParcelLayerError((current) => (current === message ? current : message));
     };
 
     const handleMapClick = (event: maplibregl.MapMouseEvent) => {
@@ -455,9 +559,7 @@ export function LeadMap({
       const feature = map.queryRenderedFeatures(event.point, { layers: [...interactiveLayers] })[0];
       const parcelRowId = getMapFeatureSelectionParcelRowId(feature);
       if (!parcelRowId) return;
-      if (process.env.NODE_ENV !== "production") {
-        console.debug("[landintel-map] parcel click", { parcelRowId });
-      }
+      logParcelMapDebug("parcel_click", { stateCode: configuredStateCodeRef.current, parcelRowId });
       handleParcelSelect(parcelRowId);
     };
 
@@ -488,19 +590,68 @@ export function LeadMap({
       }
     };
 
-    map.on("load", handleMapLoad);
+    const handleSourceData = (event: maplibregl.MapSourceDataEvent) => {
+      if (event.sourceId !== PARCEL_TILE_SOURCE_ID) return;
+      if (event.isSourceLoaded) {
+        updateParcelLayerError(null);
+      }
+      logParcelMapDebug("source_data", {
+        stateCode: configuredStateCodeRef.current ?? initialMapConfig.stateCode,
+        sourceId: event.sourceId,
+        sourceDataType: event.sourceDataType ?? null,
+        isSourceLoaded: event.isSourceLoaded ?? null,
+        currentZoom: Number(map.getZoom().toFixed(3)),
+      });
+    };
+
+    const handleMapError = (event: maplibregl.ErrorEvent) => {
+      const message = event.error instanceof Error ? event.error.message : String(event.error);
+      warnParcelMapDebug("map_error", {
+        stateCode: configuredStateCodeRef.current ?? initialMapConfig.stateCode,
+        message,
+      });
+      const normalizedMessage = message.toLowerCase();
+      if (
+        normalizedMessage.includes("pmtiles") ||
+        normalizedMessage.includes("vector tile") ||
+        normalizedMessage.includes(PARCEL_TILE_SOURCE_ID.toLowerCase()) ||
+        normalizedMessage.includes("parcels.pmtiles")
+      ) {
+        updateParcelLayerError(`Parcel base layer is unavailable: ${message}`);
+      }
+    };
+
     map.on("click", handleMapClick);
     map.on("moveend", handleMapMoveEnd);
     map.on("mousemove", handleMapMouseMove);
+    map.on("sourcedata", handleSourceData);
+    map.on("error", handleMapError);
+
+    const cancelInitialLayerInitialization = initializeParcelLayersWhenReady(
+      map,
+      initialMapConfig.stateCode,
+      initialMapConfig.parcelPmtilesUrl,
+      initialMapConfig.parcelTileMinZoom,
+      "initial_mount",
+      () => {
+        updateParcelLayerError(null);
+        setLayerConfigVersion((current) => current + 1);
+        applyLayerVisibility(map, initialMapConfig.basemapMode, initialMapConfig.activeOverlays);
+        emitViewportChange(map);
+      },
+    );
+    configuredStateCodeRef.current = initialMapConfig.stateCode;
+    applyLayerVisibility(map, initialMapConfig.basemapMode, initialMapConfig.activeOverlays);
+    emitViewportChange(map);
 
     return () => {
-      if (process.env.NODE_ENV !== "production") {
-        console.debug("[landintel-map] unmount", { stateCode: configuredStateCodeRef.current ?? initialMapConfig.stateCode });
-      }
-      map.off("load", handleMapLoad);
+      logParcelMapDebug("unmount", { stateCode: configuredStateCodeRef.current ?? initialMapConfig.stateCode });
+      cancelInitialLayerInitialization();
       map.off("click", handleMapClick);
       map.off("moveend", handleMapMoveEnd);
       map.off("mousemove", handleMapMouseMove);
+      map.off("sourcedata", handleSourceData);
+      map.off("error", handleMapError);
       map.remove();
       mapRef.current = null;
       configuredStateCodeRef.current = null;
@@ -509,17 +660,28 @@ export function LeadMap({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+    if (!map) return;
     if (configuredStateCodeRef.current === stateCode) return;
-    if (process.env.NODE_ENV !== "production") {
-      console.debug("[landintel-map] reconfigure", {
-        fromStateCode: configuredStateCodeRef.current,
-        toStateCode: stateCode,
-      });
-    }
+    setParcelLayerError(null);
+    logParcelMapDebug("reconfigure", {
+      fromStateCode: configuredStateCodeRef.current,
+      toStateCode: stateCode,
+      currentZoom: Number(map.getZoom().toFixed(3)),
+      parcelTileMinZoom,
+    });
     hoveredFeatureIdRef.current = null;
     teardownParcelLayers(map);
-    initializeParcelLayers(map, activeState.parcelPmtilesUrl, parcelTileMinZoom);
+    const cancelReconfigureInitialization = initializeParcelLayersWhenReady(
+      map,
+      stateCode,
+      activeState.parcelPmtilesUrl,
+      parcelTileMinZoom,
+      "state_change",
+      () => {
+        setLayerConfigVersion((current) => current + 1);
+        applyLayerVisibility(map, basemapMode, activeOverlays);
+      },
+    );
     const selectedSource = map.getSource(SELECTED_PARCEL_SOURCE_ID) as GeoJSONSource | undefined;
     if (selectedSource) {
       selectedSource.setData(emptyFeatureCollection() as never);
@@ -531,6 +693,7 @@ export function LeadMap({
     applyLayerVisibility(map, basemapMode, activeOverlays);
     map.fitBounds(defaultStateBounds, { padding: 28, duration: 0, maxZoom: 7.2 });
     hasInitializedViewportRef.current = true;
+    return () => cancelReconfigureInitialization();
   }, [activeOverlays, activeState.parcelPmtilesUrl, basemapMode, defaultStateBounds, parcelTileMinZoom, stateCode]);
 
   useEffect(() => {
@@ -561,13 +724,21 @@ export function LeadMap({
         console.debug("[landintel-map] invalid_geometry_first_feature", nextCollection.features[0]);
       }
     }
-  }, [featureCollection, geometryResponse?.geometry_bounds, resultBounds, selectedParcelRowId]);
+  }, [featureCollection, geometryResponse?.geometry_bounds, layerConfigVersion, resultBounds, selectedParcelRowId]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !map.isStyleLoaded()) return;
     applyLayerVisibility(map, basemapMode, activeOverlays);
-  }, [activeOverlays, basemapMode]);
+    logParcelMapDebug("visibility_update", {
+      stateCode,
+      activeOverlays,
+      currentZoom: Number(map.getZoom().toFixed(3)),
+      parcelTileMinZoom,
+      parcelLayerActive: activeOverlays.includes("parcels"),
+      parcelLayerVisibleByZoom: map.getZoom() >= parcelTileMinZoom,
+    });
+  }, [activeOverlays, basemapMode, parcelTileMinZoom, stateCode]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -649,6 +820,13 @@ export function LeadMap({
       tone: "neutral",
       title: "Refreshing parcel results",
     });
+  } else if (resultsError) {
+    statusMessages.push({
+      key: "results-error",
+      tone: "warn",
+      title: "Parcel results unavailable",
+      body: resultsError,
+    });
   } else if (totalCount === 0) {
     statusMessages.push({
       key: "no-results",
@@ -664,6 +842,15 @@ export function LeadMap({
       tone: "neutral",
       title: `Parcel layer appears at zoom ${parcelTileMinZoom}+`,
       body: `Base parcel geometry stays hidden until it is legible in ${activeState.displayName}.`,
+    });
+  }
+
+  if (parcelLayerError && activeOverlays.includes("parcels")) {
+    statusMessages.push({
+      key: "parcel-layer-error",
+      tone: "warn",
+      title: "Parcel base layer unavailable",
+      body: parcelLayerError,
     });
   }
 

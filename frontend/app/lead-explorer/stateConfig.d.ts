@@ -4,6 +4,7 @@ type StateConfig = {
   countyDivisionLabel: string;
   apiPrefix: string;
   staticMetaPath: string;
+  staticLeadPath: string;
   staticLeadDetailPath: string;
   parcelPmtilesLocalUrl: string | null;
   parcelPmtilesPublicUrl: string | null;

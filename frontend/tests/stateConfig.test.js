@@ -31,10 +31,11 @@ run("unknown configured states use generic state-aware asset paths instead of fa
   assert.equal(arkansas.displayName, "Arkansas");
   assert.equal(arkansas.apiPrefix, "/api/states/ar");
   assert.equal(arkansas.staticMetaPath, "/data/ar_lead_explorer_meta.json");
+  assert.equal(arkansas.staticLeadPath, "/data/ar_lead_explorer.json");
   assert.equal(arkansas.staticLeadDetailPath, "/data/ar_lead_detail_fallback.json");
   assert.equal(arkansas.parcelPmtilesLocalUrl, "/tiles/ar_parcels.pmtiles");
   assert.equal(arkansas.parcelPmtilesPublicUrl, "https://pub-f5f866f9a229419696c3066b960daae4.r2.dev/tiles/ar_parcels.pmtiles");
-  assert.equal(arkansas.parcelPmtilesMinZoom, 10);
+  assert.equal(arkansas.parcelPmtilesMinZoom, 6);
   assert.equal(arkansas.parcelPmtilesUrl, "/tiles/ar_parcels.pmtiles");
 });
 
@@ -62,12 +63,20 @@ run("point-only states can expose parcel PMTiles without falling back to Mississ
 run("town-based states expose their local division label", () => {
   const ct = stateConfig.getStateConfig("ct");
   const vt = stateConfig.getStateConfig("vt");
+  const ny = stateConfig.getStateConfig("ny");
   assert.equal(ct.countyDivisionLabel, "town");
   assert.equal(vt.countyDivisionLabel, "town");
-  assert.equal(ct.parcelPmtilesMinZoom, 9);
-  assert.equal(vt.parcelPmtilesMinZoom, 9);
+  assert.equal(ct.parcelPmtilesMinZoom, 7);
+  assert.equal(vt.parcelPmtilesMinZoom, 7);
+  assert.equal(ny.parcelPmtilesMinZoom, 7);
   assert.equal(ct.parcelPmtilesUrl, "/tiles/ct_parcels.pmtiles");
   assert.equal(vt.parcelPmtilesUrl, "/tiles/vt_parcels.pmtiles");
+});
+
+run("configured states use parcel PMTiles min zooms that match shipped archives", () => {
+  assert.equal(stateConfig.getStateConfig("ms").parcelPmtilesMinZoom, 6);
+  assert.equal(stateConfig.getStateConfig("mt").parcelPmtilesMinZoom, 6);
+  assert.equal(stateConfig.getStateConfig("wi").parcelPmtilesMinZoom, 6);
 });
 
 run("production parcel PMTiles resolution prefers checked-in public URLs", () => {
@@ -77,6 +86,7 @@ run("production parcel PMTiles resolution prefers checked-in public URLs", () =>
   delete process.env.NEXT_PUBLIC_USE_LOCAL_PARCEL_PMTILES;
   try {
     const mississippi = stateConfig.getStateConfig("ms");
+    assert.equal(mississippi.staticLeadPath, "/data/mississippi_lead_explorer.json");
     assert.equal(mississippi.parcelPmtilesUrl, "https://pub-f5f866f9a229419696c3066b960daae4.r2.dev/tiles/mississippi_parcels.pmtiles");
   } finally {
     if (previousNodeEnv === undefined) {
